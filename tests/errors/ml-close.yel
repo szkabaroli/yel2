@@ -1,0 +1,7 @@
+// error: 5:12: a multiline string's closing """ goes on a line of its own (in its text, break up """ by escaping a quote after the first)
+main: func() -> s32 {
+    let s = """
+        text
+        end""";
+    0
+}

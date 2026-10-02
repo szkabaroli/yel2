@@ -1,0 +1,1917 @@
+// The generator: the checked declarations to C against runtime/yel.h, through the IR (ir.yel): each
+// func built (codegen.yel), then written as C (render.yel). This file holds what both read: the C
+// of each type, and the helpers made for them (showing, equality, the collector's traces and
+// scans).
+
+// a func as C sees it: its C name (a yel func's is u_ and its name, apart from the runtime's y_);
+// an extern's type arguments are passed first, as C types
+record FuncInfo { c-name: string, is-extern: bool, type-params: list<string>, }
+
+// a generic func to compile for one list of type arguments
+record Pending { decl: Func, c-name: string, subst: map<string, Type>, }
+
+// what a named type is (a resource's: handle)
+type declared-kind = "record" | "flags" | "handle" | "enum" | "variant";
+
+// a display func (display: func(x: T) -> string: what "{x}" shows a T as): its key, and the type it
+// shows (as declared)
+record DisplayFunc { key: string, shows: Type, }
+
+record Gen {
+    // the funcs made only for one target (by C name): native or wasi (//+build)
+    builds: map<string, string>,
+    // the compile's context: its sources, the errors found so far, what was asked for
+    context: Context,
+    literals: map<string, string>,
+    literal-decls: list<string>,
+    funcs: map<string, FuncInfo>,
+    // generic funcs, compiled once for each list of type arguments they are called with
+    generic: map<string, Func>,
+    instances: map<string, bool>,
+    pending: list<Pending>,
+    // the type arguments of the func being compiled
+    subst: map<string, Type>,
+    file: string,
+    records: map<Name, RecordDecl>,
+    variants: map<Name, VariantDecl>,
+    flags: map<Name, FlagsDecl>,
+    resources: map<Name, bool>,
+    // the C made on demand: option, result and tuple structs, show and equality helpers (made:
+    // which exist)
+    made: map<string, bool>,
+    value-decls: list<string>,
+    helper-protos: list<string>,
+    helper-bodies: list<string>,
+    // the helpers made (helper-func): funcs of IR, after the program's
+    helpers: list<IrFunc>,
+    protos: list<string>,
+    // the WIT funcs (a component's imports) by key, and those a program calls
+    wit-externs: map<string, Extern>,
+    // the core wasm funcs the component imports (the canonical ABI's), by their C names
+    core-imports: map<string, CoreImport>,
+    wit-used: map<string, bool>,
+    // each WIT interface's version (ns:name/iface to 0.3.0)
+    wit-versions: map<string, string>,
+    // the types as written, for a component's boundary (the code holds them as C does, a literal
+    // or union type as its kinds): records' fields, variants' cases' payloads (unit for none),
+    // funcs' signatures; and the literal and union types aliases name (by how they show), and the
+    // type each such alias names
+    wit-fields: map<string, list<Type>>,
+    // the program's globals, by key, and their keys in the order they are declared
+    globals: map<string, GlobalDecl>,
+    global-order: list<string>,
+    wit-cases: map<string, list<Type>>,
+    wit-sigs: map<string, FuncSig>,
+    set-names: map<string, string>,
+    set-types: map<string, Type>,
+    // the async funcs (by key): each a state machine, its call begun by s_<name>
+    async-funcs: map<string, bool>,
+    // the generators (by key): a call makes the frame
+    generators: map<string, bool>,
+    // the program's display funcs (display: func(value: T) -> string, T a declared type): how an
+    // interpolation shows a T
+    displays: list<DisplayFunc>,
+    // where a stream or future crosses WIT (its builtins are the func's, by its index in the func's
+    // type): the module, the func's WIT name, the index
+    site-module: string,
+    site-name: string,
+    site-index: s64,
+    // closures: the environments' records made (and how many), and the funcs their bodies are
+    lifted: list<IrFunc>,
+    env-decls: list<RecordDecl>,
+    envs: s64,
+}
+
+// the component's WIT: its world's items (imports, exports), and the interfaces it defines
+record World { items: list<string>, interfaces: list<string>, }
+
+module gen {
+    // a yel name (or key) as a C one: - is _, _ is _u (so a-b and a_b stay apart), . is __, : is _C
+    // and / is _S (so lexer.lex is lexer__lex, and yel:ui/api.render yel_Cui_Sapi__render)
+    mangle: func(n: string) -> string {
+        let out = [];
+        for i in 0..n.len() {
+            let c = n.byte-at(i);
+            if c == 45 { out.push("_"); }
+            else if c == 95 { out.push("_u"); }
+            else if c == 46 { out.push("__"); }
+            else if c == 58 { out.push("_C"); }
+            else if c == 47 { out.push("_S"); }
+            else { out.push(from-byte(c)); }
+        }
+        out.join("")
+    }
+
+    // bytes as the inside of a C string literal (each byte not plainly printable as \ooo)
+    c-escape: func(s: string) -> string {
+        let out = [];
+        for i in 0..s.len() {
+            let c = s.byte-at(i);
+            if c == 34 { out.push("\\\""); }
+            else if c == 92 { out.push("\\\\"); }
+            else if c == 63 { out.push("\\?"); }
+            else if c >= 32 && c <= 126 { out.push(from-byte(c)); }
+            else { out.push("\\" + octal(c)); }
+        }
+        out.join("")
+    }
+
+    octal: func(c: s64) -> string {
+        "{c / 64}{(c / 8) % 8}{c % 8}"
+    }
+
+    generator: func(context: Context, decls: list<Decl>) -> Gen {
+        let file = context.input;
+        let g: Gen = {
+            builds: map.new(),
+            context: context,
+            literals: map.new(), literal-decls: [], funcs: map.new(),
+            generic: map.new(), instances: map.new(), pending: [], subst: map.new(), file: file,
+            records: map.new(), variants: map.new(), flags: map.new(), resources: map.new(),
+            made: map.new(), value-decls: [], helper-protos: [],
+            helper-bodies: [], helpers: [], protos: [], wit-externs: map.new(), core-imports: map.new(), wit-used: map.new(),
+            lifted: [], env-decls: [], envs: 0,
+            wit-versions: map.new(),
+            wit-fields: map.new(),
+            globals: map.new(),
+            global-order: [],
+            wit-cases: map.new(),
+            wit-sigs: map.new(),
+            set-names: map.new(),
+            set-types: map.new(),
+            async-funcs: map.new(),
+            generators: map.new(),
+            displays: [],
+            site-module: "",
+            site-name: "",
+            site-index: 0,
+        };
+        // the declared types as C holds their values (checked by now): a literal or union type as
+        // its values' kind
+        for d in decls {
+            match d {
+                record-decl(r) => {
+                    let ws: list<Type> = [];
+                    for t in r.field-types { ws.push(without-readonly(erase-distinct(t))); }
+                    g.wit-fields.set(r.name, ws);
+                    let ts: list<Type> = [];
+                    for t in r.field-types { ts.push(represented(t)); }
+                    r.field-types = ts;
+                }
+                variant-decl(v) => {
+                    let ps: list<Type> = [];
+                    for k in v.cases { ps.push(without-readonly(erase-distinct(k.payload))); }
+                    g.wit-cases.set(v.name, ps);
+                    for k in v.cases { k.payload = represented(k.payload); }
+                }
+                // an alias of a literal or union type: its name at a component's boundary
+                type-decl(x) => {
+                    match x.resolved {
+                        union-type(xs) => set-name(g, x),
+                        singleton(s) => set-name(g, x),
+                        anon-record(r) => set-name(g, x),
+                        _ => {}
+                    }
+                }
+                func-decl(f) => {
+                    if f.is-async { g.async-funcs.set(f.name, true); }
+                    if f.is-generator { g.generators.set(f.name, true); }
+                    let wps: list<Type> = [];
+                    for t in f.param-types { wps.push(without-readonly(erase-distinct(t))); }
+                    g.wit-sigs.set(f.name, {
+                        type-params: [],
+                        params: wps,
+                        result: without-readonly(erase-distinct(f.result)),
+                    });
+                    // a display func: found while its param is the type it shows (a distinct one
+                    // not yet its base)
+                    if is-display(f) { g.displays.push({ key: f.name, shows: f.param-types[0], }); }
+                    let ts: list<Type> = [];
+                    for t in f.param-types { ts.push(represented(t)); }
+                    f.param-types = ts;
+                    f.result = represented(f.result);
+                }
+                extern-decl(x) => {
+                    let ts: list<Type> = [];
+                    for t in x.param-types { ts.push(represented(t)); }
+                    x.param-types = ts;
+                    x.result = represented(x.result);
+                }
+                _ => {}
+            }
+        }
+        for d in decls {
+            match d {
+                func-decl(f) => {
+                    g.funcs.set(f.name, {
+                        c-name: "u_" + mangle(f.name),
+                        is-extern: false,
+                        type-params: f.type-params,
+                    });
+                    if f.type-params.len() > 0 { g.generic.set(f.name, f); }
+                }
+                extern-decl(x) => {
+                    if x.is-async { g.async-funcs.set(x.name, true); }
+                    if x.wit-module != "" {
+                        g.funcs.set(x.name, {
+                            c-name: "w_" + mangle(x.name),
+                            is-extern: true,
+                            type-params: [],
+                        });
+                        g.wit-externs.set(x.name, x);
+                        let at = find-byte(x.wit-module, 64).unwrap-or(-1);
+                        if at > 0 {
+                            g.wit-versions.set(
+                                x.wit-module.substring(0, at),
+                                x.wit-module.substring(at + 1, x.wit-module.len()),
+                            );
+                        }
+                    } else {
+                        g.funcs.set(x.name, {
+                            c-name: x.c-name,
+                            is-extern: true,
+                            type-params: x.type-params,
+                        });
+                    }
+                }
+                variant-decl(v) => g.variants.set(intern(v.name), v),
+                record-decl(r) => g.records.set(intern(r.name), r),
+                flags-decl(fl) => g.flags.set(intern(fl.name), fl),
+                resource-decl(r) => g.resources.set(intern(r.name), true),
+                // a constant: its uses are its literal; an alias, the type it names
+                const-decl(x) => {}
+                global-decl(x) => {
+                    g.globals.set(x.name, x);
+                    g.global-order.push(x.name);
+                }
+                type-decl(x) => {}
+            }
+        }
+        g
+    }
+
+    // an alias of a literal or union type: the name the type has across a component's boundary (the
+    // first alias of a type)
+    set-name: func(g: Gen, x: TypeDecl) {
+        let k = show-type(x.resolved);
+        if !g.set-names.has(k) { g.set-names.set(k, x.name); }
+        g.set-types.set(x.name, x.resolved);
+    }
+
+    // the WIT funcs a node calls (its operands' too), into used
+    imports-called: func(g: Gen, n: Node, wrappers: map<string, string>, used: map<string, bool>) {
+        match n.kind {
+            call(x) => {
+                if g.wit-used.has(x.key) { used.set(x.key, true); }
+                if wrappers.has(x.c-name) { used.set(wrappers[x.c-name], true); }
+            }
+            _ => {}
+        }
+        for index in 0..operand-count(n) { imports-called(g, operand(n, index), wrappers, used); }
+    }
+
+    // a string literal: a static ystr, one for each text
+    literal: func(g: Gen, s: string) -> string {
+        if g.literals.has(s) { return g.literals[s]; }
+        let c = "S{g.literal-decls.len()}";
+        g.literals.set(s, c);
+        g.literal-decls.push(c"static const ystr {c} = { {s.len()}, \"{c-escape(s)}\" };");
+        c
+    }
+
+    // a type as C is made of it: settled, the func's type parameters replaced; a literal's type
+    // left open is s32 or f32, anything else open unit
+    gen-type: func(g: Gen, t0: Type) -> Type {
+        let t = resolve(t0);
+        match t {
+            distinct-type(x) => gen-type(g, x.base),
+            param(n) => if g.subst.has(n) { g.subst[n] } else { Type.unit-type },
+            var(v) => if v.kind == 1 {
+                Type.num("s32")
+            } else if v.kind == 2 {
+                Type.num("f32")
+            } else {
+                Type.unit-type
+            },
+            // held as its kinds (one: that kind's type)
+            union-type(xs) => {
+                let reps: list<Type> = [];
+                for x in xs { reps.push(gen-type(g, represented(x))); }
+                kinds-union(reps)
+            }
+            singleton(s) => gen-type(g, s.base),
+            range-type(r) => gen-type(g, r.base),
+            // held as what it reads
+            readonly-type(x) => gen-type(g, x),
+            _ => map-children(t, { x -> gen-type(g, x) }),
+        }
+    }
+
+    // a declared type (a signature's) inside a func with type parameters tps
+    decl-type: func(g: Gen, tps: list<string>, t: Type) -> Type { gen-type(g, generalize(t, tps)) }
+
+    expr-type: func(g: Gen, e: Expr) -> Type { gen-type(g, e.ty) }
+
+    // what a named type is: "record", "flags", "handle" (a resource's), "enum" or "variant"
+    named-kind: func(g: Gen, n: Name) -> declared-kind {
+        if g.records.has(n) { return "record"; }
+        if g.flags.has(n) { return "flags"; }
+        if g.resources.has(n) { return "handle"; }
+        if is-enum(g, n) { return "enum"; }
+        "variant"
+    }
+
+    // a variant whose cases carry nothing (an enum) is a C int
+    is-enum: func(g: Gen, n: Name) -> bool {
+        if !g.variants.has(n) { return false; }
+        for k in g.variants[n].cases {
+            if k.has-payload { return false; }
+        }
+        true
+    }
+
+    case-index: func(v: VariantDecl, n: string) -> s64 {
+        for i in 0..v.cases.len() {
+            if v.cases[i].name == n { return i; }
+        }
+        -1
+    }
+
+    // a type's name in C identifiers (show and equality helpers, value structs): a prefix code, so
+    // concatenated ids stay apart (a named type's is its kind, its name's length, its name)
+    // f is a display func: display: func(value: T) -> string, T a declared type
+    is-display: func(f: Func) -> bool {
+        if base-name(f.name) != "display" || f.type-params.len() > 0 || f.param-types.len() != 1 { return false; }
+        let declared = match f.param-types[0] {
+            named(_) => true,
+            distinct-type(_) => true,
+            _ => false,
+        };
+        declared && show-type(f.result) == "string"
+    }
+
+    // whether the helper name is made already (if not, it is about to be)
+    made-before: func(g: Gen, name: string) -> bool {
+        if g.made.has(name) { return true; }
+        g.made.set(name, true);
+        false
+    }
+
+    type-id: func(g: Gen, t: Type) -> string {
+        match t {
+            num(n) => {
+                let ids = ["s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "usize",];
+                "ABCDEFGHJKT".substring(index-of(ids, n), index-of(ids, n) + 1)
+            }
+            canonical-type(x) => "C" + type-id(g, x),
+            bool-type => "b",
+            char-type => "c",
+            string-type => "s",
+            buffer-type => "W",
+            list-type(x) => "L" + type-id(g, x),
+            fixed-list(x) => "Q{x.len}" + type-id(g, x.item),
+            func-type(f) => {
+                let ids: list<string> = [];
+                for x in f.params { ids.push(type-id(g, x)); }
+                "Z{f.params.len()}{ids.join("")}" + type-id(g, f.result)
+            }
+            map-type(x) => "M" + type-id(g, x.key) + type-id(g, x.value),
+            future-type(x) => "F" + type-id(g, x),
+            seq-type(x) => "G" + type-id(g, x),
+            stream-type(x) => (if x.writer { "O" } else { "I" }) + type-id(g, x.item),
+            option-type(x) => "O" + type-id(g, x),
+            result-type(r) => "Y" + type-id(g, r.ok) + type-id(g, r.err),
+            tuple-type(xs) => {
+                let ids: list<string> = [];
+                for x in xs { ids.push(type-id(g, x)); }
+                "P{xs.len()}" + ids.join("")
+            }
+            union-type(xs) => {
+                let ids: list<string> = [];
+                for x in xs { ids.push(type-id(g, x)); }
+                "U{xs.len()}" + ids.join("")
+            }
+            // its fields' names and types
+            anon-record(r) => {
+                let ids: list<string> = [];
+                for i in 0..r.fields.len() {
+                    ids.push("{mangle(r.fields[i]).len()}{mangle(r.fields[i])}{type-id(g, r.types[i])}");
+                }
+                "N{r.fields.len()}" + ids.join("")
+            }
+            // a range, as written (a component's boundary: its checks its own)
+            range-type(r) => "R{type-id(g, r.base)}{mangle(r.lo).len()}{mangle(r.lo)}{mangle(r.hi).len()}{mangle(r.hi)}",
+            // a literal type, as written (a component's boundary: its helpers its own)
+            singleton(s) => "X{type-id(g, s.base)}{mangle(s.key).len()}{mangle(s.key)}",
+            named(n) => "{named-kind(g, n).substring(0, 1)}{mangle(name-text(n)).len()}{mangle(name-text(n))}",
+            _ => "u",
+        }
+    }
+
+    num-c: func(n: string) -> string {
+        if n == "usize" { return "uintptr_t"; }
+        if n == "f32" { return "float"; }
+        if n == "f64" { return "double"; }
+        let bits = n.substring(1, n.len());
+        if is-signed(n) { "int{bits}_t" } else { "uint{bits}_t" }
+    }
+
+    // a (settled) type's C type
+    c-type: func(g: Gen, t: Type) -> string {
+        // a type as written (a component's boundary): held as its representation
+        if needs-representing(t) { return c-type(g, represented(t)); }
+        match t {
+            num(n) => num-c(n),
+            bool-type => "bool",
+            char-type => "uint32_t",
+            string-type => "ystr",
+            buffer-type => "ybuffer *",
+            list-type(x) => "ylist *",
+            fixed-list(x) => value-struct(g, t),
+            func-type(f) => func-typedef(g, t),
+            map-type(x) => "ymap *",
+            // a started call's frame
+            future-type(x) => "y_async *",
+            seq-type(x) => "y_async *",
+            stream-type(x) => "ystream *",
+            address-type => "void *",
+            canonical-type(x) => abi-type(g, x),
+            option-type(x) => value-struct(g, t),
+            result-type(r) => value-struct(g, t),
+            tuple-type(xs) => value-struct(g, t),
+            union-type(xs) => value-struct(g, t),
+            anon-record(r) => value-struct(g, t),
+            named(n) => {
+                let kind = named-kind(g, n);
+                if kind == "record" { "R_{mangle(name-text(n))} *" }
+                else if kind == "flags" {
+                    if g.flags[n].flags.len() > 32 {
+                        "uint64_t"
+                    } else {
+                        "uint32_t"
+                    }
+                }
+                else if kind == "enum" { "int32_t" }
+                else if kind == "handle" { "uint32_t" }
+                else { "V_{mangle(name-text(n))} *" }
+            }
+            _ => "yunit",
+        }
+    }
+
+    // a func value's C type: a pointer to its C function, typedef'd once a func value's C type: its
+    // C function (which takes the environment it was made in first) and that environment (NULL for
+    // a top-level func's), typedef'd once; F_x__fn is the function's type
+    func-typedef: func(g: Gen, t: Type) -> string {
+        let n = "F_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        match t {
+            func-type(f) => {
+                let ps: list<string> = ["void *",];
+                for x in f.params { ps.push(c-type(g, x)); }
+                g.value-decls.push("typedef {c-type(g, f.result)} (*{n}__fn)({ps.join(", ")});");
+                g.value-decls.push(c"typedef struct { {n}__fn fn; void *env; } {n};");
+            }
+            _ => {}
+        }
+        n
+    }
+
+    // a top-level func as a value's C function: an adapter taking the environment (none) first,
+    // made once (a helper: key and c-name the func's)
+    value-adapter: func(g: Gen, key: string, c-name: string, t: Type) -> string {
+        let n = c-name + "__value";
+        if made-before(g, n) { return n; }
+        match t {
+            func-type(ft) => {
+                let f = helper-func(g, n, ft.result, false);
+                f.closure = true;
+                let args: list<Node> = [];
+                for i in 0..ft.params.len() {
+                    let a = helper-local(f, ft.params[i], "a{i}", true);
+                    args.push(local(a, ft.params[i]));
+                }
+                f.body.push(return-stmt(call(key, c-name, args, ft.result, fx().call)));
+            }
+            _ => {}
+        }
+        n
+    }
+
+    // an option, result or tuple: a struct held by value, declared once (after the ones inside it)
+    value-struct: func(g: Gen, t: Type) -> string {
+        let n = "T_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let fields = match t {
+            option-type(x) => "bool has; {c-type(g, x)} value;",
+            fixed-list(x) => "{c-type(g, x.item)} items[{x.len}];",
+            result-type(r) => "bool is_err; {c-type(g, r.ok)} ok; {c-type(g, r.err)} err;",
+            tuple-type(xs) => {
+                let parts: list<string> = [];
+                for i in 0..xs.len() { parts.push("{c-type(g, xs[i])} f{i};"); }
+                parts.join(" ")
+            }
+            anon-record(r) => {
+                let parts: list<string> = [];
+                for i in 0..r.fields.len() {
+                    parts.push("{c-type(g, r.types[i])} f_{mangle(r.fields[i])};");
+                }
+                if parts.len() == 0 { "char none;" } else { parts.join(" ") }
+            }
+            // its kind's tag and a field for each kind (apart, so the collector reads only
+            // pointers: the fields not the tag's are zero)
+            union-type(xs) => {
+                let parts = ["int32_t tag;",];
+                for i in 0..xs.len() { parts.push("{c-type(g, xs[i])} c{i};"); }
+                parts.join(" ")
+            }
+            _ => "",
+        };
+        g.value-decls.push(c"typedef struct { {fields} } {n};");
+        n
+    }
+
+    // the C of the records and variants: structs, and a static for each case without a payload
+    type-decls: func(g: Gen, decls: list<Decl>, forward: list<string>, bodies: list<string>) {
+        for d in decls {
+            match d {
+                record-decl(r) => {
+                    let n = "R_" + mangle(r.name);
+                    forward.push("typedef struct {n} {n};");
+                    bodies.push(c"struct {n} {");
+                    for i in 0..r.fields.len() {
+                        bodies.push("\t{c-type(g, r.field-types[i])} f_{mangle(r.fields[i])};");
+                    }
+                    if r.fields.len() == 0 { bodies.push("\tchar none;"); }
+                    bodies.push(c"};");
+                }
+                variant-decl(v) => {
+                    if !is-enum(g, intern(v.name)) {
+                        let n = "V_" + mangle(v.name);
+                        forward.push("typedef struct {n} {n};");
+                        bodies.push(c"struct {n} {");
+                        bodies.push("\tint32_t tag;");
+                        bodies.push(c"\tunion {");
+                        for k in v.cases {
+                            if k.has-payload {
+                                bodies.push("\t\t{c-type(g, k.payload)} c_{mangle(k.name)};");
+                            }
+                        }
+                        bodies.push(c"\t} u;");
+                        bodies.push(c"};");
+                        for i in 0..v.cases.len() {
+                            let k = v.cases[i];
+                            // a case carrying nothing (no payload, or one of ()): one value, shared
+                            let carries = k.has-payload && match resolve(k.payload) {
+                                unit-type => false,
+                                _ => true,
+                            };
+                            if !carries {
+                                bodies.push(c"static {n} {singleton(v.name, k.name)} = { .tag = {i} };");
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // the static of a case without a payload
+    singleton: func(v: string, k: string) -> string { "K_{mangle(v)}__{mangle(k)}" }
+
+    // the func that writes a value of type t at an interpolation's buffer's end as WAVE (the
+    // Component Model's text for values: strings and chars quoted and escaped, records { a: 1 }):
+    // std's format.write-*, or (anything made of parts) std's value.render over its descriptor
+    debug-fn: func(g: Gen, t: Type) -> Formatter {
+        let writer = match t {
+            num(n) => if !is-int(n) { "write-{n}" } else if is-signed(n) { "write-int" } else { "write-uint" },
+            bool-type => "write-bool",
+            char-type => "write-char-quoted",
+            string-type => "write-quoted",
+            buffer-type => "write-buffer-quoted",
+            unit-type => "write-unit",
+            _ => "",
+        };
+        if writer != "" { return Formatter.writer(std-func(g, "yel:std/format." + writer)); }
+        walker(g, t, false)
+    }
+
+    // a formatter that hands std's value.render a value of type held, by its descriptor (made
+    // here): debug, or display (render.yel writes the call)
+    walker: func(g: Gen, held: Type, display: bool) -> Formatter {
+        std-func(g, render-key());
+        std-func(g, "yel:std/buffer.push");
+        type-desc(g, held);
+        Formatter.render({ held: held, display: display, })
+    }
+
+    // std's walker over any value, the key of its func
+    render-key: func() -> string { "yel:std/value.render" }
+
+    // a std func that C the compiler writes calls (kept, though no yel calls it): its C name
+    std-func: func(g: Gen, key: string) -> string {
+        g.made.set("root " + key, true);
+        g.funcs[key].c-name
+    }
+
+    // the descriptor of type held (runtime/yel.h's ytype), made once: what y_debug and y_display
+    // read to show a value of it
+    type-desc: func(g: Gen, held: Type) -> string {
+        let name = "Y_D_" + type-id(g, held);
+        if made-before(g, name) { return name; }
+        g.helper-protos.push("static const ytype {name};");
+        let ct = c-type(g, held);
+        let kind = "UNIT";
+        let count = 0;
+        let parts: list<string> = [];
+        let offsets: list<string> = [];
+        let names: list<string> = [];
+        match held {
+            num(number) => {
+                kind = if number == "f32" { "F32" } else if number == "f64" { "F64" } else if is-signed(number) { "SIGNED" } else { "UNSIGNED" };
+            }
+            bool-type => { kind = "BOOL"; }
+            char-type => { kind = "CHAR"; }
+            string-type => { kind = "STRING"; }
+            buffer-type => { kind = "BUFFER"; }
+            map-type(_) => { kind = "MAP"; }
+            func-type(_) => { kind = "FUNC"; }
+            future-type(_) => { kind = "FUTURE"; }
+            seq-type(_) => { kind = "SEQ"; }
+            stream-type(_) => { kind = "STREAM"; }
+            list-type(item) => {
+                kind = "LIST";
+                parts.push("&" + type-desc(g, item));
+            }
+            fixed-list(fixed) => {
+                kind = "FIXED";
+                count = fixed.len;
+                parts.push("&" + type-desc(g, fixed.item));
+            }
+            option-type(inner) => {
+                kind = "OPTION";
+                parts.push("&" + type-desc(g, inner));
+                offsets = ["offsetof({ct}, has)", "offsetof({ct}, value)",];
+            }
+            result-type(sides) => {
+                kind = "RESULT";
+                parts = ["&" + type-desc(g, sides.ok), "&" + type-desc(g, sides.err),];
+                offsets = ["offsetof({ct}, is_err)", "offsetof({ct}, ok)", "offsetof({ct}, err)",];
+            }
+            tuple-type(members) => {
+                kind = "TUPLE";
+                count = members.len();
+                for index in 0..members.len() {
+                    parts.push("&" + type-desc(g, members[index]));
+                    offsets.push("offsetof({ct}, f{index})");
+                }
+            }
+            anon-record(fields) => {
+                kind = "ANON_RECORD";
+                count = fields.fields.len();
+                for index in 0..count {
+                    parts.push("&" + type-desc(g, fields.types[index]));
+                    offsets.push("offsetof({ct}, f_{mangle(fields.fields[index])})");
+                    names.push("\"{c-escape(fields.fields[index])}\"");
+                }
+            }
+            union-type(members) => {
+                kind = "UNION";
+                count = members.len();
+                offsets.push("offsetof({ct}, tag)");
+                for index in 0..members.len() {
+                    parts.push("&" + type-desc(g, members[index]));
+                    offsets.push("offsetof({ct}, c{index})");
+                }
+            }
+            named(type-name) => {
+                let declared = named-kind(g, type-name);
+                if declared == "record" {
+                    kind = "RECORD";
+                    let decl = g.records[type-name];
+                    let object = "R_" + mangle(name-text(type-name));
+                    count = decl.fields.len();
+                    for index in 0..count {
+                        parts.push("&" + type-desc(g, decl.field-types[index]));
+                        offsets.push("offsetof({object}, f_{mangle(decl.fields[index])})");
+                        names.push("\"{c-escape(decl.fields[index])}\"");
+                    }
+                } else if declared == "flags" {
+                    kind = "FLAGS";
+                    let decl = g.flags[type-name];
+                    count = decl.flags.len();
+                    for flag in decl.flags { names.push("\"{c-escape(flag)}\""); }
+                } else if declared == "handle" {
+                    kind = "HANDLE";
+                    names.push("\"{c-escape(base-name(name-text(type-name)))}\"");
+                } else {
+                    let decl = g.variants[type-name];
+                    let object = "V_" + mangle(name-text(type-name));
+                    kind = if declared == "enum" { "ENUM" } else { "VARIANT" };
+                    count = decl.cases.len();
+                    if declared != "enum" { offsets.push("offsetof({object}, tag)"); }
+                    for variant-case in decl.cases {
+                        names.push("\"{c-escape(variant-case.name)}\"");
+                        if declared != "enum" {
+                            if variant-case.has-payload {
+                                parts.push("&" + type-desc(g, variant-case.payload));
+                                offsets.push("offsetof({object}, u.c_{mangle(variant-case.name)})");
+                            } else {
+                                parts.push("NULL");
+                                offsets.push("0");
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let fields: list<string> = [];
+        for table in [["parts", "static const ytype *const", parts.join(", ")], ["offsets", "static const uint32_t", offsets.join(", ")], ["names", "static const char *const", names.join(", ")],] {
+            if table[2] == "" { fields.push("NULL"); }
+            else {
+                g.helper-bodies.push(c"{table[1]} {name}_{table[0]}[] = { {table[2]} };");
+                fields.push("{name}_{table[0]}");
+            }
+        }
+        g.helper-bodies.push(c"static const ytype {name} = { Y_K_{kind}, {count}, sizeof({ct}), {fields.join(", ")} };");
+        name
+    }
+
+    // a label as WAVE writes it: one that is also a WAVE keyword takes a %
+    wave-label: func(n: string) -> string {
+        if contains(["true", "false", "inf", "nan", "some", "none", "ok", "err",], n) {
+            return "%" + n;
+        }
+        n
+    }
+
+    // the func that writes a value in an interpolation: a string or char as its text, anything
+    // else as WAVE
+    display-fn: func(g: Gen, t: Type) -> Formatter {
+        match t {
+            string-type => Formatter.writer(std-func(g, "yel:std/buffer.push")),
+            buffer-type => Formatter.writer(std-func(g, "yel:std/format.write-buffer")),
+            char-type => Formatter.writer(std-func(g, "yel:std/buffer.push-char")),
+            // its value as that kind displays (a string of a union raw too)
+            union-type(_) => walker(g, t, true),
+            _ => debug-fn(g, t),
+        }
+    }
+
+    // a value compared and hashed by its parts (an option, a result, a tuple, a fixed list, a
+    // record of fields, a union, a variant), by a helper made for its type
+    by-parts: func(g: Gen, whole: Type) -> bool {
+        match whole {
+            option-type(_) => true,
+            fixed-list(_) => true,
+            result-type(_) => true,
+            tuple-type(_) => true,
+            union-type(_) => true,
+            anon-record(_) => true,
+            named(name) => named-kind(g, name) == "variant",
+            _ => false,
+        }
+    }
+
+    // the func that gives a value of type from as type to, held another way (types as sets: a
+    // value into a union of kinds, out of one where the checker found its kind, between unions,
+    // and inside an option, a result or a tuple), made once (a helper)
+    conv-fn: func(g: Gen, from: Type, to: Type) -> string {
+        let n = "y_conv_" + type-id(g, from) + "_" + type-id(g, to);
+        if made-before(g, n) { return n; }
+        let f = helper-func(g, n, to, false);
+        let x = helper-local(f, from, "x", true);
+        let r = helper-local(f, to, "r", false);
+        let xs = { -> local(x, from) };
+        let rs = { -> local(r, to) };
+        let s32 = Type.num("s32");
+        let set = { field: list<string>, ty: Type, value: Node -> store(load(rs(), field, false, ty, true), value) };
+        let get = { field: list<string>, ty: Type -> load(xs(), field, false, ty, false) };
+        let tag-is = { k: s64 -> bin("==", Type.bool-type, get(["tag",], s32), int-const(k, s32)) };
+        // out of a union: its value of that kind, as the whole
+        let out-of = { fs: list<Type> ->
+            let j = kind-index(g, to, fs);
+            if j < 0 { panic("conv-fn: {show-type(from)} to {show-type(to)}"); }
+            f.body.push(assign(r, conv-node(g, fs[j], to, get(["c{j}",], fs[j]))));
+        };
+        match to {
+            union-type(ks) => {
+                match from {
+                    union-type(fs) => {
+                        for j in 0..fs.len() {
+                            let i = kind-index(g, fs[j], ks);
+                            if i >= 0 {
+                                f.body.push(if-stmt(tag-is(j), [
+                                    set(["tag",], s32, int-const(i, s32)),
+                                    set(["c{i}",], ks[i], conv-node(g, fs[j], ks[i], get(["c{j}",], fs[j]))),
+                                ], []));
+                            }
+                        }
+                    }
+                    _ => {
+                        let i = kind-index(g, from, ks);
+                        f.body.push(set(["tag",], s32, int-const(i, s32)));
+                        f.body.push(set(["c{i}",], ks[i], conv-node(g, from, ks[i], xs())));
+                    }
+                }
+            }
+            option-type(y) => {
+                match from {
+                    option-type(v) => {
+                        f.body.push(set(["has",], Type.bool-type, get(["has",], Type.bool-type)));
+                        f.body.push(if-stmt(get(["has",], Type.bool-type), [set(["value",], y, conv-node(g, v, y, get(["value",], v))),], []));
+                    }
+                    union-type(fs) => out-of(fs),
+                    _ => {}
+                }
+            }
+            result-type(q) => {
+                match from {
+                    result-type(p) => {
+                        f.body.push(set(["is_err",], Type.bool-type, get(["is_err",], Type.bool-type)));
+                        f.body.push(if-stmt(
+                            get(["is_err",], Type.bool-type),
+                            [set(["err",], q.err, conv-node(g, p.err, q.err, get(["err",], p.err))),],
+                            [set(["ok",], q.ok, conv-node(g, p.ok, q.ok, get(["ok",], p.ok))),],
+                        ));
+                    }
+                    union-type(fs) => out-of(fs),
+                    _ => {}
+                }
+            }
+            anon-record(q) => {
+                match from {
+                    anon-record(p) => {
+                        for i in 0..p.fields.len() {
+                            let field = ["f_" + mangle(p.fields[i]),];
+                            f.body.push(set(field, q.types[i], conv-node(g, p.types[i], q.types[i], get(field, p.types[i]))));
+                        }
+                    }
+                    union-type(fs) => out-of(fs),
+                    _ => {}
+                }
+            }
+            tuple-type(ys) => {
+                match from {
+                    tuple-type(vs) => {
+                        for i in 0..vs.len() { f.body.push(set(["f{i}",], ys[i], conv-node(g, vs[i], ys[i], get(["f{i}",], vs[i])))); }
+                    }
+                    union-type(fs) => out-of(fs),
+                    _ => {}
+                }
+            }
+            _ => {
+                match from {
+                    union-type(fs) => out-of(fs),
+                    _ => panic("conv-fn: {show-type(from)} to {show-type(to)}"),
+                }
+            }
+        }
+        f.body.push(return-stmt(rs()));
+        n
+    }
+
+    // a value of type from (the node's) as type to
+    conv-node: func(g: Gen, from: Type, to: Type, value: Node) -> Node {
+        if type-id(g, from) == type-id(g, to) { return value; }
+        pure-call(conv-fn(g, from, to), [value,], to)
+    }
+
+    // which of kinds a value of type t is held as: the same type, else (it is held another way)
+    // the kind made the same way (an option, a result, a tuple of as many)
+    kind-index: func(g: Gen, t: Type, ks: list<Type>) -> s64 {
+        let id = type-id(g, t);
+        for i in 0..ks.len() {
+            if type-id(g, ks[i]) == id { return i; }
+        }
+        for i in 0..ks.len() {
+            let same = match t {
+                option-type(x) => match ks[i] {
+                    option-type(y) => true,
+                    _ => false,
+                },
+                result-type(r) => match ks[i] {
+                    result-type(q) => true,
+                    _ => false,
+                },
+                tuple-type(xs) => match ks[i] {
+                    tuple-type(ys) => xs.len() == ys.len(),
+                    _ => false,
+                },
+                anon-record(x) => match ks[i] {
+                    anon-record(y) => x.fields.join(",") == y.fields.join(","),
+                    _ => false,
+                },
+                _ => false,
+            };
+            if same { return i; }
+        }
+        -1
+    }
+
+    // the C func that reads a future's result of type t (an async frame's result follows its
+    // header), made once
+    result-fn: func(g: Gen, t: Type) -> string {
+        let n = "y_result_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let ct = c-type(g, t);
+        g.value-decls.push(c"typedef struct { y_async h; {ct} result; } W_{type-id(g, t)};");
+        g.helper-protos.push("static {ct} {n}(y_async *f);");
+        // read from where it is, whatever the frame's own struct (copied: no pointer of another
+        // struct's type reads it)
+        g.helper-bodies.push(c"static {ct} {n}(y_async *f) { {ct} r; memcpy(&r, (char *)f + offsetof(W_{type-id(g, t)}, result), sizeof r); return r; }");
+        g.helper-bodies.push("");
+        n
+    }
+
+    // the func that compares two values of a composite type by their parts (as eq-node), made once
+    // (a helper): an option's, a result's, a union's or a variant's by its kind and what it holds,
+    // a tuple's, a record of fields' or a fixed list's part by part
+    eq-fn: func(g: Gen, held: Type) -> string {
+        let name = "y_eq_" + type-id(g, held);
+        if made-before(g, name) { return name; }
+        let f = helper-func(g, name, Type.bool-type, false);
+        let a = helper-local(f, held, "a", true);
+        let b = helper-local(f, held, "b", true);
+        let bool = Type.bool-type;
+        let s32 = Type.num("s32");
+        let left = { field: list<string>, ty: Type, arrow: bool -> load(local(a, held), field, arrow, ty, false) };
+        let right = { field: list<string>, ty: Type, arrow: bool -> load(local(b, held), field, arrow, ty, false) };
+        let answer = { yes: bool -> return-stmt(bool-const(yes)) };
+        // unless a part is equal: false
+        let part = { field: list<string>, ty: Type, arrow: bool ->
+            f.body.push(if-stmt(un("!", bool, eq-node(g, ty, left(field, ty, arrow), right(field, ty, arrow))), [answer(false),], []));
+        };
+        // the same kind (its tag), and for each kind its part
+        let kinds = { arrow: bool, fields: list<list<string>>, types: list<Type> ->
+            f.body.push(if-stmt(bin("!=", bool, left(["tag",], s32, arrow), right(["tag",], s32, arrow)), [answer(false),], []));
+            for k in 0..fields.len() {
+                if fields[k].len() > 0 {
+                    f.body.push(if-stmt(bin("==", bool, left(["tag",], s32, arrow), int-const(k, s32)), [
+                        return-stmt(eq-node(g, types[k], left(fields[k], types[k], arrow), right(fields[k], types[k], arrow))),
+                    ], []));
+                }
+            }
+        };
+        match held {
+            option-type(x) => {
+                f.body.push(if-stmt(bin("!=", bool, left(["has",], bool, false), right(["has",], bool, false)), [answer(false),], []));
+                f.body.push(if-stmt(un("!", bool, left(["has",], bool, false)), [answer(true),], []));
+                f.body.push(return-stmt(eq-node(g, x, left(["value",], x, false), right(["value",], x, false))));
+            }
+            result-type(r) => {
+                f.body.push(if-stmt(bin("!=", bool, left(["is_err",], bool, false), right(["is_err",], bool, false)), [answer(false),], []));
+                f.body.push(if-stmt(
+                    left(["is_err",], bool, false),
+                    [return-stmt(eq-node(g, r.err, left(["err",], r.err, false), right(["err",], r.err, false))),],
+                    [return-stmt(eq-node(g, r.ok, left(["ok",], r.ok, false), right(["ok",], r.ok, false))),],
+                ));
+            }
+            tuple-type(xs) => { for i in 0..xs.len() { part(["f{i}",], xs[i], false); } }
+            anon-record(r) => { for i in 0..r.fields.len() { part(["f_" + mangle(r.fields[i]),], r.types[i], false); } }
+            fixed-list(x) => {
+                for k in 0..x.len {
+                    let index = int-const(k, Type.num("s64"));
+                    let one = list-get(local(a, held), index, c-type(g, x.item), x.item, true);
+                    let other = list-get(local(b, held), int-const(k, Type.num("s64")), c-type(g, x.item), x.item, true);
+                    f.body.push(if-stmt(un("!", bool, eq-node(g, x.item, one, other)), [answer(false),], []));
+                }
+            }
+            union-type(xs) => {
+                let fields: list<list<string>> = [];
+                for k in 0..xs.len() { fields.push(["c{k}",]); }
+                kinds(false, fields, xs);
+            }
+            named(n) => {
+                let v = g.variants[n];
+                let fields: list<list<string>> = [];
+                let types: list<Type> = [];
+                for k in v.cases {
+                    fields.push(if k.has-payload { ["u", "c_" + mangle(k.name),] } else { [] });
+                    types.push(k.payload);
+                }
+                kinds(true, fields, types);
+            }
+            _ => {}
+        }
+        f.body.push(answer(true));
+        name
+    }
+
+    // a value's hash, as == compares it (the node's value): a string's by its bytes, a composite's by
+    // its parts (hash-fn), a float's by its bits (0.0 and -0.0 one hash), anything else by its bits
+    // (a declared record's, a list's: its identity)
+    hash-node: func(g: Gen, t: Type, a: Node) -> Node {
+        let u64 = Type.num("u64");
+        if by-parts(g, t) { return pure-call(hash-fn(g, t), [a,], u64); }
+        match t {
+            string-type => std-call(g, "yel:std/text.hash", [a,], u64),
+            unit-type => int-const(1, u64),
+            bool-type => pure-call("y_hash_bits", [convert(u64, a),], u64),
+            num(n) => if n == "f32" || n == "f64" {
+                pure-call("y_hash_" + n, [a,], u64)
+            } else {
+                pure-call("y_hash_bits", [convert(u64, a),], u64)
+            },
+            // (a, a helper's local or deref, read twice)
+            func-type(x) => pure-call("y_hash_mix", [
+                pure-call("y_hash_address", [load(a, ["fn",], false, Type.address-type, false),], u64),
+                pure-call("y_hash_address", [load(a, ["env",], false, Type.address-type, false),], u64),
+            ], u64),
+            _ => {
+                // a pointer by its address; an enum, flags or a handle by its number
+                let pointer = ptr-paths(g, t, "").len() > 0;
+                if pointer { pure-call("y_hash_address", [a,], u64) } else { pure-call("y_hash_bits", [convert(u64, a),], u64) }
+            }
+        }
+    }
+
+    // the func that hashes a value of a composite type (as hash-node), made once (a helper): as
+    // std's value-hash would
+    hash-fn: func(g: Gen, held: Type) -> string {
+        let name = "y_hashv_" + type-id(g, held);
+        if made-before(g, name) { return name; }
+        let u64 = Type.num("u64");
+        let s32 = Type.num("s32");
+        let bool = Type.bool-type;
+        let f = helper-func(g, name, u64, false);
+        let a = helper-local(f, held, "a", true);
+        let h = helper-local(f, u64, "h", false);
+        let get = { field: list<string>, ty: Type, arrow: bool -> load(local(a, held), field, arrow, ty, false) };
+        let number = { k: s64 -> int-const(k, u64) };
+        let mix = { x: Node, y: Node -> pure-call("y_hash_mix", [x, y,], u64) };
+        let hs = { -> local(h, u64) };
+        // h mixed with each part's hash, from 1
+        let parts = { fields: list<list<string>>, types: list<Type> ->
+            f.body.push(assign(h, number(1)));
+            for k in 0..fields.len() { f.body.push(assign(h, mix(hs(), hash-node(g, types[k], get(fields[k], types[k], false))))); }
+            f.body.push(return-stmt(hs()));
+        };
+        // its kind's bits, mixed with what that kind holds
+        let kinds = { arrow: bool, fields: list<list<string>>, types: list<Type> ->
+            f.body.push(assign(h, pure-call("y_hash_bits", [convert(u64, get(["tag",], s32, arrow)),], u64)));
+            for k in 0..fields.len() {
+                if fields[k].len() > 0 {
+                    f.body.push(if-stmt(bin("==", bool, get(["tag",], s32, arrow), int-const(k, s32)), [
+                        return-stmt(mix(hs(), hash-node(g, types[k], get(fields[k], types[k], arrow)))),
+                    ], []));
+                }
+            }
+            f.body.push(return-stmt(hs()));
+        };
+        match held {
+            option-type(x) => {
+                f.body.push(if-stmt(un("!", bool, get(["has",], bool, false)), [return-stmt(number(1)),], []));
+                f.body.push(return-stmt(mix(number(2), hash-node(g, x, get(["value",], x, false)))));
+            }
+            result-type(r) => {
+                f.body.push(if-stmt(
+                    get(["is_err",], bool, false),
+                    [return-stmt(mix(number(3), hash-node(g, r.err, get(["err",], r.err, false)))),],
+                    [return-stmt(mix(number(5), hash-node(g, r.ok, get(["ok",], r.ok, false)))),],
+                ));
+            }
+            tuple-type(xs) => {
+                let fields: list<list<string>> = [];
+                for i in 0..xs.len() { fields.push(["f{i}",]); }
+                parts(fields, xs);
+            }
+            anon-record(r) => parts(r.fields.map({ x -> ["f_" + mangle(x),] }), r.types),
+            fixed-list(x) => {
+                f.body.push(assign(h, number(1)));
+                for k in 0..x.len {
+                    let item = list-get(local(a, held), int-const(k, Type.num("s64")), c-type(g, x.item), x.item, true);
+                    f.body.push(assign(h, mix(hs(), hash-node(g, x.item, item))));
+                }
+                f.body.push(return-stmt(hs()));
+            }
+            union-type(xs) => {
+                let fields: list<list<string>> = [];
+                for i in 0..xs.len() { fields.push(["c{i}",]); }
+                kinds(false, fields, xs);
+            }
+            named(n) => {
+                let v = g.variants[n];
+                let fields: list<list<string>> = [];
+                let types: list<Type> = [];
+                for k in v.cases {
+                    fields.push(if k.has-payload { ["u", "c_" + mangle(k.name),] } else { [] });
+                    types.push(k.payload);
+                }
+                kinds(true, fields, types);
+            }
+            _ => f.body.push(return-stmt(number(1))),
+        }
+        name
+    }
+
+    // a map's key's hash and equality, given its address (the runtime's map takes these), made once
+    // (helpers)
+    key-hash-fn: func(g: Gen, t: Type) -> string {
+        let n = "y_khash_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let f = helper-func(g, n, Type.num("u64"), false);
+        let k = helper-local(f, Type.address-type, "k", true);
+        f.body.push(return-stmt(hash-node(g, t, deref(local(k, Type.address-type), t))));
+        n
+    }
+
+    key-eq-fn: func(g: Gen, t: Type) -> string {
+        let n = "y_keq_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let f = helper-func(g, n, Type.bool-type, false);
+        let a = helper-local(f, Type.address-type, "a", true);
+        let b = helper-local(f, Type.address-type, "b", true);
+        f.body.push(return-stmt(eq-node(g, t, deref(local(a, Type.address-type), t), deref(local(b, Type.address-type), t))));
+        n
+    }
+
+    // a flags type's flag as its bit
+    flag-bit: func(g: Gen, tn: string, flag: string) -> u64 { (1 as u64) << (index-of(g.flags[intern(tn)].flags, flag) as u64) }
+
+    // whether e (named ok or err) is a result
+    is-result: func(g: Gen, e: Expr, n: string) -> bool {
+        if n != "ok" && n != "err" { return false; }
+        match expr-type(g, e) {
+            result-type(r) => true,
+            _ => false,
+        }
+    }
+
+    // an integer literal (e, written text) as C, once it fits its type t (negated: under a -, where
+    // a signed type's least value is allowed). C's octal is 0755 (yel's 0o755), a decimal loses its
+    // leading zeros (C would read 007 as octal), and one of a type other than s32 is cast to it
+    int-value: func(g: Gen, e: Expr, text: string, t: Type, negated: bool) -> u64 {
+        let tn = match t {
+            num(x) => x,
+            _ => "s32",
+        };
+        let width = if tn == "s8" || tn == "u8" {
+            8
+        } else if tn == "s16" || tn == "u16" {
+            16
+        } else if tn == "s64" || tn == "u64" {
+            64
+        } else {
+            32
+        };
+        let limit = if !is-signed(tn) {
+            repeat("1", width)
+        } else if negated {
+            "1" + repeat("0", width - 1)
+        } else {
+            repeat("1", width - 1)
+        };
+        let bits = literal-bits(text);
+        if !bits-fit(bits, limit) {
+            let sign = if negated { "-" } else { "" };
+            diagnostics.fatal(g.context, diagnostics.error(e.span, "{sign}{text} is out of range for {tn}", ""));
+        }
+        let value: u64 = 0;
+        for k in 0..bits.len() { value = (value << 1) | ((bits.byte-at(k) - 48) as u64); }
+        value
+    }
+
+    // whether a binary number (no leading zeros) is at most limit (another)
+    bits-fit: func(bits: string, limit: string) -> bool {
+        let n = bits.len();
+        if n != limit.len() { return n < limit.len(); }
+        for i in 0..n {
+            let a = bits.byte-at(i);
+            let b = limit.byte-at(i);
+            if a != b { return a < b; }
+        }
+        true
+    }
+
+    repeat: func(s: string, n: s64) -> string {
+        let out: list<string> = [];
+        for i in 0..n { out.push(s); }
+        out.join("")
+    }
+
+    // an integer literal's value in binary digits, without leading zeros ("0" for zero)
+    literal-bits: func(text: string) -> string {
+        let n = text.len();
+        let out: list<string> = [];
+        let radix = if n > 2 && text.byte-at(0) == 48 { radix-of(text.byte-at(1)) } else { 0 };
+        if radix > 0 {
+            // each digit is 4, 3 or 1 bits
+            let per = if radix == 16 { 4 } else if radix == 8 { 3 } else { 1 };
+            for i in 2..n {
+                let d = hex-value(text.byte-at(i));
+                for k in 0..per {
+                    let place = per - 1 - k;
+                    let weight = if place == 3 {
+                        8
+                    } else if place == 2 {
+                        4
+                    } else if place == 1 {
+                        2
+                    } else {
+                        1
+                    };
+                    out.push("{(d / weight) % 2}");
+                }
+            }
+        } else {
+            // a decimal: halved, as a list of digits, until nothing is left; its remainders the
+            // bits
+            let digits: list<s64> = [];
+            for i in 0..n { digits.push(text.byte-at(i) - 48); }
+            let rev: list<string> = [];
+            for step in 0..4 * n + 1 {
+                if all-zero(digits) { return trim-bits(reversed(rev)); }
+                let carry = 0;
+                for i in 0..digits.len() {
+                    let d = carry * 10 + digits[i];
+                    digits[i] = d / 2;
+                    carry = d % 2;
+                }
+                rev.push("{carry}");
+            }
+            return trim-bits(reversed(rev));
+        }
+        trim-bits(out.join(""))
+    }
+
+    all-zero: func(digits: list<s64>) -> bool {
+        for d in digits {
+            if d != 0 { return false; }
+        }
+        true
+    }
+
+    reversed: func(xs: list<string>) -> string {
+        let out: list<string> = [];
+        for i in 0..xs.len() { out.push(xs[xs.len() - 1 - i]); }
+        out.join("")
+    }
+
+    trim-bits: func(bits: string) -> string {
+        let n = bits.len();
+        for i in 0..n {
+            if bits.byte-at(i) != 48 { return bits.substring(i, n); }
+        }
+        "0"
+    }
+
+    // the pointers in parts, each at member + its index
+    parts-paths: func(g: Gen, parts: list<Type>, member: string) -> list<string> {
+        let out: list<string> = [];
+        for index in 0..parts.len() {
+            for path in ptr-paths(g, parts[index], "{member}{index}") { out.push(path); }
+        }
+        out
+    }
+
+    // the pointers a value of type t holds, as C expressions from base (the value): a string's
+    // bytes, a list, map, record or variant, and those inside an option, result or tuple
+    ptr-paths: func(g: Gen, t: Type, base: string) -> list<string> {
+        if needs-representing(t) { return ptr-paths(g, represented(t), base); }
+        match t {
+            string-type => ["{base}.data",],
+            buffer-type => [base,],
+            // a func value's environment (a closure's)
+            func-type(f) => ["{base}.env",],
+            list-type(x) => [base,],
+            // each item's (a long list of pointers: as many slots)
+            fixed-list(x) => {
+                let out: list<string> = [];
+                for k in 0..x.len {
+                    for q in ptr-paths(g, x.item, "{base}.items[{k}]") { out.push(q); }
+                }
+                out
+            }
+            map-type(x) => [base,],
+            future-type(x) => [base,],
+            seq-type(x) => [base,],
+            stream-type(x) => [base,],
+            option-type(x) => ptr-paths(g, x, "{base}.value"),
+            result-type(r) => {
+                let out = ptr-paths(g, r.ok, "{base}.ok");
+                for q in ptr-paths(g, r.err, "{base}.err") { out.push(q); }
+                out
+            }
+            tuple-type(xs) => parts-paths(g, xs, "{base}.f"),
+            union-type(xs) => parts-paths(g, xs, "{base}.c"),
+            anon-record(r) => {
+                let out: list<string> = [];
+                for i in 0..r.fields.len() {
+                    for q in ptr-paths(g, r.types[i], "{base}.f_{mangle(r.fields[i])}") { out.push(q); }
+                }
+                out
+            }
+            named(n) => if named-kind(g, n) == "record" || named-kind(g, n) == "variant" {
+                [base,]
+            } else {
+                []
+            },
+            _ => [],
+        }
+    }
+
+    // the func that marks the pointers in one value of type t, given its address (a list's item,
+    // a map's value), made once (a helper); NULL when t holds none, the runtime's for a string or
+    // a pointer
+    scan-fn: func(g: Gen, t: Type) -> string {
+        if needs-representing(t) { return scan-fn(g, represented(t)); }
+        let paths = ptr-paths(g, t, "(*v)");
+        if paths.len() == 0 { return "NULL"; }
+        match t {
+            string-type => { return "y_scan_str"; }
+            option-type(x) => {}
+            result-type(r) => {}
+            tuple-type(xs) => {}
+            union-type(xs) => {}
+            anon-record(r) => {}
+            fixed-list(x) => {}
+            func-type(f) => {}
+            _ => { return "y_scan_ptr"; }
+        }
+        let n = "y_scan_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let f = helper-func(g, n, Type.unit-type, true);
+        let value = helper-local(f, Type.address-type, "value", true);
+        let v = helper-local(f, t, "v", false);
+        f.body.push(assign(v, deref(local(value, Type.address-type), t)));
+        marks(g, t, { -> local(v, t) }, f.body);
+        n
+    }
+
+    // the func that marks the pointers in a record or variant object (its trace), made once (a
+    // helper); NULL when it holds none
+    trace-fn: func(g: Gen, tn: Name) -> string {
+        let n = "y_trace_" + type-id(g, Type.named(tn));
+        if g.made.has(n) { return n; }
+        let object = Type.named(tn);
+        let held = 0;
+        if g.records.has(tn) {
+            let r = g.records[tn];
+            for ft in r.field-types { held += ptr-paths(g, ft, "").len(); }
+        } else {
+            for k in g.variants[tn].cases {
+                if k.has-payload { held += ptr-paths(g, k.payload, "").len(); }
+            }
+        }
+        if held == 0 { return "NULL"; }
+        g.made.set(n, true);
+        let f = helper-func(g, n, Type.unit-type, true);
+        let obj = helper-local(f, Type.address-type, "obj", true);
+        let o = helper-local(f, object, "o", false);
+        f.body.push(assign(o, convert(object, local(obj, Type.address-type))));
+        if g.records.has(tn) {
+            let r = g.records[tn];
+            for i in 0..r.fields.len() {
+                let ft = r.field-types[i];
+                let field = ["f_" + mangle(r.fields[i]),];
+                marks(g, ft, { -> load(local(o, object), field, true, ft, false) }, f.body);
+            }
+        } else {
+            let v = g.variants[tn];
+            let s32 = Type.num("s32");
+            for i in 0..v.cases.len() {
+                let k = v.cases[i];
+                if k.has-payload && ptr-paths(g, k.payload, "").len() > 0 {
+                    let case-marks: list<Node> = [];
+                    let field = ["u", "c_" + mangle(k.name),];
+                    marks(g, k.payload, { -> load(local(o, object), field, true, k.payload, false) }, case-marks);
+                    f.body.push(if-stmt(bin("==", Type.bool-type, load(local(o, object), ["tag",], true, s32, false), int-const(i, s32)), case-marks, []));
+                }
+            }
+        }
+        n
+    }
+
+    // the collector's marks of the pointers a value of type t holds (at: the value, each time a
+    // node of its own), into out: a string's bytes, a list, map, record or variant, and those
+    // inside an option, result or tuple (as ptr-paths)
+    marks: func(g: Gen, t: Type, at: func() -> Node, out: list<Node>) {
+        if needs-representing(t) {
+            marks(g, represented(t), at, out);
+            return;
+        }
+        let mark = { p: Node -> out.push(runtime-call("y_mark", [p,], Type.unit-type)) };
+        let inside = { field: list<string>, ty: Type -> marks(g, ty, { -> load(at(), field, false, ty, false) }, out) };
+        match t {
+            string-type => mark(load(at(), ["data",], false, Type.address-type, false)),
+            func-type(f) => mark(load(at(), ["env",], false, Type.address-type, false)),
+            fixed-list(x) => {
+                for k in 0..x.len {
+                    marks(g, x.item, { -> list-get(at(), int-const(k, Type.num("s64")), c-type(g, x.item), x.item, true) }, out);
+                }
+            }
+            option-type(x) => inside(["value",], x),
+            result-type(r) => {
+                inside(["ok",], r.ok);
+                inside(["err",], r.err);
+            }
+            tuple-type(xs) => { for i in 0..xs.len() { inside(["f{i}",], xs[i]); } }
+            union-type(xs) => { for i in 0..xs.len() { inside(["c{i}",], xs[i]); } }
+            anon-record(r) => { for i in 0..r.fields.len() { inside(["f_" + mangle(r.fields[i]),], r.types[i]); } }
+            _ => {
+                // a list, a map, a buffer, a record's or a variant's object, a started call: the
+                // pointer itself
+                if ptr-paths(g, t, "").len() > 0 { mark(at()); }
+            }
+        }
+    }
+
+    // ================================================================ helpers
+
+    // a helper: a func made for a type (a trace, a scan, an equality, a hash, a conversion, a func
+    // value's adapter), C's and the bitcode's alike (rendered and lowered after the program's funcs)
+    helper-func: func(g: Gen, c-name: string, result: Type, void-result: bool) -> IrFunc {
+        let f: IrFunc = {
+            key: c-name, c-name: c-name, name: intern(c-name), params: [], locals: [], body: [], result: result, labels: 0, rooted: [],
+            closure: false, env-param: -1, async: false, states: 0, generator: false, void-result: void-result,
+            export-name: "", build: "", release: false,
+        };
+        g.helpers.push(f);
+        f
+    }
+
+    // ================================================================ globals
+
+    // a global's C name
+    global-c: func(key: string) -> string { "G_" + mangle(key) }
+
+    // the program's globals: each a static of its type (zero to start with), and the helpers that
+    // make what each starts as (y_globals_init: its literal, or its zero value's collections made
+    // empty) and mark what each holds (y_globals_mark: the collector's roots). The runtime runs the
+    // first once, before the program's first code (y_globals, globals-start); none without globals
+    globals-helpers: func(g: Gen) {
+        if g.global-order.len() == 0 { return; }
+        let init = helper-func(g, "y_globals_init", Type.unit-type, true);
+        let mark = helper-func(g, "y_globals_mark", Type.unit-type, true);
+        for k in g.global-order {
+            let x = g.globals[k];
+            let t = gen-type(g, x.ty);
+            g.helper-protos.push("static {c-type(g, t)} {global-c(k)};");
+            let place = { -> global-node(k, t) };
+            match x.value {
+                some(v) => init.body.push(store(place(), literal-node(g, v, t))),
+                none => zero-into(g, t, place, init.body),
+            }
+            marks(g, t, place, mark.body);
+        }
+    }
+
+    // the call that makes the program's globals (once: the runtime's y_globals), where its code is
+    // first entered: main's start, an export's
+    globals-start: func(g: Gen) -> list<Node> {
+        if g.global-order.len() == 0 { return []; }
+        let pointer = Type.address-type;
+        [runtime-call("y_globals", [func-ref("y_globals_init", "y_globals_init", "y_globals_init", pointer), func-ref("y_globals_mark", "y_globals_mark", "y_globals_mark", pointer),], Type.unit-type),]
+    }
+
+    // a global's literal (the checker allows nothing else), as a constant of type t
+    literal-node: func(g: Gen, e: Expr, t: Type) -> Node {
+        match e.kind {
+            int-lit(v) => const(Constant.int(int-value(g, e, v, t, false)), t),
+            float-lit(v) => const(Constant.float(parse-f64(v)), t),
+            char-lit(code) => int-const(code, t),
+            str-lit(s) => text-const(s),
+            bool-lit(b) => bool-const(b),
+            unary(u) => match u.value.kind {
+                int-lit(v) => const(Constant.int(0 - int-value(g, u.value, v, t, true)), t),
+                float-lit(v) => const(Constant.float(0.0 - parse-f64(v)), t),
+                _ => panic("{g.file}: a global's value is not a literal"),
+            },
+            _ => panic("{g.file}: a global's value is not a literal"),
+        }
+    }
+
+    // the stores that make a zero value at place (zero bytes already but for what is on the heap:
+    // each list, map and set in it made empty), into out
+    zero-into: func(g: Gen, t: Type, place: func() -> Node, out: list<Node>) {
+        let s64 = Type.num("s64");
+        match t {
+            list-type(item) => {
+                scan-fn(g, item);
+                out.push(store(place(), runtime-call("y_list_new", [int-const(0, s64), size-of(item), scan(item),], t)));
+            }
+            map-type(x) => out.push(store(place(), extern-call(g, "yel:std/memory.new-map", [x.key, x.value,], [int-const(8, s64),], t))),
+            tuple-type(xs) => {
+                for i in 0..xs.len() { zero-into(g, xs[i], { -> load(place(), ["f{i}",], false, xs[i], true) }, out); }
+            }
+            anon-record(r) => {
+                for i in 0..r.types.len() { zero-into(g, r.types[i], { -> load(place(), ["f_" + mangle(r.fields[i]),], false, r.types[i], true) }, out); }
+            }
+            fixed-list(x) => {
+                for k in 0..x.len { zero-into(g, x.item, { -> list-get(place(), int-const(k, s64), c-type(g, x.item), x.item, true) }, out); }
+            }
+            _ => {}
+        }
+    }
+
+    // the WIT imports (std's own calls too), each one's wrapper's C name (w_<name>, an async one's
+    // start: s_<name>) to its native host's (std's host func, std/host-*.yel; its start)
+    import-hosts: func(g: Gen) -> map<string, string> {
+        let out: map<string, string> = map.new();
+        for k in g.wit-externs.keys() {
+            let x = g.wit-externs[k];
+            let host = host-key(g, x);
+            if host == "" { continue; }
+            let c = g.funcs[host].c-name;
+            if x.is-async { out.set("s_" + mangle(x.name), "s" + c.substring(1, c.len())); }
+            else { out.set("w_" + mangle(x.name), c); }
+        }
+        out
+    }
+
+    // the target a func is made only for (//+build: "native", "wasi"; "" for every one): its own,
+    // or (a closure lifted out of it: <name>__c<n>) the func it was made in's
+    func-build: func(g: Gen, c-name: string) -> string {
+        let own = g.builds.get-or(c-name, "");
+        if own != "" { return own; }
+        let at = c-name.len() - 1;
+        for step in 0..c-name.len() {
+            if at > 2 && c-name.substring(at - 3, at) == "__c" && all-digits(c-name.substring(at, c-name.len())) {
+                return func-build(g, c-name.substring(0, at - 3));
+            }
+            at -= 1;
+        }
+        ""
+    }
+
+    all-digits: func(s: string) -> bool {
+        if s.len() == 0 { return false; }
+        for index in 0..s.len() {
+            let c = s.byte-at(index);
+            if c < 48 || c > 57 { return false; }
+        }
+        true
+    }
+
+    // a func's C name as a root names it: an async func's step (u_<name>) for its start (s_<name>)
+    step-name: func(c-name: string) -> string { if c-name.starts-with("s_") { "u" + c-name.substring(1, c-name.len()) } else { c-name } }
+
+    // whether a node (at any depth) shows a value by std's walker: an interpolation's "render …"
+    // piece, a match no arm fits
+    shows-rendered: func(n: Node) -> bool {
+        match n.kind {
+            interp(x) => {
+                for w in x.formatters {
+                    match w {
+                        render(_) => { return true; }
+                        _ => {}
+                    }
+                }
+            }
+            unreachable(x) => { return true; }
+            _ => {}
+        }
+        for index in 0..operand-count(n) {
+            if shows-rendered(operand(n, index)) { return true; }
+        }
+        false
+    }
+
+    // the yel funcs a node calls, at any depth of its operands (their C names, into out)
+    called-funcs: func(n: Node, out: list<string>) {
+        match n.kind {
+            call(c) => if c.key != "" { out.push(step-name(c.c-name)); },
+            _ => {}
+        }
+        for index in 0..operand-count(n) { called-funcs(operand(n, index), out); }
+    }
+
+    // the helpers' roots: which of their locals are live where they may collect (a lift makes
+    // objects while it holds others), as the program's funcs' (opt.rooted)
+    root-helpers: func(g: Gen, funcs: list<IrFunc>) {
+        let all: list<IrFunc> = [];
+        for f in funcs { all.push(f); }
+        for h in g.helpers { all.push(h); }
+        let allocating = opt.allocating-funcs(all);
+        for h in g.helpers { h.rooted = opt.rooted(h, allocating); }
+    }
+
+    // a helper's local (a param where param is): its index (rooted as root-helpers finds)
+    helper-local: func(f: IrFunc, ty: Type, name: string, param: bool) -> s64 {
+        f.locals.push({ ty: ty, name: name, binding: none, });
+        f.rooted.push(false);
+        if param { f.params.push(f.locals.len() - 1); }
+        f.locals.len() - 1
+    }
+
+    // a generic func's C for these type arguments, compiled once (later, from g.pending)
+    instance: func(g: Gen, n: string, type-args: list<Type>) -> string {
+        let f = g.generic[n];
+        let subst: map<string, Type> = map.new();
+        let ids: list<string> = [];
+        for i in 0..f.type-params.len() {
+            let t = gen-type(g, type-args[i]);
+            subst.set(f.type-params[i], t);
+            ids.push(type-id(g, t));
+        }
+        let c-name = "u_{mangle(n)}__{ids.join("")}";
+        if !g.instances.has(c-name) {
+            g.instances.set(c-name, true);
+            g.pending.push({ decl: f, c-name: c-name, subst: subst, });
+        }
+        c-name
+    }
+
+    // the program as C; mode: how it is optimized ("size", "speed", or "none": see opt.optimize;
+    // "check": nothing made, the program checked as far as its readonly and moves: yelc check);
+    // world: filled with the component's WIT (its imports and exports, and its interfaces)
+    // backend: "c" (the C it makes), or "bitcode" (llvm.yel's module for triple)
+    compile: func(context: Context, decls: list<Decl>, sites: list<EffectSite>, world: World) -> string {
+        let file = context.input;
+        let mode = context.mode;
+        let backend = context.backend;
+        let triple = context.triple;
+        let g = generator(context, decls);
+        let forward: list<string> = [];
+        let structs: list<string> = [];
+        type-decls(g, decls, forward, structs);
+        // every func built as IR (a generic one for each list of type arguments it is called
+        // with), then written as C
+        let funcs: list<IrFunc> = [];
+        let main-arity = -1;
+        let main-async = false;
+        let main-result = Type.unit-type;
+        for d in decls {
+            match d {
+                func-decl(f) => {
+                    if f.type-params.len() == 0 {
+                        g.subst = map.new();
+                        funcs.push(codegen-func(g, f, "u_" + mangle(f.name)));
+                        if f.scope.build != "" { g.builds.set("u_" + mangle(f.name), f.scope.build); }
+                        if f.name == "main" {
+                            main-arity = f.params.len();
+                            main-result = f.result;
+                            main-async = f.is-async;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // the generic funcs' instances, as calls find them (each func built may find more)
+        loop {
+            if g.pending.len() == 0 { break; }
+            let p = g.pending.pop();
+            g.subst = p.subst;
+            funcs.push(codegen-func(g, p.decl, p.c-name));
+            if p.decl.scope.build != "" { g.builds.set(p.c-name, p.decl.scope.build); }
+        }
+        // the closures' bodies, lifted funcs of their own
+        for f in g.lifted { funcs.push(f); }
+        // the exported modules' funcs: the component's exports
+        let exports: map<string, list<Func>> = map.new();
+        let export-order: list<string> = [];
+        for d in decls {
+            match d {
+                func-decl(f) => {
+                    let sc = f.scope;
+                    if sc.pkg.prefix == "" && sc.module != "" && sc.pkg.modules[
+                        sc.module
+                    ] == "export" {
+                        if f.type-params.len() > 0 {
+                            diagnostics.fatal(g.context, diagnostics.error-at(file, "{f.name} is generic: an exported func cannot be"));
+                        }
+                        if !exports.has(sc.module) {
+                            exports.set(sc.module, []);
+                            export-order.push(sc.module);
+                        }
+                        exports[sc.module].push(f);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // records a func returns inlined where that lets them stay on the caller's stack, funcs no
+        // longer called dropped, and every record that never escapes its func on its stack
+        let pointer-types: map<Name, bool> = map.new();
+        for r in g.records.keys() { pointer-types.set(r, true); }
+        for v in g.variants.keys() {
+            if !is-enum(g, v) { pointer-types.set(v, true); }
+        }
+        // the named types that may hold a func value: a fixed point over records' fields and
+        // variants' payloads
+        let func-holders: map<Name, bool> = map.new();
+        for round in 0..1000 {
+            let changed = false;
+            for r in g.records.keys() {
+                if !func-holders.has(r) {
+                    for t in g.records[r].field-types {
+                        if !func-holders.has(r) && opt.holds-funcs(func-holders, t) {
+                            func-holders.set(r, true);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            for v in g.variants.keys() {
+                if !func-holders.has(v) {
+                    for k in g.variants[v].cases {
+                        if !func-holders.has(v) && opt.holds-funcs(func-holders, k.payload) {
+                            func-holders.set(v, true);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed { break; }
+        }
+        // what is kept: main, and each exported func
+        let roots: list<string> = ["u_main",];
+        // an async main: the executor too (the C main calls it); an async export: its runner
+        if main-async { roots.push(g.funcs["yel:std/async.run-tasks"].c-name); }
+        for m in export-order {
+            for f in exports[m] {
+                if f.is-async { roots.push(g.funcs["yel:std/async.run-ready-of"].c-name); }
+            }
+        }
+        for m in export-order { for f in exports[m] { roots.push("u_" + mangle(f.name)); } }
+        // a used WIT import's native host func (std's, which only its wrapper calls): kept
+        for k in g.wit-used.keys() {
+            let host = host-key(g, g.wit-externs[k]);
+            if host != "" { std-func(g, host); }
+        }
+        // std's funcs that the C the compiler writes calls (std-func): the C backend's
+        if backend == "c" {
+            for key in g.made.keys() {
+                if starts-with(key, "root ") { roots.push(g.funcs[key.substring(5, key.len())].c-name); }
+            }
+        }
+        // the globals' helpers (made and marked)
+        globals-helpers(g);
+        // the funcs the helpers call (an equality's text.equal, a func value's adapter's func)
+        for h in g.helpers {
+            for n in flatten(h.body) { called-funcs(n, roots); }
+        }
+        // the ends of the host's streams and futures let go where their locals are last used
+        // (releases.yel)
+        // the flow of the program: the readonly and move checks (effects.yel), and the ends of the
+        // host's streams and futures let go where their locals are last used (releases.yel)
+        let externs = flow.extern-effects(decls);
+        let facts = flow-facts(g, funcs, pointer-types, func-holders, externs);
+        effects.check-sites(decls, sites, facts, g.context);
+        diagnostics.abort-if-errors(g.context);
+        // yelc check: every error is found by now
+        if mode == "check" { return ""; }
+        release-ends(g, funcs, facts);
+        if mode != "none" {
+            // (std's walker kept for the bitcode's module, which adds it where a kept func shows a
+            // value by it)
+            let kept-roots: list<string> = [];
+            for r in roots { kept-roots.push(r); }
+            if backend == "bitcode" && g.made.has("root " + render-key()) {
+                kept-roots.push(g.funcs[render-key()].c-name);
+                kept-roots.push(g.funcs["yel:std/buffer.push"].c-name);
+            }
+            if backend == "bitcode" {
+                for host in import-hosts(g).values() { kept-roots.push(step-name(host)); }
+            }
+            funcs = opt.optimize(funcs, pointer-types, func-holders, mode, kept-roots, wit-wrappers(g), externs);
+            // the imports what is kept calls (not those of funcs left out: std's sleep's clock) (an
+            // import's call: by its key, an async one's start; by its wrapper's C name, a sync one)
+            let wrappers: map<string, string> = map.new();
+            for k in g.wit-used.keys() { wrappers.set(g.funcs[k].c-name, k); }
+            let used: map<string, bool> = map.new();
+            for f in funcs {
+                for n in flatten(f.body) { imports-called(g, n, wrappers, used); }
+            }
+            g.wit-used = used;
+        }
+        // the collector sees only what is live where it may run
+        let allocating = opt.allocating-funcs(funcs);
+        for f in funcs { f.rooted = opt.rooted(f, allocating); }
+        // the component's imports the program calls (a sync one's wrapper: IR, both backends'), its
+        // exports (a sync one's wrapper and post-return), and its world
+        let imported: map<string, bool> = map.new();
+        for k in g.wit-used.keys() {
+            let x = g.wit-externs[k];
+            if x.is-async { async-import-wrapper-ir(g, x); } else { import-wrapper-ir(g, x); }
+            if !imported.has(x.wit-module) {
+                imported.set(x.wit-module, true);
+                world.items.push("  import {x.wit-module};");
+            }
+        }
+        let interfaces: list<string> = [];
+        for m in export-order {
+            let pkg = exports[m][0].scope.pkg;
+            let id = if pkg.id == "" { "yel:app" } else { pkg.id };
+            let version = if pkg.version == "" { "" } else { "@" + pkg.version };
+            let iface = "{id}/{wit-ident(m)}{version}";
+            interfaces.push(iface);
+            for f in exports[m] {
+                if f.is-async { async-export-wrapper-ir(g, f, iface); } else { export-wrapper-ir(g, f, iface); }
+            }
+            wit-interface(g, m, exports[m], world.interfaces);
+            world.items.push("  export {wit-ident(m)};");
+        }
+        // the bitcode backend: what its roots reach (whatever --opt says: unreached funcs it has no
+        // lowering for yet)
+        if backend == "bitcode" {
+            // the externs' yel names by their C names
+            let externs: map<string, string> = map.new();
+            for k in g.funcs.keys() {
+                if g.funcs[k].is-extern { externs.set(g.funcs[k].c-name, k); }
+            }
+            // natively, a WIT import is std's host func for it (the C backend's wrapper calls it)
+            let imports = import-hosts(g);
+            for host in imports.values() { roots.push(step-name(host)); }
+            let kept = opt.reachable(funcs, roots);
+            // std's walker, where a kept func shows a value by it ({x:?}, a match no arm fits)
+            let renders = false;
+            for f in kept {
+                for n in flatten(f.body) { if shows-rendered(n) { renders = true; } }
+            }
+            if renders {
+                roots.push(g.funcs[render-key()].c-name);
+                roots.push(g.funcs["yel:std/buffer.push"].c-name);
+                kept = opt.reachable(funcs, roots);
+            }
+            root-helpers(g, kept);
+            for f in g.helpers { kept.push(f); }
+            return llvm.module(g, kept, triple, externs, imports);
+        }
+        let bodies: list<string> = [];
+        // a func of a file built for one target: made only there
+        for f in funcs {
+            let build = if f.build != "" { f.build } else { func-build(g, f.c-name) };
+            let guard = if build == "native" { "#if !defined(__wasm__)" } else if build == "wasi" { "#if defined(__wasm__)" } else { "" };
+            if guard != "" {
+                g.protos.push(guard);
+                bodies.push(guard);
+            }
+            render-func(g, f, bodies);
+            if guard != "" {
+                g.protos.push("#endif");
+                bodies.push("#endif");
+            }
+        }
+        // the helpers (made while the funcs and wrappers were: each may make more)
+        root-helpers(g, funcs);
+        let helper-index = 0;
+        loop {
+            if helper-index >= g.helpers.len() { break; }
+            let h = g.helpers[helper-index];
+            let guard = if h.build == "native" { "#if !defined(__wasm__)" } else if h.build == "wasi" { "#if defined(__wasm__)" } else { "" };
+            if guard != "" {
+                g.protos.push(guard);
+                bodies.push(guard);
+            }
+            render-func(g, h, bodies);
+            if guard != "" {
+                g.protos.push("#endif");
+                bodies.push("#endif");
+            }
+            helper-index += 1;
+        }
+        // no main: a component of exports only (a reactor), or an error
+        if main-arity < 0 && export-order.len() == 0 {
+            diagnostics.fatal(g.context, diagnostics.error-at(file, "no func main, and no export module"));
+        }
+        // the environments' records (known once the funcs are built), as the others
+        let envs: list<Decl> = [];
+        for r in g.env-decls { envs.push(Decl.record-decl(r)); }
+        type-decls(g, envs, forward, structs);
+        let out = ["// compiled by yelc from {file}", "#include \"yel.h\"", "",];
+        for l in forward { out.push(l); }
+        out.push("");
+        for l in g.value-decls { out.push(l); }
+        out.push("");
+        for l in structs { out.push(l); }
+        out.push("");
+        for l in g.literal-decls { out.push(l); }
+        out.push("");
+        for l in g.helper-protos { out.push(l); }
+        for l in g.protos { out.push(l); }
+        out.push("");
+        for l in g.helper-bodies { out.push(l); }
+        for l in bodies { out.push(l); }
+        if main-arity >= 0 {
+            out.push(c"int main(int argc, char **argv) {");
+            out.push("\tylist *args = y_start(argc, argv);");
+            if g.global-order.len() > 0 { out.push("\ty_globals(y_globals_init, y_globals_mark);"); }
+            let call = if main-arity == 0 { "u_main()" } else { "u_main(args)" };
+            // an async main: its task, the executor's root (std's async.run-tasks)
+            if main-async {
+                let run = g.funcs["yel:std/async.run-tasks"].c-name;
+                let start = if main-arity == 0 { "s_main()" } else { "s_main(args)" };
+                out.push("\t{run}({start});");
+                out.push("\t(void)args;");
+                out.push("\treturn y_finish(0);");
+                out.push(c"}");
+                out.push("");
+                return out.join(from-byte(10));
+            }
+            match main-result {
+                num(n) => out.push("\t{num-c(n)} r = {call};"),
+                _ => out.push("\t(void){call};\n\tint64_t r = 0;"),
+            }
+            out.push("\t(void)args;");
+            out.push("\treturn y_finish(r);");
+            out.push(c"}");
+            out.push("");
+        }
+        out.join(from-byte(10))
+    }
+}

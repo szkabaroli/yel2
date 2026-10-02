@@ -1,0 +1,20 @@
+// Options: the value, or another where there is none (unwrap-or, as Rust's), and whether there is
+// one
+
+module option {
+    unwrap-or: func<T>(value: option<T>, otherwise: T) -> T {
+        match value {
+            some(inner) => inner,
+            none => otherwise,
+        }
+    }
+
+    is-some: func<T>(value: option<T>) -> bool {
+        match value {
+            some(_) => true,
+            none => false,
+        }
+    }
+
+    is-none: func<T>(value: option<T>) -> bool { !is-some(value) }
+}

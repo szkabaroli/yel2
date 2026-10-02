@@ -1,0 +1,6 @@
+// error: 4:5: xs[i] += v would read xs and i twice: write xs[i] = xs[i] + v
+main: func() -> s32 {
+    let xs = [1,];
+    xs[0] += 1;
+    0
+}

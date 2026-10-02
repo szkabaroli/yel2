@@ -1,0 +1,14 @@
+[the quick brown fox] [the quick brown fox  ] [  the quick brown fox]
+["the", "quick", "brown", "fox"] 4 ["a", "", "b"] [""]
+true true true
+some(1) some(3) none
+a + b + c mixed case 007
+["one", "two", "three"]
+(own repeat)
+true 4 -1 [3, 9] [4, 1, 9, 3, 5]
+["GRACE 85", "ALAN 41", "ADA 36", "JOAN 36"]
+["quick", "brown"] ["THE!", "QUICK!", "BROWN!", "FOX!"] true false
+some(42) some(-9223372036854775808) none none
+true some(15) 21000000000
+true true false false
+el ["b", "c"] desserts ["c", "b", "a"]

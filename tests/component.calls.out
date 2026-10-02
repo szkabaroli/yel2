@@ -1,0 +1,25 @@
+{x: 11, y: 12}
+south
+12
+-1
+circle(3)
+dot
+{read, write}
+"hi yel, hi yel, hi yel"
+[("a", 1), ("bcd", 3), ("", 0)]
+ok(3)
+err("division by zero")
+some(5)
+none
+get
+"the number 5"
+"the string x"
+s32(42)
+bool(true)
+some(post)
+3
+{end: 7, label: post, start: 1}
+40
+42
+20
+"first 15, then 60 and 15"

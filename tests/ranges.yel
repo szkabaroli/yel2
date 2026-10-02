@@ -1,0 +1,57 @@
+// ranges of integers and chars: as types (lo..=hi, lo..hi) and as patterns; a match covers an
+// integer type by its ranges, no _ needed
+
+type percent = 0..=100;
+type digit = '0'..='9';
+type grade = 1..6;
+
+describe: func(b: u8) -> string {
+    match b {
+        0 => "zero",
+        1..=9 => "small",
+        10..100 => "medium",
+        100..=199 => "large",
+        200..=255 => "huge",
+    }
+}
+
+kind: func(c: char) -> string {
+    match c {
+        'a'..='z' => "lower",
+        'A'..='Z' => "upper",
+        '0'..='9' => "digit",
+        _ => "other",
+    }
+}
+
+sign: func(n: s8) -> s32 {
+    match n {
+        -128..=-1 => -1,
+        0 => 0,
+        1..=127 => 1,
+    }
+}
+
+// a value of a range where the range is wanted; leaving it, as? (no failure: an option)
+bump: func(p: percent) -> option<percent> { (p + 10) as? percent }
+
+value-of: func(d: digit) -> s32 { (d as s32) - 48 }
+
+main: func() {
+    for b in [0, 5, 42, 150, 255,] { print("{describe(b as u8)} "); }
+    print("\n");
+    for c in ['q', 'Q', '7', '?',] { print("{kind(c)} "); }
+    print("\n");
+    print("{sign(-5)} {sign(0)} {sign(100)}\n");
+    let p: percent = 95;
+    print("{bump(50)} {bump(p)}\n");
+    let g: grade = 5;
+    print("{g} {g is 1..=3} {g is 4..=5}\n");
+    let d: digit = '7';
+    print("{value-of(d)}\n");
+    let raw = 'x';
+    match raw as? digit {
+        some(let x) => print("digit {x}\n"),
+        none => print("{raw} is not a digit\n"),
+    }
+}

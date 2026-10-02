@@ -1,0 +1,9 @@
+// a division by zero stops the program as the runtime says: yel: division by zero, exit 1
+
+halve: func(n: s32, by: s32) -> s32 { n / by }
+
+main: func() -> s32 {
+    let total = halve(10, 2);
+    let zero = total - 5;
+    halve(total, zero)
+}

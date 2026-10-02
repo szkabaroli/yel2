@@ -1,0 +1,6 @@
+// error: 5:13: a "get" | "post" is never a s32: the test is always false
+type method = "get" | "post";
+main: func() {
+    let m: method = "get";
+    let n = m as? s32;
+}

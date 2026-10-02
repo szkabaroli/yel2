@@ -1,0 +1,3 @@
+// Porffor's bench/empty.js: a program that does nothing (its startup, and its size)
+
+main: func() {}

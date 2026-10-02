@@ -1,0 +1,331 @@
+// Porffor's bench/richards.js: Martin Richards's benchmark, an operating system's task dispatcher
+// (http://www.cl.cam.ac.uk/~mr10/Bench.html), run 100 times. JS's classes are records, its null
+// none, and a task's run is chosen by a match on its kind (the JS calls a method)
+
+from "wasi:clocks" include monotonic-clock;
+
+record Packet { link: option<Packet>, id: s32, kind: s32, a1: s32, a2: list<s32>, }
+
+record Tcb {
+    link: option<Tcb>,
+    id: s32,
+    priority: s32,
+    queue: option<Packet>,
+    task: Task,
+    state: s32,
+}
+
+variant Task {
+    idle(IdleTask),
+    device(DeviceTask),
+    worker(WorkerTask),
+    handler(HandlerTask),
+}
+
+record IdleTask { v1: s32, count: s32, }
+
+record DeviceTask { v1: option<Packet>, }
+
+record WorkerTask { v1: s32, v2: s32, }
+
+record HandlerTask { v1: option<Packet>, v2: option<Packet>, }
+
+record Scheduler {
+    queue-count: s32,
+    hold-count: s32,
+    blocks: list<option<Tcb>>,
+    list: option<Tcb>,
+    current-tcb: option<Tcb>,
+    current-id: s32,
+}
+
+// the constants: ids, packets' kinds, a task's states, a work packet's data
+record Ids { idle: s32, worker: s32, handler-a: s32, handler-b: s32, device-a: s32, device-b: s32, }
+
+ids: func() -> Ids { { idle: 0, worker: 1, handler-a: 2, handler-b: 3, device-a: 4, device-b: 5, } }
+
+kind-device: func() -> s32 { 0 }
+
+kind-work: func() -> s32 { 1 }
+
+state-running: func() -> s32 { 0 }
+
+state-runnable: func() -> s32 { 1 }
+
+state-suspended: func() -> s32 { 2 }
+
+state-held: func() -> s32 { 4 }
+
+state-suspended-runnable: func() -> s32 { 3 }
+
+data-size: func() -> s32 { 4 }
+
+// the Tcb an option holds (a JS null here is a bug in the port)
+tcb: func(o: option<Tcb>) -> Tcb {
+    match o {
+        some(t) => t,
+        none => {
+            panic("richards: no task");
+            tcb(o)
+        }
+    }
+}
+
+packet: func(link: option<Packet>, id: s32, kind: s32) -> Packet {
+    let a2: list<s32> = [];
+    for i in 0..data-size() { a2.push(0); }
+    { link: link, id: id, kind: kind, a1: 0, a2: a2, }
+}
+
+// this packet at queue's end: the queue's new head
+add-to: func(p: Packet, queue: option<Packet>) -> option<Packet> {
+    p.link = none;
+    match queue {
+        none => some(p),
+        some(q) => {
+            let next = q;
+            for step in 0..1000000 {
+                match next.link {
+                    some(peek) => { next = peek; }
+                    none => { break; }
+                }
+            }
+            next.link = some(p);
+            queue
+        }
+    }
+}
+
+add-task: func(s: Scheduler, id: s32, priority: s32, queue: option<Packet>, task: Task) {
+    let state = match queue {
+        none => state-suspended(),
+        some(q) => state-suspended-runnable(),
+    };
+    let t: Tcb = {
+        link: s.list,
+        id: id,
+        priority: priority,
+        queue: queue,
+        task: task,
+        state: state,
+    };
+    s.current-tcb = some(t);
+    s.list = some(t);
+    s.blocks[id] = some(t);
+}
+
+is-held-or-suspended: func(t: Tcb) -> bool {
+    (t.state & state-held()) != 0 || t.state == state-suspended()
+}
+
+schedule: func(s: Scheduler) {
+    s.current-tcb = s.list;
+    for step in 0..2000000000 {
+        match s.current-tcb {
+            none => { break; }
+            some(t) => {
+                if is-held-or-suspended(t) {
+                    s.current-tcb = t.link;
+                } else {
+                    s.current-id = t.id;
+                    s.current-tcb = run-tcb(s, t);
+                }
+            }
+        }
+    }
+}
+
+release: func(s: Scheduler, id: s32) -> option<Tcb> {
+    match s.blocks[id] {
+        none => none,
+        some(t) => {
+            t.state = t.state & (state-held() ^ -1);
+            if t.priority > tcb(s.current-tcb).priority { some(t) } else { s.current-tcb }
+        }
+    }
+}
+
+hold-current: func(s: Scheduler) -> option<Tcb> {
+    s.hold-count += 1;
+    let t = tcb(s.current-tcb);
+    t.state = t.state | state-held();
+    t.link
+}
+
+suspend-current: func(s: Scheduler) -> option<Tcb> {
+    let t = tcb(s.current-tcb);
+    t.state = t.state | state-suspended();
+    s.current-tcb
+}
+
+queue: func(s: Scheduler, p: Packet) -> option<Tcb> {
+    match s.blocks[p.id] {
+        none => none,
+        some(t) => {
+            s.queue-count += 1;
+            p.link = none;
+            p.id = s.current-id;
+            check-priority-add(t, tcb(s.current-tcb), p)
+        }
+    }
+}
+
+check-priority-add: func(t: Tcb, task: Tcb, p: Packet) -> option<Tcb> {
+    match t.queue {
+        none => {
+            t.queue = some(p);
+            t.state = t.state | state-runnable();
+            if t.priority > task.priority { return some(t); }
+        }
+        some(q) => { t.queue = add-to(p, t.queue); }
+    }
+    some(task)
+}
+
+run-tcb: func(s: Scheduler, t: Tcb) -> option<Tcb> {
+    let p: option<Packet> = none;
+    if t.state == state-suspended-runnable() {
+        p = t.queue;
+        match p {
+            some(x) => { t.queue = x.link; }
+            none => {}
+        }
+        t.state = match t.queue {
+            none => state-running(),
+            some(q) => state-runnable(),
+        };
+    }
+    match t.task {
+        idle(x) => run-idle(s, x),
+        device(x) => run-device(s, x, p),
+        worker(x) => run-worker(s, x, p),
+        handler(x) => run-handler(s, x, p),
+    }
+}
+
+run-idle: func(s: Scheduler, task: IdleTask) -> option<Tcb> {
+    task.count -= 1;
+    if task.count == 0 { return hold-current(s); }
+    if (task.v1 & 1) == 0 {
+        task.v1 = task.v1 >> 1;
+        release(s, ids().device-a)
+    } else {
+        task.v1 = (task.v1 >> 1) ^ 53256;
+        release(s, ids().device-b)
+    }
+}
+
+run-device: func(s: Scheduler, task: DeviceTask, p: option<Packet>) -> option<Tcb> {
+    match p {
+        none => {
+            match task.v1 {
+                none => suspend-current(s),
+                some(v) => {
+                    task.v1 = none;
+                    queue(s, v)
+                }
+            }
+        }
+        some(x) => {
+            task.v1 = p;
+            hold-current(s)
+        }
+    }
+}
+
+run-worker: func(s: Scheduler, task: WorkerTask, p: option<Packet>) -> option<Tcb> {
+    match p {
+        none => suspend-current(s),
+        some(x) => {
+            task.v1 = if task.v1 == ids().handler-a { ids().handler-b } else { ids().handler-a };
+            x.id = task.v1;
+            x.a1 = 0;
+            for i in 0..data-size() {
+                task.v2 += 1;
+                if task.v2 > 26 { task.v2 = 1; }
+                x.a2[i] = task.v2;
+            }
+            queue(s, x)
+        }
+    }
+}
+
+run-handler: func(s: Scheduler, task: HandlerTask, p: option<Packet>) -> option<Tcb> {
+    match p {
+        some(x) => {
+            if x.kind == kind-work() {
+                task.v1 = add-to(x, task.v1);
+            } else {
+                task.v2 = add-to(x, task.v2);
+            }
+        }
+        none => {}
+    }
+    match task.v1 {
+        some(v1) => {
+            let count = v1.a1;
+            if count < data-size() {
+                match task.v2 {
+                    some(v) => {
+                        task.v2 = v.link;
+                        v.a1 = v1.a2[count];
+                        v1.a1 = count + 1;
+                        return queue(s, v);
+                    }
+                    none => {}
+                }
+            } else {
+                task.v1 = v1.link;
+                return queue(s, v1);
+            }
+        }
+        none => {}
+    }
+    suspend-current(s)
+}
+
+run-richards: func() {
+    let blocks: list<option<Tcb>> = [];
+    for i in 0..6 { blocks.push(none); }
+    let s: Scheduler = {
+        queue-count: 0,
+        hold-count: 0,
+        blocks: blocks,
+        list: none,
+        current-tcb: none,
+        current-id: 0,
+    };
+    let id = ids();
+    add-task(s, id.idle, 0, none, Task.idle({ v1: 1, count: 1000, }));
+    let running = tcb(s.current-tcb);
+    running.state = state-running();
+
+    let q = some(packet(none, id.worker, kind-work()));
+    q = some(packet(q, id.worker, kind-work()));
+    add-task(s, id.worker, 1000, q, Task.worker({ v1: id.handler-a, v2: 0, }));
+
+    q = some(packet(none, id.device-a, kind-device()));
+    q = some(packet(q, id.device-a, kind-device()));
+    q = some(packet(q, id.device-a, kind-device()));
+    add-task(s, id.handler-a, 2000, q, Task.handler({ v1: none, v2: none, }));
+
+    q = some(packet(none, id.device-b, kind-device()));
+    q = some(packet(q, id.device-b, kind-device()));
+    q = some(packet(q, id.device-b, kind-device()));
+    add-task(s, id.handler-b, 3000, q, Task.handler({ v1: none, v2: none, }));
+
+    add-task(s, id.device-a, 4000, none, Task.device({ v1: none, }));
+    add-task(s, id.device-b, 5000, none, Task.device({ v1: none, }));
+
+    schedule(s);
+
+    if s.queue-count != 2322 || s.hold-count != 928 {
+        panic("Error during execution: queueCount = {s.queue-count}, holdCount = {s.hold-count}.");
+    }
+}
+
+main: func() {
+    let start = monotonic-clock.now();
+    for i in 0..100 { run-richards(); }
+    print("{(monotonic-clock.now() - start) as f64 / 1000000.0}\n");
+}

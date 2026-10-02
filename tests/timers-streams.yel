@@ -1,0 +1,36 @@
+// timers and streams: sleep waits (the others run meanwhile), a race with a timer is a timeout,
+// and a stream carries items between tasks (a writer with no room waits for the reader)
+
+slow: async func(ms: s64, name: string) -> string {
+    wait sleep(ms);
+    name
+}
+
+produce: async func(out: writer<s32>, n: s32) {
+    for i in 0..n {
+        wait out.write(i * i);
+        print("wrote {i * i}\n");
+    }
+    out.close();
+}
+
+main: async func() {
+    let t0 = now-ms();
+    // two sleeps at once: about the longer one, not their sum
+    let a = start slow(60, "a");
+    let b = start slow(30, "b");
+    let first = wait a | b;
+    let both = wait { a: a, b: b };
+    let took = now-ms() - t0;
+    print("{first} first, then {both.a} {both.b}, in about {if took >= 55 && took < 150 { "60" } else { "{took}" }} ms\n");
+    // a timeout: the race lost by the slow one
+    match wait slow(200, "late") | sleep(20) {
+        let s: string => print("got {s}\n"),
+        () => print("timed out\n"),
+    }
+    // a stream of 2 items' room: the writer waits for the reader
+    let (squares, out) = stream-pair(2);
+    start produce(out, 5);
+    wait for x in squares { print("read {x}\n"); }
+    print("closed\n");
+}

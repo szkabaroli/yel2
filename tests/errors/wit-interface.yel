@@ -1,0 +1,3 @@
+// error: 2:1: WIT package wasi:cli has no interface nope
+from "wasi:cli" include nope;
+main: func() -> s32 { 0 }

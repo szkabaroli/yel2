@@ -1,0 +1,37 @@
+//+build native
+
+// wasi:cli's terminals natively, as host-cli.yel is the rest of wasi:cli: stdin, stdout or stderr
+// is a terminal where isatty says so. A terminal's handle is its fd + 1, and holds nothing to let
+// go. A program's calls bind to these natively and to the host itself in a component.
+
+from "wasi:cli" include terminal-input, terminal-output;
+
+module wasi-cli-terminal-stdin {
+    get-terminal-stdin: func() -> option<terminal-input.terminal-input> {
+        if terminal.is-terminal(0) { some(memory.handle(1)) } else { none }
+    }
+}
+
+module wasi-cli-terminal-stdout {
+    get-terminal-stdout: func() -> option<terminal-output.terminal-output> {
+        if terminal.is-terminal(1) { some(memory.handle(2)) } else { none }
+    }
+}
+
+module wasi-cli-terminal-stderr {
+    get-terminal-stderr: func() -> option<terminal-output.terminal-output> {
+        if terminal.is-terminal(2) { some(memory.handle(3)) } else { none }
+    }
+}
+
+module wasi-cli-terminal-input {
+    terminal-input-drop: func(self: terminal-input.terminal-input) {}
+}
+
+module wasi-cli-terminal-output {
+    terminal-output-drop: func(self: terminal-output.terminal-output) {}
+}
+
+module terminal {
+    @c(name = "yel_host_terminal_is_terminal") is-terminal: extern func(fd: s64) -> bool;
+}

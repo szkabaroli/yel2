@@ -1,0 +1,631 @@
+// Types: what one stands for once settled, how two become one, and the records the checker and
+// the generator keep.
+
+// what a type stands for now: a settled variable is its type
+resolve: func(t: Type) -> Type {
+    match t {
+        var(v) => match v.bound {
+            some(b) => resolve(b),
+            none => t,
+        },
+        _ => t,
+    }
+}
+
+// whether a number type is an integer's (s8 to u64), not a float's
+is-int: func(n: string) -> bool { n.byte-at(0) != 102 }
+
+is-signed: func(n: string) -> bool { n.byte-at(0) == 115 }
+
+show-type: func(t0: Type) -> string {
+    let t = resolve(t0);
+    match t {
+        num(n) => n,
+        bool-type => "bool",
+        char-type => "char",
+        string-type => "string",
+        buffer-type => "buffer",
+        unit-type => "()",
+        never-type => "never",
+        // an error's echo has this in its message (the checker tells no message with it)
+        error-type => "\{error\}",
+        // (the IR's only: no program has one)
+        address-type => "address",
+        canonical-type(x) => "canonical<{show-type(x)}>",
+        list-type(x) => "list<{show-type(x)}>",
+        fixed-list(x) => "list<{show-type(x.item)}, {if x.len < 0 { "?" } else { "{x.len}" }}>",
+        map-type(x) => match resolve(x.value) {
+            unit-type => "set<{show-type(x.key)}>",
+            _ => "map<{show-type(x.key)}, {show-type(x.value)}>",
+        },
+        func-type(f) => {
+            let parts: list<string> = [];
+            for x in f.params { parts.push(show-type(x)); }
+            let r = match resolve(f.result) {
+                unit-type => "",
+                _ => " -> {show-type(f.result)}",
+            };
+            "func({parts.join(", ")}){r}"
+        }
+        option-type(x) => "option<{show-type(x)}>",
+        future-type(x) => "future<{show-type(x)}>",
+        seq-type(x) => "seq<{show-type(x)}>",
+        stream-type(x) => "{if x.writer { "writer" } else { "stream" }}<{show-type(x.item)}>",
+        result-type(r) => "result<{show-part(r.ok)}, {show-part(r.err)}>",
+        tuple-type(xs) => {
+            let parts: list<string> = [];
+            for x in xs { parts.push(show-type(x)); }
+            "tuple<{parts.join(", ")}>"
+        }
+        readonly-type(x) => {
+            let inner = show-type(x);
+            match resolve(x) {
+                union-type(xs) => "({inner}) & readonly",
+                _ => "{inner} & readonly",
+            }
+        }
+        anon-record(r) => {
+            let parts: list<string> = [];
+            for i in 0..r.fields.len() { parts.push("{r.fields[i]}: {show-type(r.types[i])}"); }
+            if parts.len() == 0 { "\{\}" } else { "\{ " + parts.join(", ") + " \}" }
+        }
+        union-type(xs) => {
+            let parts: list<string> = [];
+            for x in xs { parts.push(show-type(x)); }
+            parts.join(" | ")
+        }
+        singleton(s) => s.text,
+        range-type(r) => r.text,
+        distinct-type(x) => x.name,
+        named(n) => name-text(n),
+        param(n) => n,
+        var(v) => if v.kind == 1 { "an integer" } else if v.kind == 2 { "a float" } else { "_" },
+    }
+}
+
+// a result's payload type, _ for none
+show-part: func(t: Type) -> string {
+    match resolve(t) {
+        unit-type => "_",
+        _ => show-type(t),
+    }
+}
+
+// whether a variable of this kind (0 any, 1 an integer's, 2 a float's) can be this type
+fits-kind: func(kind: s64, t: Type) -> bool {
+    if kind == 0 { return true; }
+    match t {
+        num(n) => if kind == 1 { is-int(n) } else { !is-int(n) },
+        _ => false,
+    }
+}
+
+// whether two types can be one, settling variables to make them so
+unifies: func(a0: Type, b0: Type) -> bool {
+    let a = resolve(a0);
+    let b = resolve(b0);
+    // an error's type fits anything: it was told already. A type not known yet becomes it (what an
+    // error made is an error's too: its uses are not told again)
+    if is-error(a) || is-error(b) {
+        match a {
+            var(v) => { v.bound = some(b); }
+            _ => {}
+        }
+        match b {
+            var(w) => { w.bound = some(a); }
+            _ => {}
+        }
+        return true;
+    }
+    // T & readonly, T not known yet, and a value readonly anyway (a number, a string, …): T is it
+    match readonly-var(a) {
+        some(x) => { if readonly-anyway(b) { return unifies(x, b); } }
+        none => {}
+    }
+    match readonly-var(b) {
+        some(x) => { if readonly-anyway(a) { return unifies(a, x); } }
+        none => {}
+    }
+    match a {
+        var(v) => {
+            match b {
+                var(w) => {
+                    if w.id == v.id { return true; }
+                    // the one of the two that is less particular settles as the other
+                    if v.kind == 0 || v.kind == w.kind {
+                        v.bound = some(b);
+                        return true;
+                    }
+                    if w.kind == 0 {
+                        w.bound = some(a);
+                        return true;
+                    }
+                    return false;
+                }
+                _ => {}
+            }
+            if !fits-kind(v.kind, b) { return false; }
+            v.bound = some(b);
+            return true;
+        }
+        _ => {}
+    }
+    match b {
+        var(w) => {
+            if !fits-kind(w.kind, a) { return false; }
+            w.bound = some(a);
+            return true;
+        }
+        _ => {}
+    }
+    // a length left to its value (?) is any
+    match a {
+        fixed-list(x) => match b {
+            fixed-list(y) => { if x.len != y.len && x.len >= 0 && y.len >= 0 { return false; } }
+            _ => {}
+        },
+        _ => {}
+    }
+    match pair-parts(a, b, unifies) {
+        some(r) => r,
+        none => show-type(a) == show-type(b),
+    }
+}
+
+// a structured type's kind and what it has besides its parts (a func's or tuple's count, a
+// record's fields, a stream's end); "" for any other type (a union, a declared type)
+shape: func(whole: Type) -> string {
+    match whole {
+        list-type(_) => "list",
+        fixed-list(_) => "fixed",
+        func-type(signature) => "func {signature.params.len()}",
+        map-type(_) => "map",
+        option-type(_) => "option",
+        result-type(_) => "result",
+        tuple-type(parts) => "tuple {parts.len()}",
+        anon-record(fields) => "record " + fields.fields.join(","),
+        readonly-type(_) => "readonly",
+        future-type(_) => "future",
+        seq-type(_) => "seq",
+        stream-type(stream) => if stream.writer { "writer" } else { "stream" },
+        _ => "",
+    }
+}
+
+// whether left and right have one shape and holds is true of each pair of their parts, in order (a fixed
+// list's length left to the caller); none where left has no shape
+pair-parts: func(left: Type, right: Type, holds: func(Type, Type) -> bool) -> option<bool> {
+    let kind = shape(left);
+    if kind == "" { return none; }
+    if kind != shape(right) { return some(false); }
+    for index in 0..child-count(left) {
+        if !holds(child(left, index), child(right, index)) { return some(false); }
+    }
+    some(true)
+}
+
+// a union's members settled: unions in it flattened, a literal whose base is a member dropped
+// (string | "a" is string), each once, in order of how they show; one member is that type
+union-of: func(members: list<Type>) -> Type {
+    let flat: list<Type> = [];
+    for m in members { flatten-union(resolve(m), flat); }
+    let bases: list<string> = [];
+    for m in flat {
+        match m {
+            singleton(s) => {}
+            _ => bases.push(show-type(m)),
+        }
+    }
+    let kept: list<Type> = [];
+    let shown: list<string> = [];
+    for m in flat {
+        let covered = match m {
+            singleton(s) => contains(bases, show-type(s.base)),
+            _ => false,
+        };
+        let k = show-type(m);
+        if !covered && !contains(shown, k) {
+            kept.push(m);
+            shown.push(k);
+        }
+    }
+    shown-union(kept, shown)
+}
+
+// T & readonly, settled: readonly where it can be written (a list, a map, a buffer, a declared
+// type, a parameter), each part of a value (an option's, a tuple's, a union's) readonly, and a
+// value that cannot be written (a number, a string) itself
+// the type T & readonly is of, where T is not known yet
+readonly-var: func(t: Type) -> option<Type> {
+    match t {
+        readonly-type(x) => match resolve(x) {
+            var(v) => some(x),
+            _ => none,
+        },
+        _ => none,
+    }
+}
+
+// whether a type's values are readonly with or without & readonly (nothing in them is written)
+readonly-anyway: func(t: Type) -> bool {
+    match resolve(t) {
+        num(n) => true,
+        bool-type => true,
+        char-type => true,
+        string-type => true,
+        unit-type => true,
+        singleton(x) => true,
+        range-type(x) => true,
+        var(v) => v.kind != 0,
+        _ => false,
+    }
+}
+
+readonly-of: func(t0: Type) -> Type {
+    let t = resolve(t0);
+    match t {
+        list-type(x) => Type.readonly-type(Type.list-type(readonly-of(x))),
+        map-type(x) => Type.readonly-type(Type.map-type({ key: x.key, value: readonly-of(x.value), })),
+        buffer-type => Type.readonly-type(t),
+        named(n) => Type.readonly-type(t),
+        param(n) => Type.readonly-type(t),
+        var(v) => if v.kind == 0 { Type.readonly-type(t) } else { t },
+        fixed-list(x) => Type.fixed-list({ item: readonly-of(x.item), len: x.len, }),
+        option-type(x) => Type.option-type(readonly-of(x)),
+        result-type(r) => Type.result-type({ ok: readonly-of(r.ok), err: readonly-of(r.err), }),
+        tuple-type(xs) => {
+            let out: list<Type> = [];
+            for x in xs { out.push(readonly-of(x)); }
+            Type.tuple-type(out)
+        }
+        anon-record(r) => {
+            let out: list<Type> = [];
+            for x in r.types { out.push(readonly-of(x)); }
+            Type.anon-record({ fields: r.fields, types: out, })
+        }
+        union-type(xs) => {
+            let out: list<Type> = [];
+            for x in xs { out.push(readonly-of(x)); }
+            union-of(out)
+        }
+        _ => t,
+    }
+}
+
+// a type with readonly taken out, at every depth (what it reads, as written)
+without-readonly: func(t0: Type) -> Type {
+    let t = resolve(t0);
+    match t {
+        readonly-type(x) => without-readonly(x),
+        // its members may be one once readonly is gone
+        union-type(xs) => union-of(children(map-children(t, without-readonly))),
+        _ => map-children(t, without-readonly),
+    }
+}
+
+// whether a type is readonly at its top
+is-readonly: func(t: Type) -> bool {
+    match resolve(t) {
+        readonly-type(x) => true,
+        _ => false,
+    }
+}
+
+// a record type by its fields: in order of their names (one set of fields is one type)
+anon-record-of: func(fields: list<string>, types: list<Type>) -> Type {
+    let fs: list<string> = [];
+    let ts: list<Type> = [];
+    let taken: list<string> = [];
+    for step in 0..fields.len() {
+        let least = -1;
+        for i in 0..fields.len() {
+            if !contains(taken, fields[i])
+                && (least < 0 || text-less(fields[i], fields[least])) { least = i; }
+        }
+        taken.push(fields[least]);
+        fs.push(fields[least]);
+        ts.push(types[least]);
+    }
+    Type.anon-record({ fields: fs, types: ts, })
+}
+
+// whether a sorts before b, byte by byte
+text-less: func(a: string, b: string) -> bool {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        if a.byte-at(i) != b.byte-at(i) { return a.byte-at(i) < b.byte-at(i); }
+    }
+    a.len() < b.len()
+}
+
+flatten-union: func(t: Type, out: list<Type>) {
+    match t {
+        union-type(xs) => { for x in xs { flatten-union(resolve(x), out); } }
+        _ => out.push(t),
+    }
+}
+
+// the type a value is held as: a literal's, its base; a union's, its kinds (one kind: that kind's
+// type; more: a union of the kinds, a tag and a field for each)
+representation: func(t: Type) -> Type {
+    match resolve(t) {
+        singleton(s) => s.base,
+        range-type(r) => r.base,
+        union-type(xs) => {
+            let reps: list<Type> = [];
+            for x in xs { reps.push(represented(x)); }
+            kinds-union(reps)
+        }
+        _ => resolve(t),
+    }
+}
+
+// the union of kinds of values: each once, in order of how they show (so one set of kinds is one
+// C type); one kind is that kind
+kinds-union: func(reps: list<Type>) -> Type {
+    let kinds: list<Type> = [];
+    let shown: list<string> = [];
+    for r in reps {
+        let parts = union-members(r);
+        for x in parts {
+            let k = show-type(x);
+            if !contains(shown, k) {
+                kinds.push(x);
+                shown.push(k);
+            }
+        }
+    }
+    shown-union(kinds, shown)
+}
+
+// the union of members (each shown as shown[index]), in order of how they show: each turn, the least not
+// taken (one type: itself)
+shown-union: func(members: list<Type>, shown: list<string>) -> Type {
+    if members.len() == 1 { return members[0]; }
+    let out: list<Type> = [];
+    let taken: list<string> = [];
+    for step in 0..members.len() {
+        let least = -1;
+        for index in 0..members.len() {
+            if !contains(taken, shown[index])
+                && (least < 0 || text-less(shown[index], shown[least])) { least = index; }
+        }
+        taken.push(shown[least]);
+        out.push(members[least]);
+    }
+    Type.union-type(out)
+}
+
+// a union's members (another type: itself)
+union-members: func(whole: Type) -> list<Type> {
+    match resolve(whole) {
+        union-type(members) => members,
+        _ => [whole,],
+    }
+}
+
+// a union's kinds (a type of one kind: itself)
+kinds: func(t: Type) -> list<Type> {
+    match representation(t) {
+        union-type(xs) => xs,
+        _ => [representation(t),],
+    }
+}
+
+// a type with the literal and union types taken out, as C holds its values (at every depth)
+// a type with each distinct type its base, deep (what the back end and WIT see: checking is done)
+erase-distinct: func(t0: Type) -> Type {
+    let t = resolve(t0);
+    match t {
+        distinct-type(x) => erase-distinct(x.base),
+        _ => map-children(t, erase-distinct),
+    }
+}
+
+// a seq's item type (any other type: itself)
+seq-item: func(t: Type) -> Type {
+    match resolve(t) {
+        seq-type(x) => x,
+        _ => t,
+    }
+}
+
+represented: func(t0: Type) -> Type {
+    let t = representation(t0);
+    match t {
+        // held as what it reads; a distinct type as its base
+        readonly-type(x) => represented(x),
+        distinct-type(x) => represented(x.base),
+        union-type(xs) => t,
+        _ => map-children(t, represented),
+    }
+}
+
+// whether a (represented) type holds a union of kinds anywhere a conversion reaches: itself, an
+// option's, a result's or a tuple's
+has-kinds: func(t: Type) -> bool {
+    match t {
+        union-type(xs) => true,
+        option-type(x) => has-kinds(x),
+        result-type(r) => has-kinds(r.ok) || has-kinds(r.err),
+        tuple-type(xs) => {
+            for x in xs {
+                if has-kinds(x) { return true; }
+            }
+            false
+        }
+        anon-record(r) => {
+            for x in r.types {
+                if has-kinds(x) { return true; }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+// whether a type is not held as written (it holds a literal type, or a union not of its kinds)
+needs-representing: func(t: Type) -> bool {
+    has-set-types(t) && show-type(represented(t)) != show-type(t)
+}
+
+// whether a type holds a literal or union type anywhere
+has-set-types: func(t0: Type) -> bool {
+    let t = resolve(t0);
+    match t {
+        singleton(s) => true,
+        range-type(r) => true,
+        union-type(xs) => true,
+        // not held as written (as what it reads)
+        readonly-type(x) => true,
+        _ => any-child(t, has-set-types),
+    }
+}
+
+// a signature's type, its type parameters' names made parameters
+generalize: func(t: Type, tps: list<string>) -> Type {
+    match t {
+        named(n) => if contains(tps, name-text(n)) { Type.param(name-text(n)) } else { t },
+        _ => map-children(t, { x -> generalize(x, tps) }),
+    }
+}
+
+// a type with its parameters replaced (a call's fresh variables)
+substitute: func(t: Type, m: map<string, Type>) -> Type {
+    match t {
+        param(n) => if m.has(n) { m[n] } else { t },
+        // a parameter made a type: readonly where it reaches (list<T> & readonly with T a list)
+        readonly-type(x) => readonly-of(substitute(x, m)),
+        _ => map-children(t, { x -> substitute(x, m) }),
+    }
+}
+
+// ================================================================ a type's parts
+
+// whether a type is an error's (what an expression the checker found wrong has)
+is-error: func(t: Type) -> bool {
+    match resolve(t) {
+        error-type => true,
+        _ => false,
+    }
+}
+
+// whether a type is never's (a call of it does not return)
+is-never: func(t: Type) -> bool {
+    match resolve(t) {
+        never-type => true,
+        _ => false,
+    }
+}
+
+// the types a type is made of: a list's item, a map's key and value, a func's parameters and
+// result, an option's, a result's sides, a tuple's, an anonymous record's and a union's members,
+// what readonly, a future, a seq, a stream and a distinct type hold; a declared type's (named) none
+children: func(t0: Type) -> list<Type> {
+    let t = resolve(t0);
+    match t {
+        list-type(x) => [x,],
+        fixed-list(x) => [x.item,],
+        func-type(f) => {
+            let out: list<Type> = [];
+            for x in f.params { out.push(x); }
+            out.push(f.result);
+            out
+        }
+        map-type(x) => [x.key, x.value,],
+        option-type(x) => [x,],
+        result-type(r) => [r.ok, r.err,],
+        tuple-type(xs) => xs,
+        anon-record(r) => r.types,
+        union-type(xs) => xs,
+        readonly-type(x) => [x,],
+        future-type(x) => [x,],
+        seq-type(x) => [x,],
+        stream-type(x) => [x.item,],
+        distinct-type(x) => [x.base,],
+        _ => [],
+    }
+}
+
+// how many parts a type is made of (children's), and each by its index: a walk over them makes
+// nothing
+child-count: func(t0: Type) -> s64 {
+    let t = resolve(t0);
+    match t {
+        list-type(x) => 1,
+        fixed-list(x) => 1,
+        func-type(f) => f.params.len() + 1,
+        map-type(x) => 2,
+        option-type(x) => 1,
+        result-type(r) => 2,
+        tuple-type(xs) => xs.len(),
+        anon-record(r) => r.types.len(),
+        union-type(xs) => xs.len(),
+        readonly-type(x) => 1,
+        future-type(x) => 1,
+        seq-type(x) => 1,
+        stream-type(x) => 1,
+        distinct-type(x) => 1,
+        _ => 0,
+    }
+}
+
+child: func(t0: Type, index: s64) -> Type {
+    let t = resolve(t0);
+    match t {
+        list-type(x) => x,
+        fixed-list(x) => x.item,
+        func-type(f) => if index < f.params.len() { f.params[index] } else { f.result },
+        map-type(x) => if index == 0 { x.key } else { x.value },
+        option-type(x) => x,
+        result-type(r) => if index == 0 { r.ok } else { r.err },
+        tuple-type(xs) => xs[index],
+        anon-record(r) => r.types[index],
+        union-type(xs) => xs[index],
+        readonly-type(x) => x,
+        future-type(x) => x,
+        seq-type(x) => x,
+        stream-type(x) => x.item,
+        distinct-type(x) => x.base,
+        _ => panic("a type read past its parts"),
+    }
+}
+
+// a type made of other parts (those children gives, in its order)
+rebuild: func(t0: Type, cs: list<Type>) -> Type {
+    let t = resolve(t0);
+    match t {
+        list-type(x) => Type.list-type(cs[0]),
+        fixed-list(x) => Type.fixed-list({ item: cs[0], len: x.len, }),
+        func-type(f) => Type.func-type({ params: cs.slice(0, cs.len() - 1), result: cs[cs.len() - 1], }),
+        map-type(x) => Type.map-type({ key: cs[0], value: cs[1], }),
+        option-type(x) => Type.option-type(cs[0]),
+        result-type(r) => Type.result-type({ ok: cs[0], err: cs[1], }),
+        tuple-type(xs) => Type.tuple-type(cs),
+        anon-record(r) => Type.anon-record({ fields: r.fields, types: cs, }),
+        union-type(xs) => Type.union-type(cs),
+        readonly-type(x) => Type.readonly-type(cs[0]),
+        future-type(x) => Type.future-type(cs[0]),
+        seq-type(x) => Type.seq-type(cs[0]),
+        stream-type(x) => Type.stream-type({ item: cs[0], writer: x.writer, }),
+        distinct-type(x) => Type.distinct-type({ name: x.name, base: cs[0], }),
+        _ => t,
+    }
+}
+
+// a type with each of its parts f's
+map-children: func(t: Type, f: func(Type) -> Type) -> Type {
+    let cs = children(t);
+    if cs.len() == 0 { return resolve(t); }
+    let out: list<Type> = [];
+    for c in cs { out.push(f(c)); }
+    rebuild(t, out)
+}
+
+// whether f holds for any of a type's parts
+any-child: func(t: Type, f: func(Type) -> bool) -> bool {
+    for index in 0..child-count(t) {
+        if f(child(t, index)) { return true; }
+    }
+    false
+}

@@ -1,0 +1,93 @@
+// What std reads and writes in place that yel cannot say: intrinsics, C the compiler writes where
+// they are called (as Porffor's Porffor.IR.*). $1, $2, $3 are a type parameter's C type, scan and
+// descriptor, then the arguments. Only std calls these; programs have the checked funcs built on
+// them (list.yel's get, set, push, pop). Each is typed on what it touches, so the flow analysis
+// sees what the C does: set-item writes the list and keeps the item, item-at gives one of its items.
+
+module memory {
+    // a list's length, and its length set (no more than its room)
+    @c(name = "(($4)->len)") list-length: extern func<T>(xs: list<T> & readonly) -> s64;
+    @c(name = "(($4)->len = ($5), (yunit)0)") set-length: extern func<T>(xs: list<T>, length: s64);
+    // a list's item at index, and that item set (no bound checked)
+    @c(name = "((($1 *)($4)->items)[$5])") item-at: extern func<T>(xs: list<T> & readonly, index: s64) -> T;
+    @c(name = "((($1 *)($4)->items)[$5] = ($6), (yunit)0)") set-item: extern func<T>(xs: list<T>, index: s64, item: T);
+    // a list's first count items taken off (the rest moved to its front)
+    @c(name = "(memmove(($4)->items, ($4)->items + ($5) * ($4)->size, (size_t)((($4)->len - ($5)) * ($4)->size)), ($4)->len -= ($5), (yunit)0)") remove-front: extern func<T>(xs: list<T>, count: s64);
+
+    // how many items a list has room for; its items' size in bytes
+    @c(name = "(($4)->cap)") list-room: extern func<T>(xs: list<T> & readonly) -> s64;
+    @c(name = "(($4)->size)") item-size: extern func<T>(xs: list<T> & readonly) -> s64;
+    // a list's items' address; new room for count of its items (not zeroed: it may collect); the
+    // items moved to such room
+    @c(name = "((int64_t)(uintptr_t)($4)->items)") items-address: extern func<T>(xs: list<T> & readonly) -> s64;
+    @c(name = "((int64_t)(uintptr_t)y_new_bytes(y_list_bytes(($4)->size, ($5))))") new-items: extern func<T>(xs: list<T> & readonly, count: s64) -> s64;
+    @c(name = "(($4)->items = (char *)(uintptr_t)($5), ($4)->cap = ($6), (yunit)0)") set-items: extern func<T>(xs: list<T>, items: s64, room: s64);
+
+    // a buffer's length, room and bytes' address, and each set; new heap bytes (not zeroed: it may
+    // collect); a byte stored at an address
+    @c(name = "(($1)->len)") buffer-length: extern func(b: buffer & readonly) -> s64;
+    @c(name = "(($1)->cap)") buffer-room: extern func(b: buffer & readonly) -> s64;
+    @c(name = "((int64_t)(uintptr_t)($1)->data)") buffer-data: extern func(b: buffer & readonly) -> s64;
+    @c(name = "(($1)->len = ($2), (yunit)0)") set-buffer-length: extern func(b: buffer, length: s64);
+    @c(name = "(($1)->data = (char *)(uintptr_t)($2), ($1)->cap = ($3), (yunit)0)") set-buffer-data: extern func(b: buffer, data: s64, room: s64);
+    @c(name = "((int64_t)(uintptr_t)y_new_bytes((size_t)($1)))") new-bytes: extern func(count: s64) -> s64;
+    @c(name = "(*(char *)(uintptr_t)($1) = (char)($2), (yunit)0)") store-byte: extern func(at: s64, byte: s64);
+
+    // a string of length bytes at an address (shared: a string is never written); the byte at an
+    // address; whether count bytes at two addresses are the same
+    @c(name = "((ystr){ ($2), (const char *)(uintptr_t)($1) })") string-at: extern func(at: s64, length: s64) -> string;
+    @c(name = "((int64_t)*(const unsigned char *)(uintptr_t)($1))") load-byte: extern func(at: s64) -> s64;
+    @c(name = "(memcmp((const void *)(uintptr_t)($1), (const void *)(uintptr_t)($2), (size_t)($3)) == 0)") same-bytes: extern func(left: s64, right: s64, count: s64) -> bool;
+    // count bytes at two addresses in order: less than 0, 0 or more than 0 (C's memcmp)
+    @c(name = "((int64_t)memcmp((const void *)(uintptr_t)($1), (const void *)(uintptr_t)($2), (size_t)($3)))") compare-bytes: extern func(left: s64, right: s64, count: s64) -> s64;
+
+    // a resource handle of type T made from its number, and a handle's number (std's native host
+    // numbers its handles: a descriptor's is its fd + 1)
+    @c(name = "(($1)($4))") handle: extern func<T>(number: s64) -> T;
+    @c(name = "((int64_t)($4))") handle-number: extern func<T>(h: T & readonly) -> s64;
+
+    // a string as C wants a path: a copy ending in 0 (the system's own memory: freed with free)
+    @c(name = "((int64_t)(uintptr_t)y_cstr($1))") c-path: extern func(path: string & readonly) -> s64;
+    @c(name = "(free((void *)(uintptr_t)($1)), (yunit)0)") free: extern func(at: s64);
+
+    // nothing collected until released (what is held only at an address stays: a copy's source)
+    @c(name = "(y_gc_hold++, (yunit)0)") hold-collector: extern func();
+    @c(name = "(y_gc_hold--, (yunit)0)") release-collector: extern func();
+
+    // a string's bytes' address; a list<u8> made of count bytes at an address (copied)
+    @c(name = "((int64_t)(uintptr_t)($1).data)") string-data: extern func(content: string & readonly) -> s64;
+    @c(name = "(y_list_of(($2), 1, (const void *)(uintptr_t)($1), NULL))") bytes-list: extern func(from: s64, count: s64) -> list<u8>;
+
+    // count bytes copied from one address to another (the two not overlapping)
+    @c(name = "(memcpy((void *)(uintptr_t)($1), (const void *)(uintptr_t)($2), (size_t)($3)), (yunit)0)") copy-bytes: extern func(to: s64, from: s64, count: s64);
+
+    // a map (runtime/yel.h's ymap, made by the runtime: its table is map.yel's), for K and V: $1 to
+    // $5 are K's C type, scan, descriptor, hash and equality, $6 to $8 V's, then the arguments.
+    // Entries are numbered in the order they were made; the index holds an entry's number + 1 (0
+    // for none), placed by its hash; a removed entry's hash is 0. (The hash and equality are the
+    // compiler's helpers, taking void *: the runtime's map takes them as const void *.)
+    @c(name = "(y_map_make(sizeof($1), $2, (uint64_t (*)(const void *))($4), (bool (*)(const void *, const void *))($5), sizeof($6), $7, $9))") new-map: extern func<K, V>(capacity: s64) -> map<K, V>;
+    // the other map's table taken as m's (a map grown)
+    @c(name = "(($9)->index = ($10)->index, ($9)->hashes = ($10)->hashes, ($9)->keys = ($10)->keys, ($9)->values = ($10)->values, ($9)->cap = ($10)->cap, ($9)->icap = ($10)->icap, ($9)->used = ($10)->used, (yunit)0)") adopt: extern func<K, V>(m: map<K, V>, other: map<K, V> & readonly);
+    // key's hash (by K's hash: it is never 0)
+    @c(name = "(($9)->hash(($1[]){ $10 }))") key-hash: extern func<K, V>(m: map<K, V> & readonly, key: K) -> u64;
+    // how many keys; how many entries made (removed ones too) and room for; the index's room
+    @c(name = "(($9)->len)") map-length: extern func<K, V>(m: map<K, V> & readonly) -> s64;
+    @c(name = "(($9)->len = ($10), (yunit)0)") set-map-length: extern func<K, V>(m: map<K, V>, length: s64);
+    @c(name = "(($9)->used)") entry-count: extern func<K, V>(m: map<K, V> & readonly) -> s64;
+    @c(name = "(($9)->used = ($10), (yunit)0)") set-entry-count: extern func<K, V>(m: map<K, V>, count: s64);
+    @c(name = "(($9)->cap)") entry-room: extern func<K, V>(m: map<K, V> & readonly) -> s64;
+    @c(name = "(($9)->icap)") index-room: extern func<K, V>(m: map<K, V> & readonly) -> s64;
+    // an index slot's entry number + 1, and it set; every slot emptied
+    @c(name = "(($9)->index[$10])") index-entry: extern func<K, V>(m: map<K, V> & readonly, slot: s64) -> s64;
+    @c(name = "(($9)->index[$10] = ($11), (yunit)0)") set-index-entry: extern func<K, V>(m: map<K, V>, slot: s64, entry: s64);
+    @c(name = "(memset(($9)->index, 0, (size_t)($9)->icap * sizeof(int64_t)), (yunit)0)") clear-index: extern func<K, V>(m: map<K, V>);
+    // an entry's hash, key and value, and each set; an entry's key and value zeroed (removed)
+    @c(name = "(($9)->hashes[$10])") entry-hash: extern func<K, V>(m: map<K, V> & readonly, entry: s64) -> u64;
+    @c(name = "(($9)->hashes[$10] = ($11), (yunit)0)") set-entry-hash: extern func<K, V>(m: map<K, V>, entry: s64, hash: u64);
+    @c(name = "((($1 *)($9)->keys)[$10])") key-at: extern func<K, V>(m: map<K, V> & readonly, entry: s64) -> K;
+    @c(name = "((($1 *)($9)->keys)[$10] = ($11), (yunit)0)") set-key: extern func<K, V>(m: map<K, V>, entry: s64, key: K);
+    @c(name = "((($6 *)($9)->values)[$10])") value-at: extern func<K, V>(m: map<K, V> & readonly, entry: s64) -> V;
+    @c(name = "((($6 *)($9)->values)[$10] = ($11), (yunit)0)") set-value: extern func<K, V>(m: map<K, V>, entry: s64, value: V);
+    @c(name = "(memset(&(($1 *)($9)->keys)[$10], 0, sizeof($1)), memset(&(($6 *)($9)->values)[$10], 0, sizeof($6)), (yunit)0)") clear-entry: extern func<K, V>(m: map<K, V>, entry: s64);
+}

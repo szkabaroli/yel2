@@ -1,0 +1,14 @@
+1 .
+create-directory-at: ok
+create-directory-at again: exist
+written: ok
+regular-file 5
+read: ello ok
+open-at a missing file: no-entry
+entry: a.txt regular-file
+listed: ok
+rename-at: ok
+remove a full directory: not-empty
+unlink-file-at: ok
+unlink-file-at again: no-entry
+remove-directory-at: ok

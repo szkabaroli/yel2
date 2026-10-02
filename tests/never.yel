@@ -1,0 +1,41 @@
+// never: the result of a func that never returns (panic). A call of one fits any type where a
+// value is wanted (a match's arm, an if's branch, an argument), a block it ends leaves as a return
+// does, and nothing after it runs
+
+// a match whose last arm stops the program
+pick: func(n: s32) -> string {
+    match n {
+        0 => "zero",
+        1 => "one",
+        _ => panic("no word for {n}"),
+    }
+}
+
+// an if whose branch stops it
+sign: func(n: s32) -> s32 { if n >= 0 { 1 } else { panic("negative") } }
+
+// a func of its own that never returns: it ends with a call that does not
+stop: func(reason: string) -> never {
+    print("stopping: {reason}\n");
+    panic(reason)
+}
+
+// a statement that never returns, then the func's value
+half: func(n: s32) -> s32 {
+    if n % 2 != 0 { stop("{n} is odd"); }
+    n / 2
+}
+
+twice: func(s: string) -> string { s + s }
+
+main: func() -> s32 {
+    print("{pick(0)} {pick(1)} {sign(2)} {half(8)}\n");
+    let x: s32 = if false { stop("never taken") } else { 7 };
+    print("{x}\n");
+    // in an argument, inside a list literal
+    let words = ["a", if x > 100 { twice(panic("never taken")) } else { "b" },];
+    print("{words}\n");
+    print("{half(3)}\n");
+    print("not printed\n");
+    0
+}

@@ -1,0 +1,52 @@
+// Funcs as values: a top-level func passed, kept and called through a local (a C function pointer;
+// no closure: it captures nothing)
+
+record Named { name: string, score: s32, }
+
+by-score: func(a: Named, b: Named) -> bool { a.score < b.score }
+
+by-name-length: func(a: Named, b: Named) -> bool { a.name.len() < b.name.len() }
+
+// an insertion sort taking its order as a value
+sort: func(xs: list<Named>, less: func(Named, Named) -> bool) {
+    for i in 1..xs.len() {
+        let j = i;
+        for step in 0..i {
+            if j > 0 && less(xs[j], xs[j - 1]) {
+                let t = xs[j];
+                xs[j] = xs[j - 1];
+                xs[j - 1] = t;
+                j -= 1;
+            }
+        }
+    }
+}
+
+twice: func(f: func(s32) -> s32, x: s32) -> s32 { f(f(x)) }
+
+inc: func(x: s32) -> s32 { x + 1 }
+
+square: func(x: s32) -> s32 { x * x }
+
+// a func kept in a record, and chosen at run time
+record Op { label: string, run: func(s32) -> s32, }
+
+main: func() {
+    let people: list<Named> = [
+        { name: "grace", score: 3, },
+        { name: "ada", score: 9, },
+        { name: "barbara", score: 1, },
+    ];
+    sort(people, by-score);
+    print("{people}\n");
+    sort(people, by-name-length);
+    print("{people}\n");
+    print("{twice(inc, 5)} {twice(square, 3)}\n");
+    let ops: list<Op> = [{ label: "inc", run: inc, }, { label: "square", run: square, },];
+    for op in ops {
+        let run = op.run;
+        print("{op.label}: {run(7)} {op}\n");
+    }
+    let f: func(s32) -> s32 = if ops.len() > 1 { square } else { inc };
+    print("{f(4)} {f == square}\n");
+}

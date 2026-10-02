@@ -1,0 +1,8 @@
+// error: 5:5: the match has no arm for let x: string: add one, or a _ arm
+type id = s32 | string;
+main: func() {
+    let i: id = 1;
+    match i {
+        let n: s32 => {}
+    }
+}

@@ -1,0 +1,3381 @@
+// The bitcode backend (yelc --backend bitcode): the IR, after the optimizer, lowered into an LLVM
+// module (bitcode.yel) instead of rendered as C, linked with the runtime (runtime/yel.c, the C
+// backend's too) built for the target. A start: strings (a { i64, ptr }, as a ystr; their literals,
+// print and eprint), the integers (s8 to u64, bool, char),
+// their arithmetic as yel's (wrapping; / and % stopping at zero as the runtime does, a signed one
+// by -1 the negation; a shift by its amount modulo the width), comparisons, the bit operators,
+// conversions, locals, ifs, loops (break, continue, a block's label), returns and calls between the
+// program's funcs, and calls of the runtime's C functions, as the target's C calling convention
+// passes their values (the calling module, below). Anything else stops the compiler saying what is not done yet.
+//
+// Each local is a slot (an alloca in the entry block, which holds allocas only, loaded and stored), as
+// clang makes C at -O0:
+// no SSA built here; LLVM's mem2reg makes registers of them. main is C's (__main_argc_argv on
+// wasm), calling the runtime's start (the collector, the arguments), the program's main, and its end
+// (stdout flushed, main's value the exit code).
+
+// a func being lowered: the module (and its types), the func, its IR, the block instructions go to,
+// each local's slot (none for a () one), and the loops and labeled blocks around (each label, where
+// its continue goes: -1 for a block's, and where its break goes)
+record Lower {
+    m: BcModule,
+    types: Types,
+    made: Made,
+    f: BcFunc,
+    ir: IrFunc,
+    block: s64,
+    slots: list<option<BcValue>>,
+    labels: list<s64>,
+    continues: list<s64>,
+    breaks: list<s64>,
+    // the program's funcs by C name (their index in the module)
+    index: map<string, s64>,
+    // the externs by C name (their yel name: print)
+    externs: map<string, string>,
+    // the target's C calling convention (calling.abi's)
+    abi: string,
+    // its records on the stack (by the local they are assigned to); its frame (frame-start's:
+    // framed, the frame, its slots and their count, and each local's first slot (-1 for none) and
+    // pointers' paths)
+    stack-objects: map<s64, BcValue>,
+    framed: bool,
+    frame: BcValue,
+    roots: BcValue,
+    root-count: s64,
+    root-at: list<s64>,
+    root-paths: list<list<list<s64>>>,
+    // what an intrinsic gave (map-intrinsic's)
+    given: option<BcValue>,
+    // an async func's step: its frame (the param) and the frame's type; each wait's state's block
+    task: BcValue,
+    task-type: s64,
+    resumes: map<s64, s64>,
+}
+
+// what a module's types are made of: the module, the program's declarations, the target's C ABI
+// (imports: a WIT import's wrapper's C name to its native host's: imports-hosts in gen.yel)
+record Types { m: BcModule, g: Gen, abi: string, imports: map<string, string>, }
+
+// (gen's core imports: Types.g.core-imports, by their C names)
+
+// what the module's funcs share: the globals made so far (by C name: payload-less cases, type
+// descriptors); the runtime's C functions called, by name, each whether every call of it is pure
+// (codegen's pure-call: it reads and writes no memory, and collects nothing)
+// (calling-pure: the call being made is such a one); the program's globals, by key (each a
+// variable of the module's, zero to start with)
+record Made { singletons: map<string, s64>, pure: map<string, bool>, calling-pure: bool, globals: map<string, s64>, }
+
+// a canonical struct (abi.yel's A_<id>): its members (their C names, and their canonical types:
+// abi-of's), and its union's (the last member, u: each case's, and none, a byte)
+record CanonicalParts { names: list<string>, types: list<Type>, union-names: list<string>, union-types: list<Type>, }
+
+// a step of a C path into a value: the struct it is in and its field's index (container -1: a
+// union's case, at the union's own address)
+record PathStep { container: s64, index: s64, }
+
+module llvm {
+    // the program's funcs as a module's bitcode (triple: its target, whose C calling convention calls the runtime)
+    // (funcs: those the program's roots reach: gen.yel's opt.reachable; externs: the externs' yel
+    // names by C name)
+    module: func(g: Gen, funcs: list<IrFunc>, triple: string, externs: map<string, string>, imports: map<string, string>) -> string {
+        let m = bitcode.module-of(triple);
+        let abi = calling.abi(triple);
+        if abi == "" { diagnostics.fail("yelc --backend bitcode: no C calling convention for the target {triple} yet"); }
+        let types: Types = { m: m, g: g, abi: abi, imports: imports, };
+        let made: Made = { singletons: map.new(), pure: map.new(), calling-pure: false, globals: map.new(), };
+        let index: map<string, s64> = map.new();
+        // a func made only for another target (a helper's build: a native host's wrapper, a
+        // component's): not this module's
+        let wasm = abi == "wasm32";
+        funcs = funcs.filter({ f -> f.build == "" || (f.build == "native") != wasm });
+        for f in funcs {
+            // a closure's C function takes its environment first (a func value's adapter: unused)
+            let params: list<s64> = if f.closure { [bitcode.pointer-type(m),] } else { [] };
+            // (a () param passes nothing, as a call gives it)
+            for q in f.params {
+                if gives-value(f.locals[q].ty) { params.push(value-type(types, f, f.locals[q].ty)); }
+            }
+            if f.async {
+                // an async func (a generator too): its step (its frame given: done 1, or waiting 0),
+                // and its start (its frame made, its arguments in it)
+                let pointer = bitcode.pointer-type(m);
+                index.set(f.c-name, bitcode.add-func(m, f.c-name, bitcode.func-type(m, bitcode.int-type(m, 32), [pointer,]), 1, true, true));
+                index.set(start-name(f), bitcode.add-func(m, start-name(f), bitcode.func-type(m, pointer, params), params.len(), true, true));
+                continue;
+            }
+            // a component's export: the host's to call (by its name, on wasm)
+            let at = bitcode.add-func(m, f.c-name, bitcode.func-type(m, result-type(types, f, f.result), params), params.len(), true, f.export-name == "");
+            if f.export-name != "" && wasm {
+                bitcode.set-attributes(m, at, [{ index: -1, attributes: bitcode.string-attribute("wasm-export-name", f.export-name), },]);
+            }
+            index.set(f.c-name, at);
+        }
+        for f in funcs {
+            lower-func(types, made, f, index, externs);
+            if f.async { task-start(types, made, f, index, externs); }
+        }
+        main-entry(types, funcs, index, triple);
+        // none of it unwinds (yel has no exceptions, the runtime's C none either); a C function
+        // only ever called pure touches no memory and returns (so a call of it may be merged,
+        // moved out of a loop, or dropped when its value is not used)
+        for at in 0..m.funcs.len() {
+            bitcode.add-function-attributes(m, at, bitcode.nounwind());
+            if !m.funcs[at].defined && made.pure.get-or(m.funcs[at].name, false) {
+                bitcode.add-function-attributes(m, at, concat(concat(bitcode.memory-none(), bitcode.nofree()), concat(bitcode.nosync(), bitcode.willreturn())));
+            }
+        }
+        bitcode.write(m)
+    }
+
+    // ---- types
+
+    // a string: a ystr's { i64 len, ptr data }
+    string-type: func(m: BcModule) -> s64 { bitcode.struct-type(m, [bitcode.int-type(m, 64), bitcode.pointer-type(m),]) }
+
+    is-string: func(t: Type) -> bool {
+        match resolve(t) {
+            string-type => true,
+            _ => false,
+        }
+    }
+
+    // a func's result type: () and never void
+    result-type: func(ty: Types, f: IrFunc, t: Type) -> s64 {
+        if gives-value(t) { value-type(ty, f, t) } else { bitcode.void-type(ty.m) }
+    }
+
+    // whether a value of t is one (not a () nor a never)
+    gives-value: func(t: Type) -> bool { !is-unit(t) && !is-never(t) }
+
+    is-unit: func(t: Type) -> bool {
+        match resolve(t) {
+            unit-type => true,
+            _ => false,
+        }
+    }
+
+    // a number's bits (an f32's 32)
+    int-bits: func(n: string) -> s64 {
+        if n == "s8" || n == "u8" { return 8; }
+        if n == "s16" || n == "u16" { return 16; }
+        if n == "s32" || n == "u32" || n == "f32" { return 32; }
+        64
+    }
+
+    is-float: func(t0: Type) -> bool {
+        match resolve(t0) {
+            num(n) => n == "f32" || n == "f64",
+            range-type(r) => is-float(r.base),
+            singleton(s) => is-float(s.base),
+            _ => false,
+        }
+    }
+
+    // a value's bits in its type (1 for a bool, 32 for a char)
+    bits: func(t0: Type) -> s64 {
+        match resolve(t0) {
+            num(n) => int-bits(n),
+            bool-type => 1,
+            char-type => 32,
+            range-type(r) => bits(r.base),
+            singleton(s) => bits(s.base),
+            _ => 64,
+        }
+    }
+
+    signed: func(t0: Type) -> bool {
+        match resolve(t0) {
+            num(n) => n.byte-at(0) == 115,
+            range-type(r) => signed(r.base),
+            singleton(s) => signed(s.base),
+            _ => false,
+        }
+    }
+
+    // a value's alignment in a local's slot, as an alloca's, a load's or a store's record has it
+    align: func(l: Lower, t: Type) -> u64 { align-code(size-align(l.types, l.ir, t)[1]) }
+
+    // ---- funcs
+
+    new-lower: func(types: Types, made: Made, f: BcFunc, ir: IrFunc, index: map<string, s64>, externs: map<string, string>) -> Lower {
+        {
+            m: types.m, types: types, made: made, f: f, ir: ir, block: 0, slots: [], labels: [], continues: [], breaks: [],
+            index: index, externs: externs, abi: types.abi,
+            stack-objects: map.new(), framed: false, frame: BcValue.constant(0), roots: BcValue.constant(0), root-count: 0,
+            root-at: [], root-paths: [], given: none, task: BcValue.param(0), task-type: 0, resumes: map.new(),
+        }
+    }
+
+    lower-func: func(types: Types, made: Made, ir: IrFunc, index: map<string, s64>, externs: map<string, string>) {
+        let m = types.m;
+        let f = m.funcs[index[ir.c-name]];
+        let l = new-lower(types, made, f, ir, index, externs);
+        if ir.async {
+            task-step(l);
+            return;
+        }
+        // each local's slot, in the entry block, zeroed (as C's = { 0 })
+        let i32 = bitcode.int-type(m, 32);
+        let one = bitcode.integer(f, i32, 1);
+        for local in ir.locals {
+            if !gives-value(local.ty) {
+                l.slots.push(none);
+            } else {
+                let ty = value-type(types, ir, local.ty);
+                let slot = must(bitcode.add-inst(f, 0, 19, [
+                    BcOperand.raw(ty as u64),
+                    BcOperand.raw(i32 as u64),
+                    BcOperand.absolute(one),
+                    BcOperand.raw(align(l, local.ty) | 64),
+                ], true));
+                store(l, slot, bitcode.null(f, ty), local.ty);
+                l.slots.push(some(slot));
+            }
+        }
+        // the collector's roots (its frame pushed), then each param's value stored in its slot
+        // (and its pointers in their roots)
+        frame-start(l);
+        let at = if ir.closure { 1 } else { 0 };
+        // a closure's environment (its first param), in its local
+        if ir.env-param >= 0 {
+            match l.slots[ir.env-param] {
+                some(slot) => store(l, slot, BcValue.param(0), ir.locals[ir.env-param].ty),
+                none => {}
+            }
+            root(l, ir.env-param);
+        }
+        for k in 0..ir.params.len() {
+            match l.slots[ir.params[k]] {
+                some(slot) => {
+                    store(l, slot, BcValue.param(at), ir.locals[ir.params[k]].ty);
+                    at += 1;
+                }
+                none => {}
+            }
+            root(l, ir.params[k]);
+        }
+        // the body from block 1 (the entry block takes the allocas made on the way: a call's
+        // scratch memory), which the entry block goes to once it has them all
+        l.block = bitcode.new-block(f);
+        stmts(l, ir.body);
+        // a body that gets to its end: a () func returns; another cannot get there
+        if !bitcode.ended(f, l.block) {
+            if is-unit(ir.result) {
+                frame-end(l);
+                inst(l, 10, [], false);
+            } else {
+                inst(l, 15, [], false);
+            }
+        }
+        let _ = bitcode.add-inst(f, 0, 11, [BcOperand.raw(1),], false);
+    }
+
+    // C's main (wasi-libc's start calls __main_argc_argv for one taking them): the runtime's start
+    // (y_start), the program's main, the runtime's end with its value (y_finish), as the C backend's
+    main-entry: func(types: Types, funcs: list<IrFunc>, index: map<string, s64>, triple: string) {
+        let m = types.m;
+        let main-ir = funcs.filter({ f -> f.key == "main" });
+        // a component of exports only (a reactor): no main
+        if main-ir.len() == 0 && funcs.any({ f -> f.export-name != "" }) { return; }
+        if main-ir.len() == 0 { diagnostics.fail("yelc --backend bitcode: the program has no main"); }
+        let ir = main-ir[0];
+        let i32 = bitcode.int-type(m, 32);
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        let name = if triple.contains("wasm") { "__main_argc_argv" } else { "main" };
+        let at = bitcode.add-func(m, name, bitcode.func-type(m, i32, [i32, pointer,]), 2, true, false);
+        let f = m.funcs[at];
+        let start = bitcode.declared(m, "y_start", bitcode.func-type(m, pointer, [i32, pointer,]), 2);
+        let finish = bitcode.declared(m, "y_finish", bitcode.func-type(m, i32, [i64,]), 1);
+        let call = { callee: s64, args: list<BcValue>, gives: bool ->
+            let operands: list<BcOperand> = [
+                BcOperand.raw(0),
+                BcOperand.raw(1 << 15),
+                BcOperand.raw(m.funcs[callee].ty as u64),
+                BcOperand.value(BcValue.function(callee)),
+            ];
+            for a in args { operands.push(BcOperand.value(a)); }
+            bitcode.add-inst(f, 0, 34, operands, gives)
+        };
+        // the arguments (a list<string>), for a main that takes them
+        let arguments = must(call(start, [BcValue.param(0), BcValue.param(1),], true));
+        // the program's globals made, before its first code (gen.globals-helpers)
+        if index.has("y_globals_init") {
+            let globals = bitcode.declared(m, "y_globals", bitcode.func-type(m, bitcode.void-type(m), [pointer, pointer,]), 2);
+            let _ = call(globals, [BcValue.function(index["y_globals_init"]), BcValue.function(index["y_globals_mark"]),], false);
+        }
+        let given: list<BcValue> = if ir.params.len() > 0 { [arguments,] } else { [] };
+        // an async main: its task, the executor's root (std's async.run-tasks), as the C main's
+        if ir.async {
+            let task = must(call(index[start-name(ir)], given, true));
+            let _ = call(index[types.g.funcs["yel:std/async.run-tasks"].c-name], [task,], false);
+            let done = must(call(finish, [bitcode.integer(f, i64, 0),], true));
+            let _ = bitcode.add-inst(f, 0, 10, [BcOperand.value(done),], false);
+            return;
+        }
+        let result = call(index[ir.c-name], given, !is-unit(ir.result));
+        let code = match result {
+            some(v) => {
+                let width = bits(ir.result);
+                if width == 64 { v }
+                else { must(bitcode.add-inst(f, 0, 3, [BcOperand.value(v), BcOperand.raw(i64 as u64), BcOperand.raw(if signed(ir.result) { 2 } else { 1 }),], true)) }
+            }
+            none => bitcode.integer(f, i64, 0),
+        };
+        let status = must(call(finish, [code,], true));
+        let _ = bitcode.add-inst(f, 0, 10, [BcOperand.value(status),], false);
+    }
+
+    // ---- statements
+
+    // a body, cut at its first terminator (what follows never runs, and may be codegen's
+    // placeholder: a () assigned to an arm's value after its return), as render.yel's render-stmts
+    stmts: func(l: Lower, body: list<Node>) {
+        for n in body {
+            stmt(l, n);
+            let ends = match n.kind {
+                return(v) => true,
+                break(label) => true,
+                continue(label) => true,
+                unreachable(x) => true,
+                halt => true,
+                _ => false,
+            };
+            if ends { return; }
+        }
+    }
+
+    stmt: func(l: Lower, n: Node) {
+        match n.kind {
+            assign(x) => {
+                let v = match x.value.kind {
+                    alloc(a) => some(alloc-object(l, x.dest, a)),
+                    interp(s) => some(interpolated(l, s)),
+                    _ => value(l, x.value),
+                };
+                match l.slots[x.dest] {
+                    some(slot) => store(l, slot, must(v), l.ir.locals[x.dest].ty),
+                    none => {}
+                }
+                root(l, x.dest);
+            }
+            store(x) => field-store(l, x),
+            if(x) => {
+                let test = must(value(l, x.test));
+                let yes = bitcode.new-block(l.f);
+                let no = bitcode.new-block(l.f);
+                let after = bitcode.new-block(l.f);
+                branch(l, test, yes, no);
+                l.block = yes;
+                stmts(l, x.yes);
+                jump(l, after);
+                l.block = no;
+                stmts(l, x.no);
+                jump(l, after);
+                l.block = after;
+            }
+            loop(x) => {
+                // head: the test (none: always); body; step (where continue goes); after
+                let head = bitcode.new-block(l.f);
+                let body = bitcode.new-block(l.f);
+                let step = bitcode.new-block(l.f);
+                let after = bitcode.new-block(l.f);
+                jump(l, head);
+                l.block = head;
+                match x.test {
+                    some(t) => branch(l, must(value(l, t)), body, after),
+                    none => jump(l, body),
+                }
+                l.block = body;
+                l.labels.push(x.label);
+                l.continues.push(step);
+                l.breaks.push(after);
+                stmts(l, x.body);
+                l.labels.pop();
+                l.continues.pop();
+                l.breaks.pop();
+                jump(l, step);
+                l.block = step;
+                match x.step {
+                    some(s) => { let _ = value(l, s); }
+                    none => {}
+                }
+                jump(l, head);
+                l.block = after;
+            }
+            block(x) => {
+                let after = bitcode.new-block(l.f);
+                l.labels.push(x.label);
+                l.continues.push(-1);
+                l.breaks.push(after);
+                stmts(l, x.body);
+                l.labels.pop();
+                l.continues.pop();
+                l.breaks.pop();
+                jump(l, after);
+                l.block = after;
+            }
+            break(label) => {
+                jump(l, l.breaks[target(l, label, false)]);
+                l.block = bitcode.new-block(l.f);
+            }
+            continue(label) => {
+                jump(l, l.continues[target(l, label, true)]);
+                l.block = bitcode.new-block(l.f);
+            }
+            return(v) => {
+                if l.ir.async {
+                    task-done(l, v);
+                    l.block = bitcode.new-block(l.f);
+                    return;
+                }
+                if is-unit(l.ir.result) {
+                    let _ = value(l, v);
+                    frame-end(l);
+                    inst(l, 10, [], false);
+                } else {
+                    let result = must(value(l, v));
+                    frame-end(l);
+                    inst(l, 10, [BcOperand.value(result),], false);
+                }
+                l.block = bitcode.new-block(l.f);
+            }
+            // a match no arm fits (the C backend's shows the value: here, only that it fits none)
+            // a match no arm fits: the program stops, showing the value (as the C backend's)
+            unreachable(x) => {
+                let shown = interpolated(l, { parts: [x.value,], formatters: [x.formatter,], });
+                let _ = c-call(l, "yel_no_match", [shown,], [Type.string-type,], Type.never-type);
+                inst(l, 15, [], false);
+                l.block = bitcode.new-block(l.f);
+            }
+            call(c) => { let _ = value(l, n); }
+            // an async func's: where a wait goes on (its state's block), its leaving (that state
+            // kept), a generator's value given
+            resume(k) => {
+                let block = bitcode.new-block(l.f);
+                jump(l, block);
+                l.block = block;
+                l.resumes.set(k, block);
+            }
+            suspend(k) => {
+                store-as(l, header-field(l, 1), bitcode.integer(l.f, bitcode.int-type(l.m, 32), k as u64), 3);
+                inst(l, 10, [BcOperand.value(bitcode.integer(l.f, bitcode.int-type(l.m, 32), 0)),], false);
+                l.block = bitcode.new-block(l.f);
+            }
+            yield(v) => {
+                match value(l, v) {
+                    some(given) => store-as(l, task-field(l, 1), given, align(l, l.ir.result)),
+                    none => {}
+                }
+            }
+            // after a call that never returns
+            halt => {
+                inst(l, 15, [], false);
+                l.block = bitcode.new-block(l.f);
+            }
+            const(_) => {}
+            local(i) => {}
+            _ => unsupported(l.ir, "a statement ({kind-name(n)})"),
+        }
+    }
+
+    // the loop or block a break or continue leaves (label -1: the innermost loop): its place in the
+    // stacks
+    target: func(l: Lower, label: s64, looping: bool) -> s64 {
+        for step in 0..l.labels.len() {
+            let at = l.labels.len() - 1 - step;
+            let is-loop = l.continues[at] >= 0;
+            if label < 0 && is-loop { return at; }
+            if label >= 0 && l.labels[at] == label && (is-loop || !looping) { return at; }
+        }
+        unsupported(l.ir, "a break or continue with nothing to leave");
+        0
+    }
+
+    // ---- values
+
+    // n's value (none: a () one)
+    value: func(l: Lower, n: Node) -> option<BcValue> {
+        match n.kind {
+            const(c) => {
+                if is-unit(n.ty) { return none; }
+                let ty = value-type(l.types, l.ir, n.ty);
+                match c {
+                    int(v) => some(bitcode.integer(l.f, ty, v)),
+                    float(v) => some(if bits(n.ty) == 32 { bitcode.float(l.f, ty, f32-bits(v as f32)) } else { bitcode.float(l.f, ty, f64-bits(v)) }),
+                    bool(b) => some(bitcode.integer(l.f, ty, if b { 1 } else { 0 })),
+                    unit => none,
+                    text(s) => some(string-literal(l, s)),
+                    case-value(x) => some(singleton-value(l, x)),
+                    // NULL, a value struct of zeros
+                    null => some(bitcode.null(l.f, ty)),
+                    zero => some(bitcode.null(l.f, ty)),
+                }
+            }
+            scan(t) => some(scan-value(l, t)),
+            load(x) => field-load(l, n, x),
+            make(x) => some(make-value(l, n, x)),
+            list-get(x) => list-item(l, n, x),
+            local(i) => match l.slots[i] {
+                some(slot) => some(load(l, slot, l.ir.locals[i].ty)),
+                none => none,
+            },
+            // a runtime helper's (key ""), or one of the module's: the program's, gen's helpers
+            call(c) => if c.key == "" && !l.index.has(c.c-name) { helper(l, n, c) } else { call(l, n, c) },
+            deref(a) => {
+                if is-unit(n.ty) { return none; }
+                some(load-as(l, must(value(l, a)), field-type(l.types, l.ir, n.ty), align(l, n.ty)))
+            }
+            global(k) => {
+                if is-unit(n.ty) { return none; }
+                some(load-as(l, global-address(l, k, n.ty), field-type(l.types, l.ir, n.ty), align(l, n.ty)))
+            }
+            address-of(a) => some(place-address(l, a)),
+            size-of(x) => some(bitcode.integer(l.f, value-type(l.types, l.ir, Type.num("usize")), size-align(l.types, l.ir, x)[0] as u64)),
+            element(x) => {
+                let base = must(value(l, x.base));
+                let index = convert(l, must(value(l, x.index)), x.index.ty, Type.num("s64"));
+                some(item-address(l, base, field-type(l.types, l.ir, x.item), index))
+            }
+            bin(x) => {
+                if x.op == "&&" || x.op == "||" { return some(short-circuit(l, x)); }
+                some(binary(l, x.op, must(value(l, x.a)), must(value(l, x.b)), x.a.ty))
+            }
+            un(x) => {
+                let a = must(value(l, x.a));
+                let ty = value-type(l.types, l.ir, n.ty);
+                if x.op == "!" { return some(binop(l, 12, a, bitcode.integer(l.f, ty, 1))); }
+                if x.op == "~" { return some(binop(l, 12, a, bitcode.integer(l.f, ty, 18446744073709551615))); }
+                // fneg (UNOP 0)
+                if x.op == "-" && is-float(n.ty) { return inst(l, 56, [BcOperand.value(a), BcOperand.raw(0),], true); }
+                if x.op == "-" { return some(binop(l, 1, bitcode.integer(l.f, ty, 0), a)); }
+                unsupported(l.ir, "the operator {x.op}");
+                none
+            }
+            convert(a) => some(convert(l, must(value(l, a)), a.ty, n.ty)),
+            func-ref(x) => some(func-value(l, x)),
+            call-ref(x) => call-ref(l, n, x),
+            // a loop's step (i += 1): done, giving nothing
+            assign(x) => {
+                stmt(l, n);
+                none
+            }
+            _ => {
+                unsupported(l.ir, "a value ({kind-name(n)})");
+                none
+            }
+        }
+    }
+
+    // a call of one of the program's funcs
+    call: func(l: Lower, n: Node, c: CallNode) -> option<BcValue> {
+        let name = c.c-name;
+        if !l.index.has(name) { unsupported(l.ir, "a call of {c.c-name} (not in the module)"); }
+        let callee = l.index[name];
+        let operands: list<BcOperand> = [
+            BcOperand.raw(0),
+            BcOperand.raw(1 << 15),
+            BcOperand.raw(l.m.funcs[callee].ty as u64),
+            BcOperand.value(BcValue.function(callee)),
+        ];
+        for a in c.args {
+            match value(l, a) {
+                some(v) => operands.push(BcOperand.value(v)),
+                none => {}
+            }
+        }
+        inst(l, 34, operands, gives-value(n.ty))
+    }
+
+    // a && b, a || b (a pattern's tests: the second may read what only the first makes sure is
+    // there): b only where a does not decide, as C's
+    short-circuit: func(l: Lower, x: BinNode) -> BcValue {
+        let i1 = bitcode.int-type(l.m, 1);
+        let answer = scratch-of(l, i1, 1);
+        let a = must(value(l, x.a));
+        store-as(l, answer, a, 1);
+        let more = bitcode.new-block(l.f);
+        let done = bitcode.new-block(l.f);
+        if x.op == "&&" { branch(l, a, more, done); } else { branch(l, a, done, more); }
+        l.block = more;
+        store-as(l, answer, must(value(l, x.b)), 1);
+        jump(l, done);
+        l.block = done;
+        load-as(l, answer, i1, 1)
+    }
+
+    // a core import's function (on wasm: the host's, by its module and name)
+    core-import-func: func(l: Lower, imported: CoreImport) -> s64 {
+        let m = l.m;
+        let params: list<s64> = imported.params.map({ p -> value-type(l.types, l.ir, p) });
+        let result = result-type(l.types, l.ir, imported.result);
+        let at = bitcode.declared(m, imported.c-name, bitcode.func-type(m, result, params), params.len());
+        bitcode.set-attributes(m, at, [{ index: -1, attributes: concat(bitcode.string-attribute("wasm-import-module", imported.module), bitcode.string-attribute("wasm-import-name", imported.name)), },]);
+        at
+    }
+
+    // a call through a func value ({ fn, env }): its C function, given its environment first
+    call-ref: func(l: Lower, n: Node, x: CallRefNode) -> option<BcValue> {
+        let m = l.m;
+        let callee = must(value(l, x.callee));
+        let function = extract(l, callee, [0,]);
+        let params = [bitcode.pointer-type(m),];
+        let args = [extract(l, callee, [1,]),];
+        for a in x.args {
+            match value(l, a) {
+                some(v) => {
+                    params.push(value-type(l.types, l.ir, a.ty));
+                    args.push(v);
+                }
+                none => {}
+            }
+        }
+        let fn-ty = bitcode.func-type(m, result-type(l.types, l.ir, n.ty), params);
+        let operands = [BcOperand.raw(0), BcOperand.raw(1 << 15), BcOperand.raw(fn-ty as u64), BcOperand.value(function),];
+        for v in args { operands.push(BcOperand.value(v)); }
+        inst(l, 34, operands, gives-value(n.ty))
+    }
+
+    // a func as a value: its C function (a func value's adapter, a closure's body)
+    func-value: func(l: Lower, x: FuncRefNode) -> BcValue {
+        if l.index.has(x.c) { return BcValue.function(l.index[x.c]); }
+        if l.index.has(x.c-name) { return BcValue.function(l.index[x.c-name]); }
+        // a core import (a stream's builtin, the host's), declared as its import says
+        let g = l.types.g;
+        if g.core-imports.has(x.c-name) && l.abi == "wasm32" { return BcValue.function(core-import-func(l, g.core-imports[x.c-name])); }
+        // the runtime's scan
+        if x.c-name.starts-with("y_scan_") {
+            let m = l.m;
+            return BcValue.function(bitcode.declared(m, x.c-name, bitcode.func-type(m, bitcode.void-type(m), [bitcode.pointer-type(m),]), 1));
+        }
+        unsupported(l.ir, "the func {x.c-name} as a value (not in the module)")
+    }
+
+    // a runtime helper the IR calls: an integer's arithmetic, yel's way; else a C function of the
+    // runtime's (an extern whose C is a function's name, not a macro's text), called as C would
+    helper: func(l: Lower, n: Node, c: CallNode) -> option<BcValue> {
+        let name = c.c-name;
+        let ops = ["add", "sub", "mul", "div", "mod", "shl", "shr", "neg",];
+        for op in ops {
+            if name.starts-with("y_{op}_") {
+                let t = n.ty;
+                let a = must(value(l, c.args[0]));
+                if op == "neg" { return some(binop(l, 1, bitcode.integer(l.f, value-type(l.types, l.ir, t), 0), a)); }
+                let b = must(value(l, c.args[1]));
+                if op == "add" { return some(binop(l, 0, a, b)); }
+                if op == "sub" { return some(binop(l, 1, a, b)); }
+                if op == "mul" { return some(binop(l, 2, a, b)); }
+                if op == "div" || op == "mod" { return some(divide(l, op == "div", a, b, t)); }
+                return some(shift(l, op == "shl", a, b, c.args[1].ty, t));
+            }
+        }
+        if name == "y_list_of" || name == "y_list_new" { return list-made(l, n, c); }
+        // a future's result: where its frame keeps it (after the header)
+        if name.starts-with("y_result_") {
+            if !gives-value(n.ty) { return none; }
+            let frame = bitcode.struct-type(l.m, [async-type(l.m), field-type(l.types, l.ir, n.ty),]);
+            return some(load-as(l, field-address(l, must(value(l, c.args[0])), frame, 1), field-type(l.types, l.ir, n.ty), align(l, n.ty)));
+        }
+        // wait a | b | …: which was done first, of the tasks in an array (no C varargs)
+        if name == "yel_async_first" {
+            let m = l.m;
+            let pointer = bitcode.pointer-type(m);
+            let i64 = bitcode.int-type(m, 64);
+            let tasks = scratch-of(l, bitcode.array-type(m, c.args.len() - 1, pointer), calling.pointer-bytes(l.abi));
+            for k in 1..c.args.len() {
+                store-as(l, item-address(l, tasks, pointer, bitcode.integer(l.f, i64, (k - 1) as u64)), must(value(l, c.args[k])), align-code(calling.pointer-bytes(l.abi)));
+            }
+            return some(c-function(l, "yel_async_first_of", bitcode.int-type(m, 32), [bitcode.int-type(m, 32), pointer,], [must(value(l, c.args[0])), tasks,]));
+        }
+        let conversion = cast-helper(l, n, c);
+        if conversion != none { return conversion; }
+        let key = l.externs.get-or(name, "");
+        // an extern whose C is a template, not a function's name
+        if !is-identifier(name) {
+            if key == "" { unsupported(l.ir, "the runtime's {name}"); }
+            return intrinsic(l, n, c, key);
+        }
+        // a generic extern: a C macro (taking each type argument's C type, scan and descriptor
+        // first), done here or by the runtime's function for it
+        if key != "" && l.types.g.funcs.has(key) && l.types.g.funcs[key].type-params.len() > 0 {
+            return macro-call(l, n, c, key);
+        }
+        let args: list<BcValue> = [];
+        let types: list<Type> = [];
+        for a in c.args {
+            match value(l, a) {
+                some(v) => {
+                    args.push(v);
+                    types.push(a.ty);
+                }
+                // a (): C's yunit, 0
+                none => {
+                    args.push(bitcode.integer(l.f, bitcode.int-type(l.m, 8), 0));
+                    types.push(Type.unit-type);
+                }
+            }
+        }
+        l.made.calling-pure = (n.fx & (fx().call | fx().read-mem | fx().write-mem)) == 0;
+        let given = c-call(l, name, args, types, n.ty);
+        l.made.calling-pure = false;
+        given
+    }
+
+    // the runtime's conversions that C leaves undefined, defined (yel.h's static inline ones): a
+    // float to an integer saturating (NaN 0: LLVM's fptosi.sat, fptoui.sat), f64 to f32 an infinity
+    // past f32's range, an integer to a char U+FFFD where no Unicode scalar value; a fixed-length
+    // list's index checked (none: not one of them)
+    cast-helper: func(l: Lower, n: Node, c: CallNode) -> option<BcValue> {
+        let m = l.m;
+        let name = c.c-name;
+        if name.starts-with("y_sat_") {
+            let target = name.substring(6, name.len());
+            let from = c.args[0].ty;
+            let width = int-bits(target);
+            let intrinsic = "llvm.{if target.byte-at(0) == 115 { "fptosi" } else { "fptoui" }}.sat.i{width}.f{bits(from)}";
+            let ty = value-type(l.types, l.ir, n.ty);
+            let callee = bitcode.declared(m, intrinsic, bitcode.func-type(m, ty, [value-type(l.types, l.ir, from),]), 1);
+            return runtime-call(l, callee, [must(value(l, c.args[0])),], true);
+        }
+        // a float's IEEE bits (yel.h's y_bits_f64, y_bits_f32: static inline): a bitcast (11), an
+        // f32's widened
+        if name == "y_bits_f64" || name == "y_bits_f32" {
+            let v = must(value(l, c.args[0]));
+            let i64 = bitcode.int-type(m, 64);
+            if name == "y_bits_f64" { return some(must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(i64 as u64), BcOperand.raw(11),], true))); }
+            let i32 = bitcode.int-type(m, 32);
+            let bits32 = must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(i32 as u64), BcOperand.raw(11),], true));
+            return some(must(inst(l, 3, [BcOperand.value(bits32), BcOperand.raw(i64 as u64), BcOperand.raw(1),], true)));
+        }
+        // a float of its IEEE bits (y_f64_of, y_f32_of: static inline): a bitcast, an f32's of the
+        // low 32
+        if name == "y_f64_of" || name == "y_f32_of" {
+            let v = must(value(l, c.args[0]));
+            let float = value-type(l.types, l.ir, n.ty);
+            if name == "y_f64_of" { return some(must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(float as u64), BcOperand.raw(11),], true))); }
+            let bits32 = must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(bitcode.int-type(m, 32) as u64), BcOperand.raw(0),], true));
+            return some(must(inst(l, 3, [BcOperand.value(bits32), BcOperand.raw(float as u64), BcOperand.raw(11),], true)));
+        }
+        // what crossed the boundary, checked (yel.h's static inline y_abi_char, y_abi_tag): else
+        // the runtime's y_abi_bad
+        if name == "y_abi_char" || name == "y_abi_tag" {
+            let i32 = bitcode.int-type(m, 32);
+            let v = must(value(l, c.args[0]));
+            let bad = if name == "y_abi_char" {
+                let outside = compare(l, 34, v, bitcode.integer(l.f, i32, 1114111));
+                let surrogate = binop(l, 10, compare(l, 35, v, bitcode.integer(l.f, i32, 55296)), compare(l, 37, v, bitcode.integer(l.f, i32, 57343)));
+                binop(l, 11, outside, surrogate)
+            } else {
+                compare(l, 35, v, must(value(l, c.args[1])))
+            };
+            let stop = bitcode.new-block(l.f);
+            let go = bitcode.new-block(l.f);
+            branch(l, bad, stop, go);
+            l.block = stop;
+            let _ = c-function(l, "y_abi_bad", bitcode.void-type(m), [i32,], [bitcode.integer(l.f, i32, if name == "y_abi_char" { 4 } else { 5 }),]);
+            inst(l, 15, [], false);
+            l.block = go;
+            return some(v);
+        }
+        if name == "y_f64_to_f32" {
+            let v = must(value(l, c.args[0]));
+            let f64 = value-type(l.types, l.ir, c.args[0].ty);
+            let f32 = value-type(l.types, l.ir, n.ty);
+            // past FLT_MAX and half its ulp (0x1.ffffffp127): an infinity
+            let limit = bitcode.float(l.f, f64, 5183643170835005440);
+            let lower = bitcode.float(l.f, f64, 14407015207689781248);
+            let near = must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(f32 as u64), BcOperand.raw(7),], true));
+            let infinity = bitcode.float(l.f, f32, 2139095040);
+            let negative-infinity = bitcode.float(l.f, f32, 4286578688);
+            let high = select(l, compare(l, 3, v, limit), infinity, near);
+            return some(select(l, compare(l, 5, v, lower), negative-infinity, high));
+        }
+        if name == "y_to_char" {
+            let v = must(value(l, c.args[0]));
+            let i64 = bitcode.int-type(m, 64);
+            let i32 = bitcode.int-type(m, 32);
+            let number = { k: u64 -> bitcode.integer(l.f, i64, k) };
+            let outside = binop(l, 11, compare(l, 40, v, number(0)), compare(l, 38, v, number(1114111)));
+            let surrogate = binop(l, 10, compare(l, 39, v, number(55296)), compare(l, 41, v, number(57343)));
+            let bad = binop(l, 11, outside, surrogate);
+            let code = must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(i32 as u64), BcOperand.raw(0),], true));
+            return some(select(l, bad, bitcode.integer(l.f, i32, 65533), code));
+        }
+        if name == "y_bound" {
+            let index = must(value(l, c.args[0]));
+            let length = must(value(l, c.args[1]));
+            let i64 = bitcode.int-type(m, 64);
+            let outside = binop(l, 11, compare(l, 40, index, bitcode.integer(l.f, i64, 0)), compare(l, 39, index, length));
+            let stop = bitcode.new-block(l.f);
+            let go = bitcode.new-block(l.f);
+            branch(l, outside, stop, go);
+            l.block = stop;
+            let _ = c-function(l, "y_index_out_of_range", bitcode.void-type(m), [i64, i64,], [index, length,]);
+            inst(l, 15, [], false);
+            l.block = go;
+            return some(index);
+        }
+        none
+    }
+
+    // a generic extern's macro (std's streams' and futures', the prelude's black-box), by its yel
+    // name: its arguments after its type arguments
+    macro-call: func(l: Lower, n: Node, c: CallNode, key: string) -> option<BcValue> {
+        let m = l.m;
+        let skip = opt.type-args-before(c.args);
+        let pointer = bitcode.pointer-type(m);
+        let name = if key.starts-with("yel:std/") { key.substring(8, key.len()) } else { key };
+        let arg = { -> must(value(l, c.args[skip])) };
+        if name == "streams.close" {
+            let _ = c-function(l, "y_writer_close", bitcode.int-type(m, 8), [pointer,], [arg(),]);
+            return none;
+        }
+        if name == "async.release-future" {
+            let _ = c-function(l, "y_future_release", bitcode.void-type(m), [pointer,], [arg(),]);
+            return none;
+        }
+        // natively nothing; in a component, the runtime lets the host's end go
+        if name == "streams.release-end" {
+            if l.abi == "wasm32" { let _ = c-function(l, "y_stream_release", bitcode.void-type(m), [pointer,], [arg(),]); }
+            return none;
+        }
+        // the value, which the optimizer must take as unknown: kept in memory it reads back
+        if name == "black-box" {
+            if !gives-value(n.ty) { return none; }
+            let ty = field-type(l.types, l.ir, n.ty);
+            let held = scratch-of(l, ty, size-align(l.types, l.ir, n.ty)[1]);
+            let _ = inst(l, 44, [BcOperand.value(held), BcOperand.value(arg()), BcOperand.raw(align(l, n.ty)), BcOperand.raw(1),], false);
+            return some(must(inst(l, 20, [BcOperand.value(held), BcOperand.raw(ty as u64), BcOperand.raw(align(l, n.ty)), BcOperand.raw(1),], true)));
+        }
+        unsupported(l.ir, "the macro {c.c-name} (of {name})")
+    }
+
+    // whether a C name is a function's (letters, digits and _), not a macro's text
+    is-identifier: func(name: string) -> bool {
+        if name.len() == 0 { return false; }
+        for index in 0..name.len() {
+            let c = name.byte-at(index);
+            let letter = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95;
+            if !letter && !(index > 0 && c >= 48 && c <= 57) { return false; }
+        }
+        true
+    }
+
+    // ---- calls of C (the runtime's), as the target's calling convention passes their values
+
+    // a call of the C function name with args (each of its type in types), giving a value of the
+    // result type (none for () or never, which C gives as a yunit)
+    c-call: func(l: Lower, name: string, args: list<BcValue>, types: list<Type>, result: Type) -> option<BcValue> {
+        let m = l.m;
+        let pointer = bitcode.pointer-type(m);
+        let layouts: list<Layout> = [];
+        for t in types { layouts.push(c-layout(l, t)); }
+        let gives = !is-unit(result) && !is-never(result);
+        let result-layout = if gives { c-layout(l, result) } else { calling.scalar(l.abi, ScalarKind.integer, 8) };
+        let signature = calling.signature(l.abi, layouts, some(result-layout));
+        let returning = match signature.result {
+            some(p) => p,
+            none => calling.direct(),
+        };
+        let params: list<s64> = [];
+        let values: list<BcValue> = [];
+        let attributes: list<BcParamAttributes> = [];
+        // the result: as itself, in parts (one, or a struct of them), or written where a hidden first
+        // param says (sret)
+        let result-ty = bitcode.void-type(m);
+        let written: option<BcValue> = none;
+        if returning.how == PassingKind.direct {
+            // a () or never: a yel extern's C gives a yunit (a byte), the runtime's own (y_mark)
+            // gives nothing
+            result-ty = if gives { value-type(l.types, l.ir, result) } else if l.externs.has(name) { bitcode.int-type(m, 8) } else { bitcode.void-type(m) };
+            if gives { attributes.push({ index: 0, attributes: extension(result), }); }
+        } else if returning.how == PassingKind.parts {
+            result-ty = parts-type(m, returning.parts);
+        } else {
+            let memory = scratch(l, result-layout);
+            params.push(pointer);
+            values.push(memory);
+            attributes.push({ index: 1, attributes: concat(bitcode.sret(value-type(l.types, l.ir, result)), bitcode.aligned(result-layout.align)), });
+            written = some(memory);
+        }
+        for k in 0..args.len() {
+            let passing = signature.params[k];
+            let t = types[k];
+            if passing.how == PassingKind.direct {
+                attributes.push({ index: params.len() + 1, attributes: extension(t), });
+                params.push(value-type(l.types, l.ir, t));
+                values.push(args[k]);
+            } else if passing.how == PassingKind.parts {
+                let memory = scratch(l, layouts[k]);
+                store-as(l, memory, args[k], align-code(layouts[k].align));
+                for part in passing.parts {
+                    let ty = part-type(m, part);
+                    params.push(ty);
+                    values.push(load-as(l, at-offset(l, memory, part.offset), ty, align-code(part-align(l, part))));
+                }
+            } else {
+                // a pointer to a copy: the callee's (byval) or the caller's
+                let memory = scratch(l, layouts[k]);
+                store-as(l, memory, args[k], align-code(layouts[k].align));
+                if passing.how == PassingKind.byval {
+                    attributes.push({ index: params.len() + 1, attributes: concat(bitcode.byval(value-type(l.types, l.ir, t)), bitcode.aligned(layouts[k].align)), });
+                }
+                params.push(pointer);
+                values.push(memory);
+            }
+        }
+        // a core import (the canonical ABI's): the host's on wasm (its module and name), natively
+        // the runtime's C for it
+        let declared-name = name;
+        let g = l.types.g;
+        if g.core-imports.has(name) {
+            let imported = g.core-imports[name];
+            if l.abi == "wasm32" {
+                attributes.push({ index: -1, attributes: concat(bitcode.string-attribute("wasm-import-module", imported.module), bitcode.string-attribute("wasm-import-name", imported.name)), });
+            } else {
+                if imported.wasm-only { unsupported(l.ir, "the import {imported.module}#{imported.name} natively (std's host gives it)"); }
+                declared-name = imported.native;
+            }
+        }
+        let callee = bitcode.declared(m, declared-name, bitcode.func-type(m, result-ty, params), params.len());
+        let set = bitcode.set-attributes(m, callee, attributes);
+        l.made.pure.set(declared-name, l.made.pure.get-or(declared-name, true) && l.made.calling-pure);
+        let operands: list<BcOperand> = [
+            BcOperand.raw(set),
+            BcOperand.raw(1 << 15),
+            BcOperand.raw(m.funcs[callee].ty as u64),
+            BcOperand.value(BcValue.function(callee)),
+        ];
+        for v in values { operands.push(BcOperand.value(v)); }
+        // (a value where the callee's type gives one: a func declared before is called as it is)
+        let given = inst(l, 34, operands, result-of(m, callee) != bitcode.void-type(m));
+        if !gives { return none; }
+        match written {
+            some(memory) => { return some(load-as(l, memory, value-type(l.types, l.ir, result), align-code(result-layout.align))); }
+            none => {}
+        }
+        if returning.how == PassingKind.direct { return given; }
+        // in parts: each stored where it goes in the value's memory, the value loaded from it
+        let memory = scratch(l, result-layout);
+        let parts = returning.parts;
+        for index in 0..parts.len() {
+            let part = if parts.len() == 1 { must(given) } else { must(inst(l, 26, [BcOperand.value(must(given)), BcOperand.raw(index as u64),], true)) };
+            store-as(l, at-offset(l, memory, parts[index].offset), part, align-code(part-align(l, parts[index])));
+        }
+        some(load-as(l, memory, value-type(l.types, l.ir, result), align-code(result-layout.align)))
+    }
+
+    // a value's C layout: a scalar's (a bool C's, a char a uint32_t), or a string's ystr
+    c-layout: func(l: Lower, t0: Type) -> Layout {
+        let t = resolve(t0);
+        if is-string(t) {
+            return calling.layout(l.abi, [
+                { kind: ScalarKind.integer, bits: 64, offset: 0, },
+                { kind: ScalarKind.pointer, bits: 64, offset: 0, },
+            ]);
+        }
+        match t {
+            num(n) => calling.scalar(l.abi, if n == "f32" || n == "f64" { ScalarKind.float } else { ScalarKind.integer }, if n == "usize" { calling.pointer-bytes(l.abi) * 8 } else { int-bits(n) }),
+            bool-type => calling.scalar(l.abi, ScalarKind.integer, 1),
+            char-type => calling.scalar(l.abi, ScalarKind.integer, 32),
+            address-type => calling.scalar(l.abi, ScalarKind.pointer, 64),
+            unit-type => calling.scalar(l.abi, ScalarKind.integer, 8),
+            _ => {
+                // a pointer (a list, a buffer, an object)
+                let paths = pointer-paths(l.types, t);
+                if paths.len() == 1 && paths[0].len() == 0 { return calling.scalar(l.abi, ScalarKind.pointer, 64); }
+                // an enum, flags, a handle: an integer
+                if paths.len() == 0 && declared-name(t) != "" { return calling.scalar(l.abi, ScalarKind.integer, size-align(l.types, l.ir, t)[0] * 8); }
+                // a value struct (an option, a result, a tuple, a record of fields, a union, a
+                // fixed-length list, a func value): its scalars where C lays them out
+                let scalars: list<Scalar> = [];
+                c-scalars(l, t, 0, scalars);
+                let layout = size-align(l.types, l.ir, t);
+                calling.aggregate(scalars, layout[0], layout[1])
+            }
+        }
+    }
+
+    // the scalars of a value of type t at offset bytes into a struct (into out), as C lays them
+    // out: a nested struct's at its own offset (its padding kept), a bool a byte, a () a byte
+    c-scalars: func(l: Lower, t0: Type, offset: s64, out: list<Scalar>) {
+        let t = resolve(t0);
+        if needs-representing(t) {
+            c-scalars(l, represented(t), offset, out);
+            return;
+        }
+        let ty = l.types;
+        let parts = { types: list<Type>, first: list<list<s64>> ->
+            let sizes: list<list<s64>> = [];
+            for x in first { sizes.push(x); }
+            for x in types { sizes.push(size-align(ty, l.ir, x)); }
+            let offsets = struct-offsets(sizes);
+            for k in 0..types.len() { c-scalars(l, types[k], offset + offsets[first.len() + k], out); }
+            offsets
+        };
+        let flag: list<list<s64>> = [[1, 1,],];
+        match t {
+            num(n) => out.push({ kind: if is-float(t) { ScalarKind.float } else { ScalarKind.integer }, bits: if n == "usize" { calling.pointer-bytes(l.abi) * 8 } else { int-bits(n) }, offset: offset, }),
+            bool-type => out.push({ kind: ScalarKind.integer, bits: 8, offset: offset, }),
+            char-type => out.push({ kind: ScalarKind.integer, bits: 32, offset: offset, }),
+            unit-type => out.push({ kind: ScalarKind.integer, bits: 8, offset: offset, }),
+            string-type => {
+                out.push({ kind: ScalarKind.integer, bits: 64, offset: offset, });
+                out.push({ kind: ScalarKind.pointer, bits: 64, offset: offset + 8, });
+            }
+            option-type(x) => {
+                out.push({ kind: ScalarKind.integer, bits: 8, offset: offset, });
+                let _ = parts([x,], flag);
+            }
+            result-type(r) => {
+                out.push({ kind: ScalarKind.integer, bits: 8, offset: offset, });
+                let _ = parts([r.ok, r.err,], flag);
+            }
+            tuple-type(xs) => { let _ = parts(xs, []); }
+            anon-record(r) => {
+                if r.types.len() == 0 { out.push({ kind: ScalarKind.integer, bits: 8, offset: offset, }); }
+                else { let _ = parts(r.types, []); }
+            }
+            union-type(xs) => {
+                out.push({ kind: ScalarKind.integer, bits: 32, offset: offset, });
+                let _ = parts(xs, [[4, 4,],]);
+            }
+            fixed-list(x) => {
+                let size = size-align(ty, l.ir, x.item)[0];
+                for k in 0..x.len { c-scalars(l, x.item, offset + k * size, out); }
+            }
+            func-type(x) => {
+                let p = calling.pointer-bytes(l.abi);
+                out.push({ kind: ScalarKind.pointer, bits: 64, offset: offset, });
+                out.push({ kind: ScalarKind.pointer, bits: 64, offset: offset + p, });
+            }
+            // a pointer (a record's, a variant's object, a list), an enum, flags, a handle
+            _ => {
+                let paths = pointer-paths(ty, t);
+                if paths.len() == 1 && paths[0].len() == 0 {
+                    out.push({ kind: ScalarKind.pointer, bits: 64, offset: offset, });
+                } else {
+                    out.push({ kind: ScalarKind.integer, bits: size-align(ty, l.ir, t)[0] * 8, offset: offset, });
+                }
+            }
+        }
+    }
+
+    // a narrow integer param's (or result's) widening: a bool's or an unsigned one's with zeros, a
+    // signed one's with its sign
+    extension: func(t: Type) -> list<u64> {
+        if is-string(t) || bits(t) >= 32 { return []; }
+        if signed(t) { bitcode.signext() } else { bitcode.zeroext() }
+    }
+
+    part-type: func(m: BcModule, part: Part) -> s64 {
+        let item = match part.kind {
+            integer => bitcode.int-type(m, part.bits),
+            float => bitcode.float-type(m, part.bits),
+            pointer => bitcode.pointer-type(m),
+        };
+        match part.form {
+            scalar => item,
+            array => bitcode.array-type(m, part.count, item),
+            vector => bitcode.vector-type(m, part.count, item),
+            fields => {
+                let items: list<s64> = [];
+                for k in 0..part.count { items.push(item); }
+                bitcode.struct-type(m, items)
+            }
+        }
+    }
+
+    // a result in parts: one part's type, or a struct of them
+    parts-type: func(m: BcModule, parts: list<Part>) -> s64 {
+        if parts.len() == 1 { return part-type(m, parts[0]); }
+        let fields: list<s64> = [];
+        for p in parts { fields.push(part-type(m, p)); }
+        bitcode.struct-type(m, fields)
+    }
+
+    // a part's alignment in bytes (its item's)
+    part-align: func(l: Lower, part: Part) -> s64 {
+        match part.kind {
+            pointer => calling.pointer-bytes(l.abi),
+            _ => if part.bits <= 8 { 1 } else { part.bits / 8 },
+        }
+    }
+
+    // memory for a value of a layout, in the entry block: its size in i64 words (as much as any of
+    // its parts reads), 8-aligned
+    scratch: func(l: Lower, layout: Layout) -> BcValue {
+        let m = l.m;
+        let i32 = bitcode.int-type(m, 32);
+        let words = (layout.size + 7) / 8;
+        let ty = bitcode.array-type(m, if words < 1 { 1 } else { words }, bitcode.int-type(m, 64));
+        must(bitcode.add-inst(l.f, 0, 19, [
+            BcOperand.raw(ty as u64),
+            BcOperand.raw(i32 as u64),
+            BcOperand.absolute(bitcode.integer(l.f, i32, 1)),
+            BcOperand.raw(4 | 64),
+        ], true))
+    }
+
+    // the address offset bytes into memory (getelementptr inbounds i8)
+    at-offset: func(l: Lower, memory: BcValue, offset: s64) -> BcValue {
+        if offset == 0 { return memory; }
+        let m = l.m;
+        let i64 = bitcode.int-type(m, 64);
+        must(inst(l, 43, [
+            BcOperand.raw(1),
+            BcOperand.raw(bitcode.int-type(m, 8) as u64),
+            BcOperand.value(memory),
+            BcOperand.value(bitcode.integer(l.f, i64, offset as u64)),
+        ], true))
+    }
+
+    // an alignment as a load's or a store's record has it (log2 of the bytes, + 1)
+    align-code: func(bytes: s64) -> u64 {
+        if bytes <= 1 { 1 } else if bytes == 2 { 2 } else if bytes == 4 { 3 } else { 4 }
+    }
+
+    load-as: func(l: Lower, address: BcValue, ty: s64, align: u64) -> BcValue {
+        must(inst(l, 20, [BcOperand.value(address), BcOperand.raw(ty as u64), BcOperand.raw(align), BcOperand.raw(0),], true))
+    }
+
+    store-as: func(l: Lower, address: BcValue, v: BcValue, align: u64) {
+        let _ = inst(l, 44, [BcOperand.value(address), BcOperand.value(v), BcOperand.raw(align), BcOperand.raw(0),], false);
+    }
+
+    concat: func(a: list<u64>, b: list<u64>) -> list<u64> {
+        let out: list<u64> = [];
+        for x in a { out.push(x); }
+        for x in b { out.push(x); }
+        out
+    }
+
+    // a / b or a % b: a division by zero stops the program (yel: division by zero), a signed one by
+    // -1 is a's negation (or 0), never C's overflow
+    divide: func(l: Lower, quotient: bool, a: BcValue, b: BcValue, t: Type) -> BcValue {
+        let ty = value-type(l.types, l.ir, t);
+        let zero = bitcode.integer(l.f, ty, 0);
+        let stop = bitcode.new-block(l.f);
+        let go = bitcode.new-block(l.f);
+        branch(l, compare(l, 32, b, zero), stop, go);
+        l.block = stop;
+        let m = l.m;
+        let die = bitcode.declared(m, "y_die", bitcode.func-type(m, bitcode.void-type(m), [bitcode.pointer-type(m),]), 1);
+        let message = c-string-global(m, "division by zero");
+        let _ = runtime-call(l, die, [BcValue.global(message),], false);
+        inst(l, 15, [], false);
+        l.block = go;
+        if !signed(t) { return binop(l, if quotient { 3 } else { 5 }, a, b); }
+        // by -1: no division (INT_MIN / -1 overflows): the result chosen after one by 1
+        let minus = bitcode.integer(l.f, ty, 18446744073709551615);
+        let by-minus = compare(l, 32, b, minus);
+        let divisor = select(l, by-minus, bitcode.integer(l.f, ty, 1), b);
+        let result = binop(l, if quotient { 4 } else { 6 }, a, divisor);
+        let instead = if quotient { binop(l, 1, zero, a) } else { zero };
+        select(l, by-minus, instead, result)
+    }
+
+    // a << b or a >> b, b (of its own integer type) modulo a's width; >> of a signed one keeps the
+    // sign
+    shift: func(l: Lower, left: bool, a: BcValue, b: BcValue, bt: Type, t: Type) -> BcValue {
+        let ty = value-type(l.types, l.ir, t);
+        let amount = convert(l, b, bt, t);
+        let masked = binop(l, 10, amount, bitcode.integer(l.f, ty, (bits(t) - 1) as u64));
+        binop(l, if left { 7 } else if signed(t) { 9 } else { 8 }, a, masked)
+    }
+
+    // a op b: a comparison (signed or not by a's type), or a bit operator
+    binary: func(l: Lower, op: string, a: BcValue, b: BcValue, t: Type) -> BcValue {
+        if is-float(t) {
+            // fcmp: oeq 1, ogt 2, oge 3, olt 4, ole 5, une 14 (as C's: != is true of a NaN)
+            let predicates = ["==", ">", ">=", "<", "<=",];
+            let at = predicates.index-of(op);
+            if at >= 0 { return compare(l, (at + 1) as u64, a, b); }
+            if op == "!=" { return compare(l, 14, a, b); }
+            // fadd, fsub, fmul, fdiv (BINOP's add, sub, mul, sdiv on floats)
+            let ops = ["+", "-", "*", "/",];
+            let code = [0, 1, 2, 4,];
+            let index = ops.index-of(op);
+            if index >= 0 { return binop(l, code[index] as u64, a, b); }
+            unsupported(l.ir, "the operator {op} on {show-type(t)}");
+        }
+        let s = signed(t);
+        if op == "==" { return compare(l, 32, a, b); }
+        if op == "!=" { return compare(l, 33, a, b); }
+        if op == "<" { return compare(l, if s { 40 } else { 36 }, a, b); }
+        if op == "<=" { return compare(l, if s { 41 } else { 37 }, a, b); }
+        if op == ">" { return compare(l, if s { 38 } else { 34 }, a, b); }
+        if op == ">=" { return compare(l, if s { 39 } else { 35 }, a, b); }
+        // a for's counter steps with a plain + (it never goes past its end)
+        if op == "+" { return binop(l, 0, a, b); }
+        if op == "-" { return binop(l, 1, a, b); }
+        if op == "*" { return binop(l, 2, a, b); }
+        // a shift as it is (not yel's: the IR's own, as a status word's): shl 7, lshr 8, ashr 9
+        if op == "<<" { return binop(l, 7, a, b); }
+        if op == ">>" { return binop(l, if s { 9 } else { 8 }, a, b); }
+        if op == "&" { return binop(l, 10, a, b); }
+        if op == "|" { return binop(l, 11, a, b); }
+        if op == "^" { return binop(l, 12, a, b); }
+        unsupported(l.ir, "the operator {op} on {show-type(t)}");
+        a
+    }
+
+    // v (of type from) as type to: wider by its sign, narrower cut; a bool's 0 or 1
+    convert: func(l: Lower, v: BcValue, from: Type, to: Type) -> BcValue {
+        let have = bits(from);
+        let want = bits(to);
+        let ty = value-type(l.types, l.ir, to);
+        // floats: fptrunc 7, fpext 8; an integer's: sitofp 6, uitofp 5 (a float to an integer is
+        // the runtime's y_sat_*)
+        if is-float(to) {
+            if is-float(from) {
+                if have == want { return v; }
+                return must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(ty as u64), BcOperand.raw(if want < have { 7 } else { 8 }),], true));
+            }
+            return must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(ty as u64), BcOperand.raw(if signed(from) { 6 } else { 5 }),], true));
+        }
+        // integers (an enum's, flags', a handle's too: their widths as the module has them), and
+        // pointers (none to change)
+        let m = l.m;
+        let from-ty = value-type(l.types, l.ir, from);
+        // an address as a number (a usize: what the host is given) and back: ptrtoint 9, inttoptr 10
+        if m.type-codes[from-ty] == 25 && m.type-codes[ty] == 7 { return must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(ty as u64), BcOperand.raw(9),], true)); }
+        if m.type-codes[from-ty] == 7 && m.type-codes[ty] == 25 { return must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(ty as u64), BcOperand.raw(10),], true)); }
+        if m.type-codes[from-ty] != 7 || m.type-codes[ty] != 7 { return v; }
+        let from-bits = m.type-operands[from-ty][0] as s64;
+        let to-bits = m.type-operands[ty][0] as s64;
+        if from-bits == to-bits { return v; }
+        let op = if to-bits < from-bits { 0 } else if signed(from) { 2 } else { 1 };
+        must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(ty as u64), BcOperand.raw(op),], true))
+    }
+
+    // ---- instructions
+
+    inst: func(l: Lower, code: s64, operands: list<BcOperand>, gives: bool) -> option<BcValue> {
+        bitcode.add-inst(l.f, l.block, code, operands, gives)
+    }
+
+    binop: func(l: Lower, opcode: u64, a: BcValue, b: BcValue) -> BcValue {
+        must(inst(l, 2, [BcOperand.value(a), BcOperand.value(b), BcOperand.raw(opcode),], true))
+    }
+
+    // icmp (CMP2): eq 32, ne 33, ugt 34, uge 35, ult 36, ule 37, sgt 38, sge 39, slt 40, sle 41
+    compare: func(l: Lower, predicate: u64, a: BcValue, b: BcValue) -> BcValue {
+        must(inst(l, 28, [BcOperand.value(a), BcOperand.value(b), BcOperand.raw(predicate),], true))
+    }
+
+    select: func(l: Lower, test: BcValue, yes: BcValue, no: BcValue) -> BcValue {
+        must(inst(l, 29, [BcOperand.value(yes), BcOperand.value(no), BcOperand.value(test),], true))
+    }
+
+    load: func(l: Lower, slot: BcValue, t: Type) -> BcValue {
+        let ty = value-type(l.types, l.ir, t);
+        must(inst(l, 20, [BcOperand.value(slot), BcOperand.raw(ty as u64), BcOperand.raw(align(l, t)), BcOperand.raw(0),], true))
+    }
+
+    store: func(l: Lower, slot: BcValue, v: BcValue, t: Type) {
+        let _ = inst(l, 44, [BcOperand.value(slot), BcOperand.value(v), BcOperand.raw(align(l, t)), BcOperand.raw(0),], false);
+    }
+
+    // a branch on test (an i1)
+    branch: func(l: Lower, test: BcValue, yes: s64, no: s64) {
+        let _ = inst(l, 11, [BcOperand.raw(yes as u64), BcOperand.raw(no as u64), BcOperand.value(test),], false);
+    }
+
+    // to block, where the one being written has not ended already
+    jump: func(l: Lower, block: s64) {
+        if !bitcode.ended(l.f, l.block) { let _ = inst(l, 11, [BcOperand.raw(block as u64),], false); }
+    }
+
+    // a call of a func the module declares (the runtime's)
+    // (a value where the callee's type gives one, whatever the caller expects: a void C function
+    // gives none)
+    runtime-call: func(l: Lower, callee: s64, args: list<BcValue>, gives: bool) -> option<BcValue> {
+        let _ = gives;
+        // (a call the backend makes: not known pure)
+        l.made.pure.set(l.m.funcs[callee].name, false);
+        let operands: list<BcOperand> = [
+            BcOperand.raw(0),
+            BcOperand.raw(1 << 15),
+            BcOperand.raw(l.m.funcs[callee].ty as u64),
+            BcOperand.value(BcValue.function(callee)),
+        ];
+        for a in args { operands.push(BcOperand.value(a)); }
+        inst(l, 34, operands, result-of(l.m, callee) != bitcode.void-type(l.m))
+    }
+
+    // a string literal (its C name: S3): a global of its bytes, and the { length, data } of it
+    string-literal: func(l: Lower, text: string) -> BcValue {
+        let m = l.m;
+        let global = bytes-global(m, text);
+        let ty = string-type(m);
+        let empty = bitcode.undefined(l.f, ty);
+        let sized = must(inst(l, 27, [BcOperand.value(empty), BcOperand.value(bitcode.integer(l.f, bitcode.int-type(m, 64), text.len() as u64)), BcOperand.raw(0),], true));
+        must(inst(l, 27, [BcOperand.value(sized), BcOperand.value(BcValue.global(global)), BcOperand.raw(1),], true))
+    }
+
+    // the global holding text, made once
+    bytes-global: func(m: BcModule, text: string) -> s64 {
+        for index in 0..m.globals.len() {
+            let g = m.globals[index];
+            if !g.terminated && !g.external && g.align == 1 && g.bytes == text { return index; }
+        }
+        bitcode.add-bytes(m, "yel.string.{m.globals.len()}", text)
+    }
+
+    // a global holding a C string (a message for the runtime's y_die): its index, made once
+    c-string-global: func(m: BcModule, text: string) -> s64 {
+        for index in 0..m.globals.len() {
+            if m.globals[index].terminated && m.globals[index].bytes == text { return index; }
+        }
+        bitcode.add-c-string(m, "yel.c-string.{m.globals.len()}", text)
+    }
+
+    // ---- reading the IR
+
+    kind-name: func(n: Node) -> string {
+        match n.kind {
+            const(_) => "a constant",
+            local(_) => "a local",
+            assign(_) => "an assignment",
+            bin(x) => "the operator {x.op}",
+            un(x) => "the operator {x.op}",
+            convert(_) => "a conversion",
+            load(_) => "a field's read",
+            store(_) => "a field's write",
+            if(_) => "an if",
+            loop(_) => "a loop",
+            break(_) => "a break",
+            continue(_) => "a continue",
+            block(_) => "a block",
+            return(_) => "a return",
+            unreachable(_) => "a match no arm fits",
+            halt => "a call that never returns",
+            resume(_) => "a wait",
+            suspend(_) => "a wait",
+            yield(_) => "a yield",
+            call(c) => "a call of {c.c-name}",
+            func-ref(_) => "a func as a value",
+            call-ref(_) => "a call of a func value",
+            alloc(_) => "a record or a case made",
+            make(_) => "a value made of parts",
+            list-get(_) => "a list's item",
+            interp(_) => "an interpolated string",
+            deref(_) => "a value at an address",
+            address-of(_) => "an address",
+            size-of(_) => "a size",
+            element(_) => "an item's address",
+            type-arg(_) => "a type argument",
+            global(_) => "a global",
+            scan(_) => "a scan",
+        }
+    }
+
+    // the value a node that has one gives
+    must: func(v: option<BcValue>) -> BcValue {
+        match v {
+            some(x) => x,
+            none => panic("llvm: a value was wanted of what gives none"),
+        }
+    }
+
+    unsupported: func(f: IrFunc, what: string) -> never {
+        diagnostics.fail("yelc --backend bitcode: {what} is not done yet (in {f.key})")
+    }
+
+    // ================================================================ values beyond scalars
+    //
+    // Values beyond scalars, laid out as the C backend's (gen.yel's c-type, value-struct,
+    // type-decls): a record's or a variant's object (behind a pointer),
+    // a value struct (an option, a result, a tuple, an anonymous record, a union, a fixed-length list, a
+    // func value), a list's items. Their fields are read and written by the C paths the IR names
+    // (o->f_x, v.value, o->u.c_case), as GEPs into the object or extractvalues of the value; objects are
+    // made by y_new (or on the func's stack), traced by funcs made here; and the collector's roots are a
+    // frame (y_frame) of slots for the pointers of each rooted local, pushed on y_top while the func
+    // runs, as render.yel's.
+
+    // ---- types
+
+    // a value's type in the module, as the C backend's c-type: a scalar, a ystr, a pointer (a list,
+    // a map, a record's or a variant's object), or a value struct
+    value-type: func(ty: Types, f: IrFunc, t0: Type) -> s64 {
+        let m = ty.m;
+        let t = resolve(t0);
+        if needs-representing(t) { return value-type(ty, f, represented(t)); }
+        let pointer = bitcode.pointer-type(m);
+        match t {
+            num(n) => if n == "f32" || n == "f64" { bitcode.float-type(m, int-bits(n)) } else if n == "usize" { bitcode.int-type(m, calling.pointer-bytes(ty.abi) * 8) } else { bitcode.int-type(m, int-bits(n)) },
+            canonical-type(x) => canonical-struct(ty, f, x),
+            bool-type => bitcode.int-type(m, 1),
+            char-type => bitcode.int-type(m, 32),
+            string-type => string-type(m),
+            range-type(r) => value-type(ty, f, r.base),
+            singleton(s) => value-type(ty, f, s.base),
+            buffer-type => pointer,
+            address-type => pointer,
+            list-type(x) => pointer,
+            map-type(x) => pointer,
+            future-type(x) => pointer,
+            seq-type(x) => pointer,
+            stream-type(x) => pointer,
+            option-type(x) => bitcode.struct-type(m, [bitcode.int-type(m, 1), field-type(ty, f, x),]),
+            result-type(r) => bitcode.struct-type(m, [bitcode.int-type(m, 1), field-type(ty, f, r.ok), field-type(ty, f, r.err),]),
+            tuple-type(xs) => bitcode.struct-type(m, xs.map({ x -> field-type(ty, f, x) })),
+            union-type(xs) => {
+                let fields = [bitcode.int-type(m, 32),];
+                for x in xs { fields.push(field-type(ty, f, x)); }
+                bitcode.struct-type(m, fields)
+            }
+            anon-record(r) => {
+                if r.types.len() == 0 { return bitcode.struct-type(m, [bitcode.int-type(m, 8),]); }
+                bitcode.struct-type(m, r.types.map({ x -> field-type(ty, f, x) }))
+            }
+            fixed-list(x) => bitcode.struct-type(m, [bitcode.array-type(m, x.len, field-type(ty, f, x.item)),]),
+            func-type(x) => bitcode.struct-type(m, [pointer, pointer,]),
+            named(n) => {
+                let kind = gen.named-kind(ty.g, n);
+                if kind == "record" || kind == "variant" { return pointer; }
+                if kind == "flags" && ty.g.flags[n].flags.len() > 32 { return bitcode.int-type(m, 64); }
+                bitcode.int-type(m, 32)
+            }
+            _ => unsupported(f, "a value of {show-type(t)}"),
+        }
+    }
+
+    // a value's type where it is a field (an item, a payload): a () is C's yunit there, a byte
+    field-type: func(ty: Types, f: IrFunc, t: Type) -> s64 {
+        if is-unit(t) || is-never(t) { bitcode.int-type(ty.m, 8) } else { value-type(ty, f, t) }
+    }
+
+    // a value's size and alignment in bytes, as C lays its type out on the target
+    size-align: func(ty: Types, f: IrFunc, t0: Type) -> list<s64> {
+        let t = resolve(t0);
+        if needs-representing(t) { return size-align(ty, f, represented(t)); }
+        if is-unit(t) || is-never(t) { return [1, 1,]; }
+        let p = calling.pointer-bytes(ty.abi);
+        let flag: list<s64> = [1, 1,];
+        match t {
+            num(n) => {
+                let bytes = if n == "usize" { p } else { int-bits(n) / 8 };
+                [bytes, bytes,]
+            }
+            canonical-type(x) => canonical-layout(ty, f, x),
+            bool-type => flag,
+            char-type => [4, 4,],
+            string-type => struct-layout([[8, 8,], [p, p,],]),
+            range-type(r) => size-align(ty, f, r.base),
+            singleton(s) => size-align(ty, f, s.base),
+            option-type(x) => struct-layout([flag, size-align(ty, f, x),]),
+            result-type(r) => struct-layout([flag, size-align(ty, f, r.ok), size-align(ty, f, r.err),]),
+            tuple-type(xs) => struct-layout(xs.map({ x -> size-align(ty, f, x) })),
+            union-type(xs) => {
+                let fields: list<list<s64>> = [[4, 4,],];
+                for x in xs { fields.push(size-align(ty, f, x)); }
+                struct-layout(fields)
+            }
+            anon-record(r) => if r.types.len() == 0 { flag } else { struct-layout(r.types.map({ x -> size-align(ty, f, x) })) },
+            fixed-list(x) => {
+                let item = size-align(ty, f, x.item);
+                [item[0] * x.len, item[1],]
+            }
+            func-type(x) => struct-layout([[p, p,], [p, p,],]),
+            named(n) => {
+                let kind = gen.named-kind(ty.g, n);
+                if kind == "record" || kind == "variant" { return [p, p,]; }
+                if kind == "flags" && ty.g.flags[n].flags.len() > 32 { return [8, 8,]; }
+                [4, 4,]
+            }
+            // a pointer: a list, a map, a buffer, a stream, a started call
+            _ => [p, p,],
+        }
+    }
+
+    // a struct's size and alignment, of its fields' (each padded to its alignment, the whole to the
+    // largest)
+    struct-layout: func(fields: list<list<s64>>) -> list<s64> {
+        let offset = 0;
+        let align = 1;
+        for field in fields {
+            offset = round-up(offset, field[1]) + field[0];
+            if field[1] > align { align = field[1]; }
+        }
+        [round-up(offset, align), align,]
+    }
+
+    round-up: func(n: s64, to: s64) -> s64 { (n + to - 1) / to * to }
+
+    // ---- canonical structs (the canonical ABI's, abi.yel's A_<id>: as C lays them out)
+
+    // a canonical struct's members, as abi-struct declares them
+    canonical-parts: func(ty: Types, f: IrFunc, t0: Type) -> CanonicalParts {
+        let g = ty.g;
+        let t = resolve(t0);
+        let u8 = Type.num("u8");
+        let usize = Type.num("usize");
+        let out: CanonicalParts = { names: [], types: [], union-names: [], union-types: [], };
+        let member = { name: string, part: Type ->
+            out.names.push(name);
+            out.types.push(part);
+        };
+        // a union's case (a () has none), and its none
+        let case = { name: string, part: Type ->
+            if gen.has-member(part) {
+                out.union-names.push(name);
+                out.union-types.push(gen.abi-of(g, part));
+            }
+        };
+        let union = { ->
+            out.union-names.push("none");
+            out.union-types.push(u8);
+            member("u", Type.unit-type);
+        };
+        match t {
+            string-type => {
+                member("ptr", Type.address-type);
+                member("len", usize);
+            }
+            list-type(x) => {
+                member("ptr", Type.address-type);
+                member("len", usize);
+            }
+            fixed-list(x) => member("items", Type.fixed-list({ item: gen.abi-of(g, x.item), len: x.len, })),
+            option-type(x) => {
+                member("tag", u8);
+                member("value", gen.abi-of(g, x));
+            }
+            result-type(r) => {
+                member("tag", u8);
+                case("ok", r.ok);
+                case("err", r.err);
+                union();
+            }
+            tuple-type(xs) => {
+                for i in 0..xs.len() { member("f{i}", gen.abi-of(g, xs[i])); }
+            }
+            anon-record(r) => {
+                if r.fields.len() == 0 { member("none", u8); }
+                for i in 0..r.fields.len() { member("f_" + gen.mangle(r.fields[i]), gen.abi-of(g, r.types[i])); }
+            }
+            union-type(xs) => {
+                let ks = kinds(t);
+                member("tag", gen.tag-num(ks.len()));
+                for i in 0..ks.len() { case("c{i}", ks[i]); }
+                union();
+            }
+            named(n) => {
+                if g.records.has(n) {
+                    let r = g.records[n];
+                    let types = gen.wit-field-types(g, n);
+                    for i in 0..r.fields.len() { member("f_" + gen.mangle(r.fields[i]), gen.abi-of(g, types[i])); }
+                } else {
+                    let v = g.variants[n];
+                    member("tag", gen.tag-num(v.cases.len()));
+                    for k in v.cases {
+                        if k.has-payload { case("c_" + gen.mangle(k.name), gen.wit-payload(g, n, k.name)); }
+                    }
+                    union();
+                }
+            }
+            _ => unsupported(f, "the canonical layout of {show-type(t)}"),
+        }
+        out
+    }
+
+    // a canonical union's size and alignment (its largest member's)
+    canonical-union: func(ty: Types, f: IrFunc, parts: CanonicalParts) -> list<s64> {
+        let size = 1;
+        let align = 1;
+        for part in parts.union-types {
+            let layout = size-align(ty, f, part);
+            if layout[0] > size { size = layout[0]; }
+            if layout[1] > align { align = layout[1]; }
+        }
+        [round-up(size, align), align,]
+    }
+
+    // a canonical struct's type: its members (its union: words of its alignment, enough for the
+    // largest case)
+    canonical-struct: func(ty: Types, f: IrFunc, t: Type) -> s64 {
+        let parts = canonical-parts(ty, f, t);
+        let fields: list<s64> = [];
+        for k in 0..parts.names.len() {
+            if parts.names[k] == "u" {
+                let u = canonical-union(ty, f, parts);
+                fields.push(bitcode.array-type(ty.m, u[0] / u[1], bitcode.int-type(ty.m, u[1] * 8)));
+            } else {
+                fields.push(field-type(ty, f, parts.types[k]));
+            }
+        }
+        bitcode.struct-type(ty.m, fields)
+    }
+
+    canonical-layout: func(ty: Types, f: IrFunc, t: Type) -> list<s64> {
+        let parts = canonical-parts(ty, f, t);
+        let sizes: list<list<s64>> = [];
+        for k in 0..parts.names.len() {
+            if parts.names[k] == "u" { sizes.push(canonical-union(ty, f, parts)); }
+            else { sizes.push(size-align(ty, f, parts.types[k])); }
+        }
+        struct-layout(sizes)
+    }
+
+    // an lvalue's address: a local's slot, a field's, a value at an address (its address), a
+    // list's item's
+    place-address: func(l: Lower, n: Node) -> BcValue {
+        match n.kind {
+            local(i) => match l.slots[i] {
+                some(slot) => { return slot; }
+                none => {}
+            },
+            load(x) => match field-memory(l, x, path-steps(l, x.base.ty, x.path, x.arrow)) {
+                some(at) => { return at; }
+                none => {}
+            },
+            deref(a) => { return must(value(l, a)); }
+            list-get(x) => { return item-memory(l, x, n.ty); }
+            global(k) => { return global-address(l, k, n.ty); }
+            _ => {}
+        }
+        unsupported(l.ir, "the address of {kind-name(n)}")
+    }
+
+    // a global's variable (of type t, in memory as a field is): made once, zero to start with
+    global-address: func(l: Lower, key: string, t: Type) -> BcValue {
+        if !l.made.globals.has(key) {
+            let at = bitcode.add-variable(l.m, gen.global-c(key), field-type(l.types, l.ir, t), align-code(size-align(l.types, l.ir, t)[1]));
+            l.made.globals.set(key, at);
+        }
+        BcValue.global(l.made.globals[key])
+    }
+
+    // a record's object (R_x): its fields' struct ({ i8 } for none)
+    record-object: func(ty: Types, f: IrFunc, name: Name) -> s64 {
+        let r = ty.g.records[name];
+        if r.fields.len() == 0 { return bitcode.struct-type(ty.m, [bitcode.int-type(ty.m, 8),]); }
+        bitcode.struct-type(ty.m, r.field-types.map({ x -> field-type(ty, f, x) }))
+    }
+
+    record-layout: func(ty: Types, f: IrFunc, name: Name) -> list<s64> {
+        let r = ty.g.records[name];
+        if r.fields.len() == 0 { return [1, 1,]; }
+        struct-layout(r.field-types.map({ x -> size-align(ty, f, x) }))
+    }
+
+    // a variant's object (V_x): its tag, and a union of its cases' payloads (as words of the
+    // largest alignment of them, enough for the largest)
+    variant-object: func(ty: Types, f: IrFunc, name: string) -> s64 {
+        let m = ty.m;
+        let u = union-layout(ty, f, intern(name));
+        let word = bitcode.int-type(m, u[1] * 8);
+        bitcode.struct-type(m, [bitcode.int-type(m, 32), bitcode.array-type(m, u[0] / u[1], word),])
+    }
+
+    union-layout: func(ty: Types, f: IrFunc, name: Name) -> list<s64> {
+        let size = 1;
+        let align = 1;
+        for k in ty.g.variants[name].cases {
+            if !k.has-payload { continue; }
+            let part = size-align(ty, f, k.payload);
+            if part[0] > size { size = part[0]; }
+            if part[1] > align { align = part[1]; }
+        }
+        [round-up(size, align), align,]
+    }
+
+    variant-layout: func(ty: Types, f: IrFunc, name: Name) -> list<s64> {
+        struct-layout([[4, 4,], union-layout(ty, f, name),])
+    }
+
+    // a named type's object (a record's or a variant's)
+    object-type: func(ty: Types, f: IrFunc, name: string) -> s64 {
+        if ty.g.records.has(intern(name)) { record-object(ty, f, intern(name)) } else { variant-object(ty, f, name) }
+    }
+
+    object-layout: func(ty: Types, f: IrFunc, name: Name) -> list<s64> {
+        if ty.g.records.has(name) { record-layout(ty, f, name) } else { variant-layout(ty, f, name) }
+    }
+
+    // the name a type is declared by (a record's or a variant's, behind a pointer), or ""
+    declared-name: func(t: Type) -> string {
+        match resolve(t) {
+            named(n) => name-text(n),
+            _ => "",
+        }
+    }
+
+    // ---- C paths
+
+    // the steps of a C path into a value of type t (arrow: into the object t points at): o->f_x,
+    // o->u.c_case, v.value, v.f0
+    path-steps: func(l: Lower, t: Type, path: list<string>, arrow: bool) -> list<PathStep> {
+        let ty = l.types;
+        let steps: list<PathStep> = [];
+        let current = t;
+        let object = arrow;
+        let union-of = "";
+        // a canonical struct's union, its members next (u.ok)
+        let union-steps: list<CanonicalParts> = [];
+        for part in path {
+            if union-steps.len() > 0 {
+                let parts = union-steps.pop();
+                let at = parts.union-names.index-of(part);
+                if at < 0 { unsupported(l.ir, "the union member {part}"); }
+                steps.push({ container: -1, index: -1, });
+                current = parts.union-types[at];
+                continue;
+            }
+            if union-of != "" {
+                // a case of a variant's union: its payload, at the union's address
+                let v = ty.g.variants[intern(union-of)];
+                let found = false;
+                for k in v.cases {
+                    if k.has-payload && "c_{gen.mangle(k.name)}" == part {
+                        current = k.payload;
+                        found = true;
+                    }
+                }
+                if !found { unsupported(l.ir, "the path {path.join(".")}"); }
+                steps.push({ container: -1, index: -1, });
+                union-of = "";
+                continue;
+            }
+            if object {
+                let name = declared-name(current);
+                if name == "" {
+                    // a runtime struct's field (xs->len): a list's, a buffer's
+                    let runtime = runtime-field(l, current, part);
+                    steps.push(runtime);
+                    current = Type.num("s64");
+                    object = false;
+                    continue;
+                }
+                let container = object-type(ty, l.ir, name);
+                if ty.g.records.has(intern(name)) {
+                    let r = ty.g.records[intern(name)];
+                    let index = -1;
+                    for i in 0..r.fields.len() {
+                        if "f_{gen.mangle(r.fields[i])}" == part { index = i; }
+                    }
+                    if index < 0 { unsupported(l.ir, "the path {path.join(".")}"); }
+                    steps.push({ container: container, index: index, });
+                    current = r.field-types[index];
+                } else if part == "tag" {
+                    steps.push({ container: container, index: 0, });
+                    current = Type.num("s32");
+                } else if part == "u" {
+                    steps.push({ container: container, index: 1, });
+                    union-of = name;
+                } else {
+                    unsupported(l.ir, "the path {path.join(".")}");
+                }
+                object = false;
+                continue;
+            }
+            match resolve(current) {
+                canonical-type(x) => {
+                    // a canonical struct's member (its union: u, then a case's member, at the
+                    // union's address)
+                    let parts = canonical-parts(l.types, l.ir, x);
+                    let at = parts.names.index-of(part);
+                    if at < 0 { unsupported(l.ir, "the member {part} of {show-type(current)}"); }
+                    steps.push({ container: value-type(ty, l.ir, current), index: at, });
+                    if part == "u" { union-steps.push(parts); }
+                    current = parts.types[at];
+                    continue;
+                }
+                _ => {}
+            }
+            let container = value-type(ty, l.ir, current);
+            let at = field-index(l, current, part);
+            steps.push({ container: container, index: at, });
+            current = field-at(current, at);
+        }
+        steps
+    }
+
+    // a field of the runtime's struct a pointer of type t points at: a list's (ylist: len, cap,
+    // size), a buffer's (ybuffer: len, cap)
+    runtime-field: func(l: Lower, t: Type, part: string) -> PathStep {
+        match resolve(t) {
+            list-type(x) => {
+                let names = ["len", "cap", "size",];
+                let at = names.index-of(part);
+                if at >= 0 { return { container: ylist-type(l.m), index: at, }; }
+            }
+            buffer-type => {
+                let names = ["len", "cap",];
+                let at = names.index-of(part);
+                if at >= 0 { return { container: ybuffer-type(l.m), index: at, }; }
+            }
+            stream-type(x) => {
+                let names = ["items", "cap", "closed", "reader", "writer", "host",];
+                let at = names.index-of(part);
+                if at >= 0 { return { container: ystream-type(l.m), index: at, }; }
+            }
+            _ => {}
+        }
+        unsupported(l.ir, "the field {part} of {show-type(t)}")
+    }
+
+    // a value struct's field by its C name: its index
+    field-index: func(l: Lower, t0: Type, part: string) -> s64 {
+        let t = resolve(t0);
+        if needs-representing(t) { return field-index(l, represented(t), part); }
+        match t {
+            option-type(x) => {
+                if part == "has" { return 0; }
+                if part == "value" { return 1; }
+            }
+            result-type(r) => {
+                if part == "is_err" { return 0; }
+                if part == "ok" { return 1; }
+                if part == "err" { return 2; }
+            }
+            tuple-type(xs) => {
+                for i in 0..xs.len() {
+                    if part == "f{i}" { return i; }
+                }
+            }
+            union-type(xs) => {
+                if part == "tag" { return 0; }
+                for i in 0..xs.len() {
+                    if part == "c{i}" { return i + 1; }
+                }
+            }
+            anon-record(r) => {
+                for i in 0..r.fields.len() {
+                    if part == "f_{gen.mangle(r.fields[i])}" { return i; }
+                }
+            }
+            string-type => {
+                if part == "len" { return 0; }
+                if part == "data" { return 1; }
+            }
+            func-type(x) => {
+                if part == "fn" { return 0; }
+                if part == "env" { return 1; }
+            }
+            fixed-list(x) => {
+                if part == "items" { return 0; }
+            }
+            _ => {}
+        }
+        unsupported(l.ir, "the field {part} of {show-type(t)}")
+    }
+
+    // the type of a value struct's field at an index
+    field-at: func(t0: Type, at: s64) -> Type {
+        let t = resolve(t0);
+        if needs-representing(t) { return field-at(represented(t), at); }
+        match t {
+            option-type(x) => if at == 0 { Type.bool-type } else { x },
+            result-type(r) => if at == 0 { Type.bool-type } else if at == 1 { r.ok } else { r.err },
+            tuple-type(xs) => xs[at],
+            union-type(xs) => if at == 0 { Type.num("s32") } else { xs[at - 1] },
+            anon-record(r) => r.types[at],
+            string-type => if at == 0 { Type.num("s64") } else { Type.address-type },
+            _ => Type.unit-type,
+        }
+    }
+
+    // where a path leads from an address (each step a GEP into its struct; a union's case its own
+    // address)
+    path-address: func(l: Lower, address: BcValue, steps: list<PathStep>) -> BcValue {
+        let at = address;
+        for step in steps {
+            if step.container >= 0 { at = field-address(l, at, step.container, step.index); }
+        }
+        at
+    }
+
+    // a struct's field's address (getelementptr inbounds ty, at, 0, index)
+    field-address: func(l: Lower, at: BcValue, container: s64, index: s64) -> BcValue {
+        let i32 = bitcode.int-type(l.m, 32);
+        must(inst(l, 43, [
+            BcOperand.raw(1),
+            BcOperand.raw(container as u64),
+            BcOperand.value(at),
+            BcOperand.value(bitcode.integer(l.f, i32, 0)),
+            BcOperand.value(bitcode.integer(l.f, i32, index as u64)),
+        ], true))
+    }
+
+    // an item's address: items + index * its size (getelementptr inbounds item, items, index)
+    item-address: func(l: Lower, items: BcValue, item: s64, index: BcValue) -> BcValue {
+        must(inst(l, 43, [BcOperand.raw(1), BcOperand.raw(item as u64), BcOperand.value(items), BcOperand.value(index),], true))
+    }
+
+    // a field of a value (extractvalue, at each index)
+    extract: func(l: Lower, v: BcValue, indices: list<s64>) -> BcValue {
+        if indices.len() == 0 { return v; }
+        let operands = [BcOperand.value(v),];
+        for index in indices { operands.push(BcOperand.raw(index as u64)); }
+        must(inst(l, 26, operands, true))
+    }
+
+    // ---- reading and writing fields
+
+    // a load node's value: from the object its base points at, or (a value struct) from the local
+    // holding it, or out of the value
+    field-load: func(l: Lower, n: Node, x: LoadNode) -> option<BcValue> {
+        if is-unit(n.ty) { return none; }
+        let ty = field-type(l.types, l.ir, n.ty);
+        let align = align-code(size-align(l.types, l.ir, n.ty)[1]);
+        let steps = path-steps(l, x.base.ty, x.path, x.arrow);
+        match field-memory(l, x, steps) {
+            some(address) => some(load-as(l, address, ty, align)),
+            none => {
+                let indices: list<s64> = [];
+                for step in steps { indices.push(step.index); }
+                some(extract(l, must(value(l, x.base)), indices))
+            }
+        }
+    }
+
+    // a load node's address, where its value is in memory: an object's field, or a local's (none:
+    // a value computed)
+    field-memory: func(l: Lower, x: LoadNode, steps: list<PathStep>) -> option<BcValue> {
+        if x.arrow { return some(path-address(l, must(value(l, x.base)), steps)); }
+        match x.base.kind {
+            local(i) => match l.slots[i] {
+                some(slot) => some(path-address(l, slot, steps)),
+                none => none,
+            },
+            // a value at an address (a canonical struct the runtime gave), or a field of one
+            deref(a) => some(path-address(l, must(value(l, a)), steps)),
+            global(k) => some(path-address(l, global-address(l, k, x.base.ty), steps)),
+            load(inner) => match field-memory(l, inner, path-steps(l, inner.base.ty, inner.path, inner.arrow)) {
+                some(at) => some(path-address(l, at, steps)),
+                none => none,
+            },
+            _ => none,
+        }
+    }
+
+    // a store: its value where its target (a field, a list's item) is; a local's slots again where
+    // the target is in a local
+    field-store: func(l: Lower, x: StoreNode) {
+        let v = value(l, x.value);
+        let value-of = match v {
+            some(stored) => stored,
+            // a () stored: C's yunit, 0
+            none => bitcode.integer(l.f, bitcode.int-type(l.m, 8), 0),
+        };
+        let align = align-code(size-align(l.types, l.ir, x.target.ty)[1]);
+        match x.target.kind {
+            load(t) => {
+                let steps = path-steps(l, t.base.ty, t.path, t.arrow);
+                match field-memory(l, t, steps) {
+                    some(address) => store-as(l, address, value-of, align),
+                    none => unsupported(l.ir, "a field's write into a value no local holds"),
+                }
+                if !t.arrow { root-base(l, t.base); }
+            }
+            list-get(t) => {
+                store-as(l, item-memory(l, t, x.target.ty), value-of, align);
+                if t.fixed { root-base(l, t.list); }
+            }
+            deref(a) => store-as(l, must(value(l, a)), value-of, align),
+            global(k) => store-as(l, global-address(l, k, x.target.ty), value-of, align),
+            // a whole local (a lowered scalar, written in place): its slot, its roots again
+            local(i) => {
+                match l.slots[i] {
+                    some(slot) => store-as(l, slot, value-of, align),
+                    none => {}
+                }
+                root(l, i);
+            }
+            _ => unsupported(l.ir, "a write to {kind-name(x.target)}"),
+        }
+    }
+
+    // a local written in place (a field of its value struct): its slots again
+    root-base: func(l: Lower, base: Node) {
+        match base.kind {
+            local(i) => root(l, i),
+            _ => {}
+        }
+    }
+
+    // a list's item (a list's heap items; a fixed-length list's in its value)
+    list-item: func(l: Lower, n: Node, x: ListGetNode) -> option<BcValue> {
+        if is-unit(n.ty) { return none; }
+        let ty = field-type(l.types, l.ir, n.ty);
+        some(load-as(l, item-memory(l, x, n.ty), ty, align-code(size-align(l.types, l.ir, n.ty)[1])))
+    }
+
+    // an item's address: in a list's items (ylist's 4th field), or in a fixed-length list's value
+    // (a local's slot, else a copy of the value)
+    item-memory: func(l: Lower, x: ListGetNode, item: Type) -> BcValue {
+        let m = l.m;
+        let index = must(value(l, x.index));
+        let item-ty = field-type(l.types, l.ir, item);
+        if !x.fixed {
+            let list = must(value(l, x.list));
+            let items = load-as(l, field-address(l, list, ylist-type(m), 3), bitcode.pointer-type(m), align-code(calling.pointer-bytes(l.abi)));
+            return item-address(l, items, item-ty, index);
+        }
+        // where the list is: a local's slot, an object's field (a closure's environment's), else a
+        // copy of its value (read only)
+        let holder = match x.list.kind {
+            local(i) => l.slots[i],
+            load(loaded) => field-memory(l, loaded, path-steps(l, loaded.base.ty, loaded.path, loaded.arrow)),
+            global(k) => some(global-address(l, k, x.list.ty)),
+            _ => none,
+        };
+        let memory = match holder {
+            some(slot) => slot,
+            none => {
+                let copy = scratch-of(l, value-type(l.types, l.ir, x.list.ty), size-align(l.types, l.ir, x.list.ty)[1]);
+                store-as(l, copy, must(value(l, x.list)), align-code(size-align(l.types, l.ir, x.list.ty)[1]));
+                copy
+            }
+        };
+        let items = field-address(l, memory, value-type(l.types, l.ir, x.list.ty), 0);
+        item-address(l, items, item-ty, index)
+    }
+
+    // a list (ylist): its length, room and items' size, its items, what scans one
+    ylist-type: func(m: BcModule) -> s64 {
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        bitcode.struct-type(m, [i64, i64, i64, pointer, pointer,])
+    }
+
+    // memory for one value of type ty, in the entry block
+    scratch-of: func(l: Lower, ty: s64, align: s64) -> BcValue {
+        let i32 = bitcode.int-type(l.m, 32);
+        must(bitcode.add-inst(l.f, 0, 19, [
+            BcOperand.raw(ty as u64),
+            BcOperand.raw(i32 as u64),
+            BcOperand.absolute(bitcode.integer(l.f, i32, 1)),
+            BcOperand.raw(align-code(align) | 64),
+        ], true))
+    }
+
+    // ---- values made
+
+    // a value struct made of its parts (each at its field: in order, or by its C name), the rest
+    // zero
+    make-value: func(l: Lower, n: Node, x: MakeNode) -> BcValue {
+        let ty = value-type(l.types, l.ir, n.ty);
+        let made = bitcode.null(l.f, ty);
+        // (a fixed-length list's items: in its struct's array)
+        let fixed = match resolve(n.ty) {
+            fixed-list(_) => true,
+            _ => false,
+        };
+        for k in 0..x.parts.len() {
+            let at = if x.fields[k] == "" { k } else { field-index(l, n.ty, x.fields[k]) };
+            let indices: list<BcOperand> = if fixed { [BcOperand.raw(0), BcOperand.raw(at as u64),] } else { [BcOperand.raw(at as u64),] };
+            match value(l, x.parts[k]) {
+                some(v) => {
+                    let operands = [BcOperand.value(made), BcOperand.value(v),];
+                    for index in indices { operands.push(index); }
+                    made = must(inst(l, 27, operands, true));
+                }
+                none => {}
+            }
+        }
+        made
+    }
+
+    // a record or a case object: on the heap (y_new: zeroed, traced by its trace), or on the
+    // func's stack (made, zeroed, as the func starts)
+    alloc-object: func(l: Lower, dest: s64, a: AllocNode) -> BcValue {
+        if a.stack {
+            if !l.stack-objects.has(dest) { unsupported(l.ir, "an object on the stack it did not make"); }
+            return l.stack-objects[dest];
+        }
+        let m = l.m;
+        let size-type = bitcode.int-type(m, calling.pointer-bytes(l.abi) * 8);
+        let pointer = bitcode.pointer-type(m);
+        let y-new = bitcode.declared(m, "y_new", bitcode.func-type(m, pointer, [size-type, pointer,]), 2);
+        let size = object-layout(l.types, l.ir, intern(a.rec))[0];
+        must(runtime-call(l, y-new, [bitcode.integer(l.f, size-type, size as u64), trace-value(l, a.trace, a.rec),], true))
+    }
+
+    // a payload-less case (the C backend's static K_v__c): a constant global of its tag, the rest
+    // zero, made once
+    singleton-value: func(l: Lower, x: CaseConstant) -> BcValue {
+        let name = gen.singleton(x.owner, x.name);
+        if l.made.singletons.has(name) { return BcValue.global(l.made.singletons[name]); }
+        let v = l.types.g.variants[intern(x.owner)];
+        let tag = -1;
+        for i in 0..v.cases.len() {
+            if v.cases[i].name == x.name { tag = i; }
+        }
+        let layout = variant-layout(l.types, l.ir, intern(x.owner));
+        let bytes = buffer(layout[0]);
+        for k in 0..layout[0] { bytes.push-byte(if k < 4 { (tag >> (k * 8)) & 255 } else { 0 }); }
+        let at = bitcode.add-aligned-bytes(l.m, name, bytes.to-string(), align-code(layout[1]));
+        l.made.singletons.set(name, at);
+        BcValue.global(at)
+    }
+
+    // ---- the collector's roots
+
+    // the pointers a value of type t holds: each as the indices to it in the value (none: the value
+    // itself), as gen's ptr-paths: a string's bytes, a list, map, record or variant, and those
+    // inside a value struct
+    pointer-paths: func(ty: Types, t0: Type) -> list<list<s64>> {
+        let t = resolve(t0);
+        if needs-representing(t) { return pointer-paths(ty, represented(t)); }
+        let itself: list<list<s64>> = [[],];
+        let none-held: list<list<s64>> = [];
+        match t {
+            string-type => [[1,],],
+            buffer-type => itself,
+            func-type(f) => [[1,],],
+            list-type(x) => itself,
+            fixed-list(x) => {
+                let out: list<list<s64>> = [];
+                for k in 0..x.len {
+                    for q in pointer-paths(ty, x.item) { out.push(prefixed([0, k,], q)); }
+                }
+                out
+            }
+            map-type(x) => itself,
+            future-type(x) => itself,
+            seq-type(x) => itself,
+            stream-type(x) => itself,
+            option-type(x) => pointer-paths(ty, x).map({ q -> prefixed([1,], q) }),
+            result-type(r) => {
+                let out = pointer-paths(ty, r.ok).map({ q -> prefixed([1,], q) });
+                for q in pointer-paths(ty, r.err) { out.push(prefixed([2,], q)); }
+                out
+            }
+            tuple-type(xs) => parts-pointers(ty, xs, 0),
+            union-type(xs) => parts-pointers(ty, xs, 1),
+            anon-record(r) => parts-pointers(ty, r.types, 0),
+            named(n) => {
+                let kind = gen.named-kind(ty.g, n);
+                if kind == "record" || kind == "variant" { itself } else { none-held }
+            }
+            _ => none-held,
+        }
+    }
+
+    parts-pointers: func(ty: Types, parts: list<Type>, first: s64) -> list<list<s64>> {
+        let out: list<list<s64>> = [];
+        for index in 0..parts.len() {
+            for q in pointer-paths(ty, parts[index]) { out.push(prefixed([first + index,], q)); }
+        }
+        out
+    }
+
+    prefixed: func(head: list<s64>, rest: list<s64>) -> list<s64> {
+        let out: list<s64> = [];
+        for x in head { out.push(x); }
+        for x in rest { out.push(x); }
+        out
+    }
+
+    // a frame (y_frame: the one before, its slots' count and slots, its stack objects' count and
+    // list)
+    frame-type: func(m: BcModule) -> s64 {
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        bitcode.struct-type(m, [pointer, i64, pointer, i64, pointer,])
+    }
+
+    // the func's roots, as it starts (in its entry block): a slot for each pointer of each rooted
+    // local, its records on the stack (those holding pointers traced), and its frame pushed on
+    // y_top
+    frame-start: func(l: Lower) {
+        let m = l.m;
+        let f = l.f;
+        let ir = l.ir;
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        let count = 0;
+        for i in 0..ir.locals.len() {
+            let paths = pointer-paths(l.types, ir.locals[i].ty);
+            l.root-paths.push(paths);
+            let rooted = ir.rooted.len() == 0 || ir.rooted[i];
+            let has-slot = match l.slots[i] {
+                some(s) => true,
+                none => false,
+            };
+            if paths.len() > 0 && rooted && has-slot {
+                l.root-at.push(count);
+                count += paths.len();
+            } else {
+                l.root-at.push(-1);
+            }
+        }
+        // the records on the stack: made, zeroed
+        let objects: list<BcValue> = [];
+        let traces: list<BcValue> = [];
+        for n in flatten(ir.body) {
+            match n.kind {
+                assign(x) => match x.value.kind {
+                    alloc(a) => {
+                        if a.stack && !l.stack-objects.has(x.dest) {
+                            let ty = object-type(l.types, ir, a.rec);
+                            let layout = object-layout(l.types, ir, intern(a.rec));
+                            let object = scratch-of(l, ty, layout[1]);
+                            let _ = bitcode.add-inst(f, 0, 44, [BcOperand.value(object), BcOperand.value(bitcode.null(f, ty)), BcOperand.raw(align-code(layout[1])), BcOperand.raw(0),], false);
+                            l.stack-objects.set(x.dest, object);
+                            if a.trace != "NULL" {
+                                objects.push(object);
+                                traces.push(trace-value(l, a.trace, a.rec));
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        if count == 0 && objects.len() == 0 { return; }
+        l.framed = true;
+        let null = bitcode.null(f, pointer);
+        let slots = null;
+        if count > 0 {
+            let ty = bitcode.array-type(m, count, pointer);
+            slots = scratch-of(l, ty, calling.pointer-bytes(l.abi));
+            let _ = bitcode.add-inst(f, 0, 44, [BcOperand.value(slots), BcOperand.value(bitcode.null(f, ty)), BcOperand.raw(align-code(calling.pointer-bytes(l.abi))), BcOperand.raw(0),], false);
+            l.roots = slots;
+            l.root-count = count;
+        }
+        let objs = null;
+        if objects.len() > 0 {
+            let entry = bitcode.struct-type(m, [pointer, pointer,]);
+            let ty = bitcode.array-type(m, objects.len(), entry);
+            objs = scratch-of(l, ty, calling.pointer-bytes(l.abi));
+            for k in 0..objects.len() {
+                let at = entry-gep(l, ty, objs, k);
+                entry-store(l, entry-field(l, entry, at, 0), objects[k]);
+                entry-store(l, entry-field(l, entry, at, 1), traces[k]);
+            }
+        }
+        let frame-ty = frame-type(m);
+        let frame = scratch-of(l, frame-ty, 8);
+        let top = BcValue.global(bitcode.external-global(m, "y_top", pointer));
+        let prev = must(bitcode.add-inst(f, 0, 20, [BcOperand.value(top), BcOperand.raw(pointer as u64), BcOperand.raw(align-code(calling.pointer-bytes(l.abi))), BcOperand.raw(0),], true));
+        entry-store(l, entry-field(l, frame-ty, frame, 0), prev);
+        entry-store(l, entry-field(l, frame-ty, frame, 1), bitcode.integer(f, i64, count as u64));
+        entry-store(l, entry-field(l, frame-ty, frame, 2), slots);
+        entry-store(l, entry-field(l, frame-ty, frame, 3), bitcode.integer(f, i64, objects.len() as u64));
+        entry-store(l, entry-field(l, frame-ty, frame, 4), objs);
+        entry-store(l, top, frame);
+        l.frame = frame;
+    }
+
+    // in the entry block: an array's item's address, a struct's field's, a store
+    entry-gep: func(l: Lower, ty: s64, at: BcValue, index: s64) -> BcValue {
+        let i32 = bitcode.int-type(l.m, 32);
+        must(bitcode.add-inst(l.f, 0, 43, [
+            BcOperand.raw(1),
+            BcOperand.raw(ty as u64),
+            BcOperand.value(at),
+            BcOperand.value(bitcode.integer(l.f, i32, 0)),
+            BcOperand.value(bitcode.integer(l.f, i32, index as u64)),
+        ], true))
+    }
+
+    entry-field: func(l: Lower, ty: s64, at: BcValue, index: s64) -> BcValue { entry-gep(l, ty, at, index) }
+
+    entry-store: func(l: Lower, at: BcValue, v: BcValue) {
+        let _ = bitcode.add-inst(l.f, 0, 44, [BcOperand.value(at), BcOperand.value(v), BcOperand.raw(align-code(calling.pointer-bytes(l.abi))), BcOperand.raw(0),], false);
+    }
+
+    // a local just assigned: its pointers into its slots
+    root: func(l: Lower, i: s64) {
+        if i >= l.root-at.len() || l.root-at[i] < 0 { return; }
+        let held-in = l.slots[i];
+        if held-in == none { return; }
+        let slot = must(held-in);
+        let m = l.m;
+        let pointer = bitcode.pointer-type(m);
+        let held = load(l, slot, l.ir.locals[i].ty);
+        let paths = l.root-paths[i];
+        let slots-ty = bitcode.array-type(m, l.root-count, pointer);
+        for k in 0..paths.len() {
+            let p = extract(l, held, paths[k]);
+            let at = field-address(l, l.roots, slots-ty, l.root-at[i] + k);
+            store-as(l, at, p, align-code(calling.pointer-bytes(l.abi)));
+        }
+    }
+
+    // the frame popped (a return): y_top its one before again
+    frame-end: func(l: Lower) {
+        if !l.framed { return; }
+        let m = l.m;
+        let pointer = bitcode.pointer-type(m);
+        let align = align-code(calling.pointer-bytes(l.abi));
+        let prev = load-as(l, field-address(l, l.frame, frame-type(m), 0), pointer, align);
+        store-as(l, BcValue.global(bitcode.external-global(m, "y_top", pointer)), prev, align);
+    }
+
+    // ---- async funcs (as render.yel's render-async): a state machine. Its frame (the task's
+    // header, its result, every local, so they last while it waits; traced), its start (a frame
+    // made, its arguments in it) and its step (back to the state it left, on until it waits again,
+    // 0, or is done, 1)
+
+    // a task's header (y_async: its step, the state it waits in, done, spawned, queued, when it was
+    // done, its owner, its release)
+    async-type: func(m: BcModule) -> s64 {
+        let i32 = bitcode.int-type(m, 32);
+        let pointer = bitcode.pointer-type(m);
+        bitcode.struct-type(m, [pointer, i32, i32, i32, i32, bitcode.int-type(m, 64), pointer, pointer,])
+    }
+
+    async-layout: func(abi: string) -> list<s64> {
+        let p = calling.pointer-bytes(abi);
+        struct-layout([[p, p,], [4, 4,], [4, 4,], [4, 4,], [4, 4,], [8, 8,], [p, p,], [p, p,],])
+    }
+
+    // an async func's start: s_<name>, as the C backend names it
+    start-name: func(f: IrFunc) -> string { "s" + f.c-name.substring(1, f.c-name.len()) }
+
+    // its frame: the header, its result, each local (a () one's a byte, as C's yunit)
+    task-frame: func(ty: Types, f: IrFunc) -> s64 {
+        let fields = [async-type(ty.m), field-type(ty, f, f.result),];
+        for local in f.locals { fields.push(field-type(ty, f, local.ty)); }
+        bitcode.struct-type(ty.m, fields)
+    }
+
+    task-layout: func(ty: Types, f: IrFunc) -> list<s64> {
+        let fields = [async-layout(ty.abi), size-align(ty, f, f.result),];
+        for local in f.locals { fields.push(size-align(ty, f, local.ty)); }
+        struct-layout(fields)
+    }
+
+    // a field of the frame (1 its result, 2 + i local i's), and of its header
+    task-field: func(l: Lower, index: s64) -> BcValue { field-address(l, l.task, l.task-type, index) }
+
+    header-field: func(l: Lower, index: s64) -> BcValue { field-address(l, task-field(l, 0), async-type(l.m), index) }
+
+    // the step's body: each local's slot its field of the frame; from the state it waits in (a
+    // dispatch to each wait's block), else from the start
+    task-step: func(l: Lower) {
+        let ir = l.ir;
+        l.task-type = task-frame(l.types, ir);
+        for i in 0..ir.locals.len() {
+            if gives-value(ir.locals[i].ty) {
+                l.slots.push(bitcode.add-inst(l.f, 0, 43, [
+                    BcOperand.raw(1),
+                    BcOperand.raw(l.task-type as u64),
+                    BcOperand.value(l.task),
+                    BcOperand.value(bitcode.integer(l.f, bitcode.int-type(l.m, 32), 0)),
+                    BcOperand.value(bitcode.integer(l.f, bitcode.int-type(l.m, 32), (2 + i) as u64)),
+                ], true));
+            } else {
+                l.slots.push(none);
+            }
+        }
+        let dispatch = bitcode.new-block(l.f);
+        let body = bitcode.new-block(l.f);
+        l.block = body;
+        stmts(l, ir.body);
+        if !bitcode.ended(l.f, l.block) { task-done(l, unit-const()); }
+        // the dispatch: each state's block, else the body
+        l.block = dispatch;
+        let i32 = bitcode.int-type(l.m, 32);
+        let state = load-as(l, header-field(l, 1), i32, 3);
+        for k in l.resumes.keys() {
+            let next = bitcode.new-block(l.f);
+            branch(l, compare(l, 32, state, bitcode.integer(l.f, i32, k as u64)), l.resumes[k], next);
+            l.block = next;
+        }
+        jump(l, body);
+        let _ = bitcode.add-inst(l.f, 0, 11, [BcOperand.raw(dispatch as u64),], false);
+    }
+
+    // done: its result kept in its frame (a generator's: none), done set, 1
+    task-done: func(l: Lower, v: Node) {
+        let i32 = bitcode.int-type(l.m, 32);
+        if !l.ir.generator {
+            match value(l, v) {
+                some(result) => store-as(l, task-field(l, 1), result, align(l, l.ir.result)),
+                none => {}
+            }
+        }
+        store-as(l, header-field(l, 2), bitcode.integer(l.f, i32, 1), 3);
+        inst(l, 10, [BcOperand.value(bitcode.integer(l.f, i32, 1)),], false);
+    }
+
+    // its start: a frame (y_new, traced), its step set, its arguments in their locals
+    task-start: func(types: Types, made: Made, ir: IrFunc, index: map<string, s64>, externs: map<string, string>) {
+        let m = types.m;
+        let l = new-lower(types, made, m.funcs[index[start-name(ir)]], ir, index, externs);
+        l.task-type = task-frame(types, ir);
+        let pointer = bitcode.pointer-type(m);
+        let size-type = bitcode.int-type(m, calling.pointer-bytes(types.abi) * 8);
+        let y-new = bitcode.declared(m, "y_new", bitcode.func-type(m, pointer, [size-type, pointer,]), 2);
+        let size = task-layout(types, ir)[0];
+        let frame = must(runtime-call(l, y-new, [bitcode.integer(l.f, size-type, size as u64), BcValue.function(task-trace(l)),], true));
+        l.task = frame;
+        store-as(l, header-field(l, 0), BcValue.function(index[ir.c-name]), align-code(calling.pointer-bytes(types.abi)));
+        // its release: stepped in Y_RELEASE_STATE (it lets its host's end go)
+        if ir.release {
+            let release = bitcode.declared(m, "y_async_release_by_step", bitcode.func-type(m, bitcode.void-type(m), [pointer,]), 1);
+            store-as(l, header-field(l, 7), BcValue.function(release), align-code(calling.pointer-bytes(types.abi)));
+        }
+        let at = 0;
+        for k in 0..ir.params.len() {
+            let local = ir.params[k];
+            if gives-value(ir.locals[local].ty) {
+                store-as(l, task-field(l, 2 + local), BcValue.param(at), align(l, ir.locals[local].ty));
+                at += 1;
+            }
+        }
+        inst(l, 10, [BcOperand.value(frame),], false);
+    }
+
+    // the frame's trace: the pointers of its result and of each local marked
+    task-trace: func(l: Lower) -> s64 {
+        let m = l.m;
+        let ir = l.ir;
+        let pointer = bitcode.pointer-type(m);
+        let at = bitcode.add-func(m, "y_trace_Q" + ir.c-name.substring(1, ir.c-name.len()), bitcode.func-type(m, bitcode.void-type(m), [pointer,]), 1, true, true);
+        let t = new-lower(l.types, l.made, m.funcs[at], ir, l.index, l.externs);
+        t.task-type = l.task-type;
+        let mark = bitcode.declared(m, "y_mark", bitcode.func-type(m, bitcode.void-type(m), [pointer,]), 1);
+        let fields = [ir.result,];
+        for local in ir.locals { fields.push(local.ty); }
+        for k in 0..fields.len() {
+            let paths = pointer-paths(l.types, fields[k]);
+            if paths.len() == 0 { continue; }
+            let held = load-as(t, field-address(t, BcValue.param(0), t.task-type, k + 1), field-type(l.types, ir, fields[k]), align(t, fields[k]));
+            for q in paths { let _ = runtime-call(t, mark, [extract(t, held, q),], false); }
+        }
+        inst(t, 10, [], false);
+        at
+    }
+
+    // ---- traces and scans (gen's helpers: funcs of the module)
+
+    // a trace's value (its C name, NULL for none): the helper that marks an object's pointers
+    trace-value: func(l: Lower, name: string, rec: string) -> BcValue {
+        if name == "NULL" { return bitcode.null(l.f, bitcode.pointer-type(l.m)); }
+        if !l.index.has(name) { unsupported(l.ir, "the trace {name} (of {rec}: no helper)"); }
+        BcValue.function(l.index[name])
+    }
+
+    // what scans one item of a list of t (its address given): none, the runtime's for a string or
+    // a pointer, else gen's helper
+    scan-value: func(l: Lower, t: Type) -> BcValue {
+        let m = l.m;
+        let pointer = bitcode.pointer-type(m);
+        let name = gen.scan-fn(l.types.g, t);
+        if name == "NULL" { return bitcode.null(l.f, pointer); }
+        if l.index.has(name) { return BcValue.function(l.index[name]); }
+        if name != "y_scan_str" && name != "y_scan_ptr" { unsupported(l.ir, "the scan {name} (no helper)"); }
+        BcValue.function(bitcode.declared(m, name, bitcode.func-type(m, bitcode.void-type(m), [pointer,]), 1))
+    }
+
+    // ---- the runtime's lists and the std intrinsics on them
+
+    // y_list_of(n, size, items, scan) (a list literal: its items stored in memory first) and
+    // y_list_new(0, size, scan) (an empty one), for the list type the call gives
+    list-made: func(l: Lower, n: Node, c: CallNode) -> option<BcValue> {
+        let m = l.m;
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        let item = match resolve(n.ty) {
+            list-type(x) => x,
+            _ => unsupported(l.ir, "a list made of {show-type(n.ty)}"),
+        };
+        let size = bitcode.integer(l.f, i64, size-align(l.types, l.ir, item)[0] as u64);
+        let scan = scan-value(l, item);
+        if c.c-name == "y_list_new" {
+            let made = bitcode.declared(m, "y_list_new", bitcode.func-type(m, pointer, [i64, i64, pointer,]), 3);
+            return runtime-call(l, made, [must(value(l, c.args[0])), size, scan,], true);
+        }
+        let parts = match c.args[2].kind {
+            make(x) => x.parts,
+            _ => unsupported(l.ir, "a list's items not made in place"),
+        };
+        let item-ty = field-type(l.types, l.ir, item);
+        let align = size-align(l.types, l.ir, item)[1];
+        let items = scratch-of(l, bitcode.array-type(m, parts.len(), item-ty), align);
+        for k in 0..parts.len() {
+            let at = item-address(l, items, item-ty, bitcode.integer(l.f, i64, k as u64));
+            match value(l, parts[k]) {
+                some(v) => store-as(l, at, v, align-code(align)),
+                none => {}
+            }
+        }
+        let made = bitcode.declared(m, "y_list_of", bitcode.func-type(m, pointer, [i64, i64, pointer, pointer,]), 4);
+        runtime-call(l, made, [bitcode.integer(l.f, i64, parts.len() as u64), size, items, scan,], true)
+    }
+
+    // an extern whose C is a template (the C backend writes its text where it is called): std's
+    // memory intrinsics, a string's and a buffer's length, a string's byte, by their yel names
+    // (std's without "yel:std/")
+    intrinsic: func(l: Lower, n: Node, c: CallNode, key: string) -> option<BcValue> {
+        let m = l.m;
+        let i64 = bitcode.int-type(m, 64);
+        let i32 = bitcode.int-type(m, 32);
+        let i8 = bitcode.int-type(m, 8);
+        let pointer = bitcode.pointer-type(m);
+        let word = align-code(8);
+        let name = if key.starts-with("yel:std/") { key.substring(8, key.len()) } else { key };
+        // its arguments, after its type arguments
+        let skip = opt.type-args-before(c.args);
+        let args: list<BcValue> = [];
+        let arg-nodes: list<Node> = [];
+        for k in skip..c.args.len() {
+            arg-nodes.push(c.args[k]);
+            match value(l, c.args[k]) {
+                some(v) => args.push(v),
+                none => args.push(bitcode.integer(l.f, i8, 0)),
+            }
+        }
+        let list-field = { index: s64 -> field-address(l, args[0], ylist-type(m), index) };
+        let buffer-field = { index: s64 -> field-address(l, args[0], ybuffer-type(m), index) };
+        let address = { v: BcValue -> cast(l, v, pointer, 10) };
+        let number = { v: BcValue -> cast(l, v, i64, 9) };
+        let size-type = bitcode.int-type(m, calling.pointer-bytes(l.abi) * 8);
+        let sized = { v: BcValue -> if size-type == i64 { v } else { cast(l, v, size-type, 0) } };
+        // lists
+        if name == "memory.list-length" { return some(load-as(l, list-field(0), i64, word)); }
+        if name == "memory.list-room" { return some(load-as(l, list-field(1), i64, word)); }
+        if name == "memory.item-size" { return some(load-as(l, list-field(2), i64, word)); }
+        if name == "memory.set-length" {
+            store-as(l, list-field(0), args[1], word);
+            return none;
+        }
+        if name == "memory.items-address" { return some(number(load-as(l, list-field(3), pointer, word))); }
+        if name == "memory.set-items" {
+            store-as(l, list-field(3), address(args[1]), word);
+            store-as(l, list-field(1), args[2], word);
+            return none;
+        }
+        if name == "memory.item-at" || name == "memory.set-item" {
+            let get: ListGetNode = { list: arg-nodes[0], index: arg-nodes[1], ctype: "", fixed: false, };
+            if name == "memory.item-at" { return list-item(l, n, get); }
+            let item = arg-nodes[2].ty;
+            if !is-unit(item) { store-as(l, item-memory(l, get, item), args[2], align-code(size-align(l.types, l.ir, item)[1])); }
+            return none;
+        }
+        if name == "memory.new-items" {
+            let bytes = c-function(l, "y_list_bytes", size-type, [i64, i64,], [load-as(l, list-field(2), i64, word), args[1],]);
+            return some(number(c-function(l, "y_new_bytes", pointer, [size-type,], [bytes,])));
+        }
+        // buffers
+        if name == "memory.buffer-length" || name == "buffer.len" { return some(load-as(l, buffer-field(0), i64, word)); }
+        if name == "memory.buffer-room" { return some(load-as(l, buffer-field(1), i64, word)); }
+        if name == "memory.buffer-data" { return some(number(load-as(l, buffer-field(2), pointer, word))); }
+        if name == "memory.set-buffer-length" {
+            store-as(l, buffer-field(0), args[1], word);
+            return none;
+        }
+        if name == "memory.set-buffer-data" {
+            store-as(l, buffer-field(2), address(args[1]), word);
+            store-as(l, buffer-field(1), args[2], word);
+            return none;
+        }
+        // bytes at addresses
+        if name == "memory.new-bytes" { return some(number(c-function(l, "y_new_bytes", pointer, [size-type,], [sized(args[0]),]))); }
+        if name == "memory.store-byte" {
+            store-as(l, address(args[0]), cast(l, args[1], i8, 0), 1);
+            return none;
+        }
+        if name == "memory.load-byte" { return some(cast(l, load-as(l, address(args[0]), i8, 1), i64, 1)); }
+        if name == "memory.copy-bytes" {
+            let _ = c-function(l, "memcpy", pointer, [pointer, pointer, size-type,], [address(args[0]), address(args[1]), sized(args[2]),]);
+            return none;
+        }
+        if name == "memory.same-bytes" || name == "memory.compare-bytes" {
+            let order = c-function(l, "memcmp", i32, [pointer, pointer, size-type,], [address(args[0]), address(args[1]), sized(args[2]),]);
+            if name == "memory.same-bytes" { return some(compare(l, 32, order, bitcode.integer(l.f, i32, 0))); }
+            return some(cast(l, order, i64, 2));
+        }
+        if name == "memory.string-data" { return some(number(extract(l, args[0], [1,]))); }
+        if name == "memory.string-at" {
+            let made = must(inst(l, 27, [BcOperand.value(bitcode.undefined(l.f, string-type(m))), BcOperand.value(args[1]), BcOperand.raw(0),], true));
+            return some(must(inst(l, 27, [BcOperand.value(made), BcOperand.value(address(args[0])), BcOperand.raw(1),], true)));
+        }
+        if name == "memory.bytes-list" {
+            let made = c-function(l, "y_list_of", pointer, [i64, i64, pointer, pointer,], [args[1], bitcode.integer(l.f, i64, 1), address(args[0]), bitcode.null(l.f, pointer),]);
+            return some(made);
+        }
+        // a string as C wants a path (a copy ending in 0, the system's memory), and that let go
+        if name == "memory.c-path" { return some(number(c-call-pointer(l, "y_cstr", [args[0],], [arg-nodes[0].ty,]))); }
+        if name == "memory.free" {
+            let _ = c-function(l, "free", bitcode.void-type(m), [pointer,], [address(args[0]),]);
+            return none;
+        }
+        // a list's first count items taken off (the rest moved to its front)
+        if name == "memory.remove-front" {
+            let length = load-as(l, list-field(0), i64, word);
+            let size = load-as(l, list-field(2), i64, word);
+            let items = load-as(l, list-field(3), pointer, word);
+            let from = item-address(l, items, i8, binop(l, 2, args[1], size));
+            let bytes = binop(l, 2, binop(l, 1, length, args[1]), size);
+            let _ = c-function(l, "memmove", pointer, [pointer, pointer, size-type,], [items, from, sized(bytes),]);
+            store-as(l, list-field(0), binop(l, 1, length, args[1]), word);
+            return none;
+        }
+        // a resource's handle and its number
+        if name == "memory.handle-number" { return some(convert(l, args[0], arg-nodes[0].ty, Type.num("s64"))); }
+        if name == "memory.handle" { return some(convert(l, args[0], arg-nodes[0].ty, n.ty)); }
+        if name == "memory.hold-collector" || name == "memory.release-collector" {
+            hold(l, name == "memory.hold-collector");
+            return none;
+        }
+        // maps
+        if name.starts-with("memory.") && map-intrinsic(l, n, name, args, arg-nodes) { return map-result(l); }
+        // type descriptors (std's value walker reads them), and what it reads through one
+        let descriptor-field = { index: s64 -> field-address(l, address(args[0]), ytype-type(m), index) };
+        if name == "value.type-kind" { return some(cast(l, load-as(l, descriptor-field(0), i8, 1), i32, 1)); }
+        if name == "value.type-count" { return some(load-as(l, descriptor-field(1), i32, 3)); }
+        if name == "value.type-size" { return some(cast(l, load-as(l, descriptor-field(2), i32, 3), i64, 1)); }
+        if name == "value.type-part" || name == "value.part-name" {
+            let table = load-as(l, descriptor-field(if name == "value.type-part" { 3 } else { 5 }), pointer, word);
+            let entry = load-as(l, item-address(l, table, pointer, cast(l, args[1], i64, 2)), pointer, word);
+            if name == "value.type-part" { return some(number(entry)); }
+            let length = c-function(l, "strlen", size-type, [pointer,], [entry,]);
+            let wide = if size-type == i64 { length } else { cast(l, length, i64, 1) };
+            return c-call(l, "y_str_of", [entry, wide,], [Type.address-type, Type.num("s64"),], Type.string-type);
+        }
+        if name == "value.part-offset" {
+            let table = load-as(l, descriptor-field(4), pointer, word);
+            return some(cast(l, load-as(l, item-address(l, table, i32, cast(l, args[1], i64, 2)), i32, 3), i64, 1));
+        }
+        if name == "value.load-at" {
+            if !gives-value(n.ty) { return none; }
+            return some(load-as(l, address(args[0]), field-type(l.types, l.ir, n.ty), align-code(size-align(l.types, l.ir, n.ty)[1])));
+        }
+        if name == "value.list-length" { return some(cast(l, load-as(l, field-address(l, address(args[0]), ylist-type(m), 0), i64, word), i32, 0)); }
+        if name == "value.list-items" { return some(number(load-as(l, field-address(l, address(args[0]), ylist-type(m), 3), pointer, word))); }
+        if name == "value.map-length" { return some(cast(l, load-as(l, field-address(l, address(args[0]), ymap-type(m), 0), i64, word), i32, 0)); }
+        if name == "value.hash-bits" { return some(c-function(l, "y_hash_bits", i64, [i64,], [args[0],])); }
+        if name == "value.hash-mix" { return some(c-function(l, "y_hash_mix", i64, [i64, i64,], [args[0], args[1],])); }
+        // streams between tasks (ystream: its items, room, whether closed, the reader and the
+        // writer parked on it, its host end)
+        if name.starts-with("streams.") {
+            let stream-field = { index: s64 -> field-address(l, args[0], ystream-type(m), index) };
+            let now = { -> load-as(l, BcValue.global(bitcode.external-global(m, "y_async_now", pointer)), pointer, word) };
+            let item = match resolve(n.ty) {
+                stream-type(x) => x.item,
+                list-type(x) => x,
+                _ => n.ty,
+            };
+            if name == "streams.writer-new" {
+                let size = bitcode.integer(l.f, i64, size-align(l.types, l.ir, item)[0] as u64);
+                return some(c-function(l, "y_stream_new", pointer, [i64, pointer, i64,], [size, scan-value(l, item), args[0],]));
+            }
+            if name == "streams.stream-of" { return some(args[0]); }
+            if name == "streams.stream-items" { return some(load-as(l, stream-field(0), pointer, word)); }
+            if name == "streams.stream-closed" { return some(compare(l, 33, load-as(l, stream-field(2), i32, 3), bitcode.integer(l.f, i32, 0))); }
+            if name == "streams.from-host" { return some(compare(l, 33, load-as(l, stream-field(5), i32, 3), bitcode.integer(l.f, i32, 0))); }
+            if name == "streams.writer-room" {
+                let items = load-as(l, stream-field(0), pointer, word);
+                let length = load-as(l, field-address(l, items, ylist-type(m), 0), i64, word);
+                return some(compare(l, 40, length, load-as(l, stream-field(1), i64, word)));
+            }
+            if name == "streams.park-reader" || name == "streams.park-writer" {
+                store-as(l, stream-field(if name == "streams.park-reader" { 3 } else { 4 }), now(), word);
+                return none;
+            }
+            if name == "streams.wake-writer" || name == "streams.wake-reader" {
+                let at = stream-field(if name == "streams.wake-reader" { 3 } else { 4 });
+                let _ = c-function(l, "y_wake", bitcode.void-type(m), [pointer,], [load-as(l, at, pointer, word),]);
+                store-as(l, at, bitcode.null(l.f, pointer), word);
+                return none;
+            }
+            if name == "streams.take-first" {
+                let ty = field-type(l.types, l.ir, n.ty);
+                let into = scratch-of(l, ty, size-align(l.types, l.ir, n.ty)[1]);
+                store-as(l, into, bitcode.null(l.f, ty), align(l, n.ty));
+                let at = c-function(l, "y_list_take_first", pointer, [pointer, pointer,], [args[0], into,]);
+                if !gives-value(n.ty) { return none; }
+                return some(load-as(l, at, ty, align(l, n.ty)));
+            }
+            if name == "streams.fill-from-host" { return some(c-function(l, "yel_stream_fill", pointer, [pointer,], [args[0],])); }
+        }
+        // the executor's
+        if name == "async.has-ready" { return some(c-function(l, "yel_async_has_ready", bitcode.int-type(m, 1), [], [])); }
+        if name == "async.task-done" {
+            let done = load-as(l, field-address(l, args[0], async-type(m), 2), i32, 3);
+            return some(compare(l, 33, done, bitcode.integer(l.f, i32, 0)));
+        }
+        // strings
+        if name == "text.len" { return some(extract(l, args[0], [0,])); }
+        if name == "from-byte" {
+            let byte = scratch-of(l, i8, 1);
+            store-as(l, byte, cast(l, args[0], i8, 0), 1);
+            return c-call(l, "y_str_of", [byte, bitcode.integer(l.f, i64, 1),], [Type.address-type, Type.num("s64"),], Type.string-type);
+        }
+        if name == "byte-at" {
+            // the byte (0 to 255) at an index in the string, -1 past its ends
+            let length = extract(l, args[0], [0,]);
+            let inside = binop(l, 10, compare(l, 39, args[1], bitcode.integer(l.f, i64, 0)), compare(l, 40, args[1], length));
+            let safe = select(l, inside, args[1], bitcode.integer(l.f, i64, 0));
+            let byte = load-as(l, item-address(l, extract(l, args[0], [1,]), i8, safe), i8, 1);
+            return some(select(l, inside, cast(l, byte, i64, 1), bitcode.integer(l.f, i64, 18446744073709551615)));
+        }
+        if name == "unreachable" {
+            inst(l, 15, [], false);
+            l.block = bitcode.new-block(l.f);
+            return none;
+        }
+        unsupported(l.ir, "the extern {name} (C: {c.c-name})")
+    }
+
+    // a map (ymap): its length, entries made and room for them, a key's and a value's size, the
+    // index's room; the index, the entries' hashes, keys and values; what scans a key and a value;
+    // a key's hash and equality
+    ymap-type: func(m: BcModule) -> s64 {
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        bitcode.struct-type(m, [i64, i64, i64, i64, i64, i64, pointer, pointer, pointer, pointer, pointer, pointer, pointer, pointer,])
+    }
+
+    // std's memory intrinsics on maps (whether name is one): its value, if any, in l.given
+    map-intrinsic: func(l: Lower, n: Node, name: string, args: list<BcValue>, nodes: list<Node>) -> bool {
+        let m = l.m;
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        let word = align-code(8);
+        let at = align-code(calling.pointer-bytes(l.abi));
+        let give = { v: BcValue -> l.given = some(v); };
+        l.given = none;
+        if name == "memory.new-map" {
+            let kinds = match resolve(n.ty) {
+                map-type(x) => [x.key, x.value,],
+                _ => unsupported(l.ir, "a map made of {show-type(n.ty)}"),
+            };
+            let g = l.types.g;
+            let helper = { helper-name: string ->
+                if !l.index.has(helper-name) { unsupported(l.ir, "the helper {helper-name}"); }
+                BcValue.function(l.index[helper-name])
+            };
+            let size = { t: Type -> bitcode.integer(l.f, i64, size-align(l.types, l.ir, t)[0] as u64) };
+            give(c-function(l, "y_map_make", pointer, [i64, pointer, pointer, pointer, i64, pointer, i64,], [
+                size(kinds[0]), scan-value(l, kinds[0]), helper(gen.key-hash-fn(g, kinds[0])), helper(gen.key-eq-fn(g, kinds[0])),
+                size(kinds[1]), scan-value(l, kinds[1]), args[0],
+            ]));
+            return true;
+        }
+        let field = { index: s64 -> field-address(l, args[0], ymap-type(m), index) };
+        let counts = ["memory.map-length", "memory.entry-count", "memory.entry-room", "", "", "memory.index-room",];
+        let count-at = counts.index-of(name);
+        if count-at >= 0 {
+            give(load-as(l, field(count-at), i64, word));
+            return true;
+        }
+        if name == "memory.set-map-length" || name == "memory.set-entry-count" {
+            store-as(l, field(if name == "memory.set-map-length" { 0 } else { 1 }), args[1], word);
+            return true;
+        }
+        if name == "memory.adopt" {
+            let other = { index: s64 -> field-address(l, args[1], ymap-type(m), index) };
+            for index in [6, 7, 8, 9,] { store-as(l, field(index), load-as(l, other(index), pointer, at), at); }
+            for index in [2, 5, 1,] { store-as(l, field(index), load-as(l, other(index), i64, word), word); }
+            return true;
+        }
+        let kinds = match resolve(nodes[0].ty) {
+            map-type(x) => [x.key, x.value,],
+            _ => [Type.unit-type, Type.unit-type,],
+        };
+        if name == "memory.key-hash" {
+            let key-ty = field-type(l.types, l.ir, kinds[0]);
+            let key = scratch-of(l, key-ty, size-align(l.types, l.ir, kinds[0])[1]);
+            store-as(l, key, args[1], align-code(size-align(l.types, l.ir, kinds[0])[1]));
+            let hash = load-as(l, field(12), pointer, at);
+            let fn-ty = bitcode.func-type(m, i64, [pointer,]);
+            give(must(inst(l, 34, [BcOperand.raw(0), BcOperand.raw(1 << 15), BcOperand.raw(fn-ty as u64), BcOperand.value(hash), BcOperand.value(key),], true)));
+            return true;
+        }
+        // an entry's or an index slot's place in one of its arrays (index 6, hashes 7, keys 8, values 9)
+        let slot = { array: s64, ty: s64, index: BcValue -> item-address(l, load-as(l, field(array), pointer, at), ty, index) };
+        let element = { t: Type -> field-type(l.types, l.ir, t) };
+        let aligned = { t: Type -> align-code(size-align(l.types, l.ir, t)[1]) };
+        if name == "memory.index-entry" || name == "memory.entry-hash" {
+            give(load-as(l, slot(if name == "memory.index-entry" { 6 } else { 7 }, i64, args[1]), i64, word));
+            return true;
+        }
+        if name == "memory.set-index-entry" || name == "memory.set-entry-hash" {
+            store-as(l, slot(if name == "memory.set-index-entry" { 6 } else { 7 }, i64, args[1]), args[2], word);
+            return true;
+        }
+        if name == "memory.key-at" || name == "memory.value-at" {
+            let t = if name == "memory.key-at" { kinds[0] } else { kinds[1] };
+            if gives-value(t) { give(load-as(l, slot(if name == "memory.key-at" { 8 } else { 9 }, element(t), args[1]), element(t), aligned(t))); }
+            return true;
+        }
+        if name == "memory.set-key" || name == "memory.set-value" {
+            let t = if name == "memory.set-key" { kinds[0] } else { kinds[1] };
+            store-as(l, slot(if name == "memory.set-key" { 8 } else { 9 }, element(t), args[1]), args[2], aligned(t));
+            return true;
+        }
+        if name == "memory.clear-entry" {
+            store-as(l, slot(8, element(kinds[0]), args[1]), bitcode.null(l.f, element(kinds[0])), aligned(kinds[0]));
+            store-as(l, slot(9, element(kinds[1]), args[1]), bitcode.null(l.f, element(kinds[1])), aligned(kinds[1]));
+            return true;
+        }
+        if name == "memory.clear-index" {
+            let size-type = bitcode.int-type(m, calling.pointer-bytes(l.abi) * 8);
+            let bytes = binop(l, 2, load-as(l, field(5), i64, word), bitcode.integer(l.f, i64, 8));
+            let sized = if size-type == i64 { bytes } else { cast(l, bytes, size-type, 0) };
+            let _ = c-function(l, "memset", pointer, [pointer, bitcode.int-type(m, 32), size-type,], [load-as(l, field(6), pointer, at), bitcode.integer(l.f, bitcode.int-type(m, 32), 0), sized,]);
+            return true;
+        }
+        false
+    }
+
+    // what a map intrinsic gave (none for one that gives nothing)
+    map-result: func(l: Lower) -> option<BcValue> { l.given }
+
+    // a call of a C function giving a pointer (char *, void *), its args of yel types
+    c-call-pointer: func(l: Lower, name: string, args: list<BcValue>, types: list<Type>) -> BcValue {
+        must(c-call(l, name, args, types, Type.address-type))
+    }
+
+    // a stream (ystream): its items, room, whether closed, its reader and writer parked, its host
+    // end (the fields after: the host's, read by the runtime only)
+    ystream-type: func(m: BcModule) -> s64 {
+        let pointer = bitcode.pointer-type(m);
+        let i32 = bitcode.int-type(m, 32);
+        bitcode.struct-type(m, [pointer, bitcode.int-type(m, 64), i32, pointer, pointer, i32,])
+    }
+
+    // a buffer (ybuffer): its length and room, its bytes
+    ybuffer-type: func(m: BcModule) -> s64 {
+        let i64 = bitcode.int-type(m, 64);
+        bitcode.struct-type(m, [i64, i64, bitcode.pointer-type(m),])
+    }
+
+    // a cast (CAST: trunc 0, zext 1, sext 2, ptrtoint 9, inttoptr 10)
+    cast: func(l: Lower, v: BcValue, ty: s64, op: u64) -> BcValue {
+        must(inst(l, 3, [BcOperand.value(v), BcOperand.raw(ty as u64), BcOperand.raw(op),], true))
+    }
+
+    // a call of a C function of scalars (the runtime's, libc's), declared with its C types
+    // (a void one's value: none to use, a null pointer stands for it)
+    c-function: func(l: Lower, name: string, result: s64, params: list<s64>, args: list<BcValue>) -> BcValue {
+        let callee = bitcode.declared(l.m, name, bitcode.func-type(l.m, result, params), params.len());
+        match runtime-call(l, callee, args, true) {
+            some(v) => v,
+            none => bitcode.null(l.f, bitcode.pointer-type(l.m)),
+        }
+    }
+
+    // the collector held (y_gc_hold, a C long, one more) or released (one less)
+    hold: func(l: Lower, more: bool) {
+        let m = l.m;
+        let long = bitcode.int-type(m, calling.pointer-bytes(l.abi) * 8);
+        let counter = BcValue.global(bitcode.external-global(m, "y_gc_hold", long));
+        let align = align-code(calling.pointer-bytes(l.abi));
+        let now = load-as(l, counter, long, align);
+        store-as(l, counter, binop(l, if more { 0 } else { 1 }, now, bitcode.integer(l.f, long, 1)), align);
+    }
+
+    // an interpolated string: each piece written into a buffer by its writer (std's: a program
+    // func), the collector held meanwhile, the buffer's string
+    interpolated: func(l: Lower, s: InterpNode) -> BcValue {
+        let m = l.m;
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        hold(l, true);
+        let new-buffer = bitcode.declared(m, "yel_buffer_new", bitcode.func-type(m, pointer, [i64,]), 1);
+        let buffer-value = must(runtime-call(l, new-buffer, [bitcode.integer(l.f, i64, 16),], true));
+        for k in 0..s.parts.len() {
+            let writer = match s.formatters[k] {
+                writer(name) => name,
+                // std's walker over the value's descriptor, its text pushed
+                render(x) => {
+                    write-rendered(l, buffer-value, s.parts[k], x);
+                    continue;
+                }
+            };
+            if !l.index.has(writer) { unsupported(l.ir, "the writer {writer}"); }
+            let callee = l.index[writer];
+            let operands: list<BcOperand> = [
+                BcOperand.raw(0),
+                BcOperand.raw(1 << 15),
+                BcOperand.raw(m.funcs[callee].ty as u64),
+                BcOperand.value(BcValue.function(callee)),
+                BcOperand.value(buffer-value),
+            ];
+            match value(l, s.parts[k]) {
+                some(v) => {
+                    // as C converts it to the writer's param (an s32 to write-int's s64)
+                    let want = m.type-operands[m.funcs[callee].ty][3] as s64;
+                    let have = value-type(l.types, l.ir, s.parts[k].ty);
+                    let given = if want != have && m.type-codes[want] == 7 && m.type-codes[have] == 7 {
+                        cast(l, v, want, if m.type-operands[want][0] < m.type-operands[have][0] { 0 } else if signed(s.parts[k].ty) { 2 } else { 1 })
+                    } else {
+                        v
+                    };
+                    operands.push(BcOperand.value(given));
+                }
+                none => {}
+            }
+            let _ = inst(l, 34, operands, bitcode.void-type(m) != result-of(m, callee));
+        }
+        let text = must(c-call(l, "yel_buffer_string", [buffer-value,], [Type.buffer-type,], Type.string-type));
+        hold(l, false);
+        text
+    }
+
+    // a func's result type (its function type's second operand)
+    result-of: func(m: BcModule, callee: s64) -> s64 { m.type-operands[m.funcs[callee].ty][1] as s64 }
+
+    // a value's text by std's walker (value.render over its type's descriptor, display or WAVE),
+    // pushed at a buffer's end
+    write-rendered: func(l: Lower, buffer-value: BcValue, part: Node, shown: RenderFormat) {
+        let m = l.m;
+        let i64 = bitcode.int-type(m, 64);
+        let g = l.types.g;
+        let render = g.funcs[gen.render-key()].c-name;
+        let push = g.funcs["yel:std/buffer.push"].c-name;
+        if !l.index.has(render) || !l.index.has(push) { unsupported(l.ir, "std's value.render (not in the module)"); }
+        // the value where the walker reads it
+        let ty = field-type(l.types, l.ir, part.ty);
+        let align = size-align(l.types, l.ir, part.ty)[1];
+        let held = scratch-of(l, ty, align);
+        match value(l, part) {
+            some(v) => store-as(l, held, v, align-code(align)),
+            none => {}
+        }
+        let descriptor = BcValue.global(descriptor-global(l, shown.held));
+        let text = must(module-call(l, l.index[render], [cast(l, descriptor, i64, 9), cast(l, held, i64, 9), bitcode.integer(l.f, bitcode.int-type(m, 1), if shown.display { 1 } else { 0 }),]));
+        let _ = module-call(l, l.index[push], [buffer-value, text,]);
+    }
+
+    // a call of one of the module's funcs (by its index)
+    module-call: func(l: Lower, callee: s64, args: list<BcValue>) -> option<BcValue> {
+        let m = l.m;
+        let operands = [BcOperand.raw(0), BcOperand.raw(1 << 15), BcOperand.raw(m.funcs[callee].ty as u64), BcOperand.value(BcValue.function(callee)),];
+        for a in args { operands.push(BcOperand.value(a)); }
+        inst(l, 34, operands, result-of(m, callee) != bitcode.void-type(m))
+    }
+
+    // ---- type descriptors (runtime/yel.h's ytype, as gen's type-desc makes them for C): what
+    // std's value walker reads to show, compare or hash any value
+
+    // a descriptor: its kind, its count (a fixed list's length; its fields, cases, kinds or flags),
+    // its value's size, and its parts' descriptors, offsets and names (each an array, or null)
+    ytype-type: func(m: BcModule) -> s64 {
+        let pointer = bitcode.pointer-type(m);
+        bitcode.struct-type(m, [bitcode.int-type(m, 8), bitcode.int-type(m, 32), bitcode.int-type(m, 32), pointer, pointer, pointer,])
+    }
+
+    // the descriptor of type held: a global, made once (its parts' after it: a type may hold itself)
+    descriptor-global: func(l: Lower, held0: Type) -> s64 {
+        let held = resolve(held0);
+        let g = l.types.g;
+        let name = "Y_D_" + gen.type-id(g, held);
+        if l.made.singletons.has(name) { return l.made.singletons[name]; }
+        let m = l.m;
+        let at = bitcode.add-aggregate(m, name, ytype-type(m), [], align-code(8));
+        l.made.singletons.set(name, at);
+        let kinds = [
+            "UNIT", "BOOL", "CHAR", "SIGNED", "UNSIGNED", "F32", "F64", "STRING", "BUFFER", "MAP", "LIST", "FIXED", "OPTION",
+            "RESULT", "TUPLE", "ANON_RECORD", "RECORD", "VARIANT", "ENUM", "FLAGS", "HANDLE", "UNION", "FUNC", "FUTURE", "SEQ",
+            "STREAM",
+        ];
+        let kind = "UNIT";
+        let count = 0;
+        let parts: list<option<Type>> = [];
+        let offsets: list<s64> = [];
+        let names: list<string> = [];
+        let layout = { fields: list<Type> -> fields.map({ x -> size-align(l.types, l.ir, x) }) };
+        match held {
+            num(n) => { kind = if n == "f32" { "F32" } else if n == "f64" { "F64" } else if is-signed(n) { "SIGNED" } else { "UNSIGNED" }; }
+            bool-type => { kind = "BOOL"; }
+            char-type => { kind = "CHAR"; }
+            string-type => { kind = "STRING"; }
+            buffer-type => { kind = "BUFFER"; }
+            map-type(_) => { kind = "MAP"; }
+            func-type(_) => { kind = "FUNC"; }
+            future-type(_) => { kind = "FUTURE"; }
+            seq-type(_) => { kind = "SEQ"; }
+            stream-type(_) => { kind = "STREAM"; }
+            list-type(item) => {
+                kind = "LIST";
+                parts.push(some(item));
+            }
+            fixed-list(fixed) => {
+                kind = "FIXED";
+                count = fixed.len;
+                parts.push(some(fixed.item));
+            }
+            option-type(inner) => {
+                kind = "OPTION";
+                parts.push(some(inner));
+                offsets = struct-offsets([[1, 1,], size-align(l.types, l.ir, inner),]);
+            }
+            result-type(sides) => {
+                kind = "RESULT";
+                parts = [some(sides.ok), some(sides.err),];
+                offsets = struct-offsets([[1, 1,], size-align(l.types, l.ir, sides.ok), size-align(l.types, l.ir, sides.err),]);
+            }
+            tuple-type(members) => {
+                kind = "TUPLE";
+                count = members.len();
+                for x in members { parts.push(some(x)); }
+                offsets = struct-offsets(layout(members));
+            }
+            anon-record(fields) => {
+                kind = "ANON_RECORD";
+                count = fields.fields.len();
+                for x in fields.types { parts.push(some(x)); }
+                offsets = struct-offsets(layout(fields.types));
+                names = fields.fields;
+            }
+            union-type(members) => {
+                kind = "UNION";
+                count = members.len();
+                for x in members { parts.push(some(x)); }
+                let sizes: list<list<s64>> = [[4, 4,],];
+                for x in layout(members) { sizes.push(x); }
+                offsets = struct-offsets(sizes);
+            }
+            named(type-name) => {
+                let declared = gen.named-kind(g, type-name);
+                if declared == "record" {
+                    kind = "RECORD";
+                    let decl = g.records[type-name];
+                    count = decl.fields.len();
+                    for x in decl.field-types { parts.push(some(x)); }
+                    offsets = struct-offsets(layout(decl.field-types));
+                    names = decl.fields;
+                } else if declared == "flags" {
+                    kind = "FLAGS";
+                    count = g.flags[type-name].flags.len();
+                    names = g.flags[type-name].flags;
+                } else if declared == "handle" {
+                    kind = "HANDLE";
+                    names = [base-name(name-text(type-name)),];
+                } else {
+                    let decl = g.variants[type-name];
+                    kind = if declared == "enum" { "ENUM" } else { "VARIANT" };
+                    count = decl.cases.len();
+                    let payload-at = struct-offsets([[4, 4,], union-layout(l.types, l.ir, type-name),])[1];
+                    if declared != "enum" { offsets.push(0); }
+                    for k in decl.cases {
+                        names.push(k.name);
+                        if declared != "enum" {
+                            if k.has-payload {
+                                parts.push(some(k.payload));
+                                offsets.push(payload-at);
+                            } else {
+                                parts.push(none);
+                                offsets.push(0);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let pointer = bitcode.pointer-type(m);
+        let i32 = bitcode.int-type(m, 32);
+        let address = { global: s64 -> element-address(m, global) };
+        let null: BcElement = { ty: pointer, kind: 1, value: 0, };
+        // its tables: arrays of its parts' descriptors (or null), offsets and names
+        let parts-at = if parts.len() == 0 { null } else {
+            let items: list<BcElement> = [];
+            for p in parts {
+                match p {
+                    some(x) => items.push(address(descriptor-global(l, x))),
+                    none => items.push(null),
+                }
+            }
+            address(bitcode.add-aggregate(m, name + "_parts", bitcode.array-type(m, items.len(), pointer), items, align-code(8)))
+        };
+        let offsets-at = if offsets.len() == 0 { null } else {
+            let items: list<BcElement> = offsets.map({ x -> element-integer(i32, x as u64) });
+            address(bitcode.add-aggregate(m, name + "_offsets", bitcode.array-type(m, items.len(), i32), items, align-code(4)))
+        };
+        let names-at = if names.len() == 0 { null } else {
+            let items: list<BcElement> = names.map({ x -> address(c-string-global(m, x)) });
+            address(bitcode.add-aggregate(m, name + "_names", bitcode.array-type(m, items.len(), pointer), items, align-code(8)))
+        };
+        let size = size-align(l.types, l.ir, held)[0];
+        m.globals[at].elements = [
+            element-integer(bitcode.int-type(m, 8), kinds.index-of(kind) as u64),
+            element-integer(i32, count as u64),
+            element-integer(i32, size as u64),
+            parts-at,
+            offsets-at,
+            names-at,
+        ];
+        at
+    }
+
+    // an aggregate's element: a global's address, an integer
+    element-address: func(m: BcModule, global: s64) -> BcElement { { ty: bitcode.pointer-type(m), kind: 2, value: global as u64, } }
+
+    element-integer: func(ty: s64, bits: u64) -> BcElement { { ty: ty, kind: 0, value: bits, } }
+
+    // where each field of a struct is (each padded to its alignment), in bytes
+    struct-offsets: func(fields: list<list<s64>>) -> list<s64> {
+        let out: list<s64> = [];
+        let offset = 0;
+        for field in fields {
+            offset = round-up(offset, field[1]);
+            out.push(offset);
+            offset += field[0];
+        }
+        out
+    }
+}
+
+// ================================================================ C calling conventions
+
+// C's calling conventions, as the bitcode backend needs them to call the runtime: how a C
+// function's params and result cross a call on a target, as clang lowers them. A scalar goes as
+// itself; a struct by value goes as each target's ABI says:
+//
+//   arm64 (AAPCS64, Apple's alike): at most 16 bytes in registers, as an i64 or [2 x i64] (floats
+//     only, at most 4 of one kind: as an array of them); a bigger one by a pointer to a copy the
+//     caller makes, and a bigger result written where a hidden pointer says (sret)
+//   x86-64 (System V): at most 16 bytes as one scalar per eightbyte (an integer's, a pointer's or a
+//     double's), while registers last; else in memory (byval), a bigger result by sret
+//   wasm32 (the C ABI clang's wasm targets keep): a struct of one scalar as that scalar; any other
+//     in memory (byval), its result by sret
+//
+// The caller (llvm.yel) stores a struct into memory and loads each part from it (or passes the
+// memory itself), as clang does: the parts are offsets into the struct's bytes.
+
+// a scalar of a C value: an integer (bits: its width), a float (32 or 64) or a pointer, at offset
+// bytes in it
+record Scalar { kind: ScalarKind, bits: s64, offset: s64, }
+
+variant ScalarKind {
+    integer,
+    float,
+    pointer,
+}
+
+// a C value's layout: a scalar (aggregate false: its one scalar), or a struct's scalars, size and
+// alignment in bytes
+record Layout { aggregate: bool, scalars: list<Scalar>, size: s64, align: s64, }
+
+// one IR param (or result) a value crosses as: count of one scalar kind, as one scalar, an array
+// of them (arm64's [2 x i64], [n x double]) or a vector (x86-64's <2 x float>), loaded from offset
+// bytes into it, as clang writes it
+record Part { kind: ScalarKind, bits: s64, count: s64, offset: s64, form: PartForm, }
+
+variant PartForm {
+    scalar,
+    array,
+    vector,
+    fields,
+}
+
+// how a value crosses a call: as itself (a scalar), in parts, or in memory (a pointer to a copy:
+// byval when the copy is the callee's, as on x86-64 and wasm32; for a result, sret)
+record Passing { how: PassingKind, parts: list<Part>, }
+
+variant PassingKind {
+    direct,
+    parts,
+    memory,
+    byval,
+}
+
+// a C signature's passing: each param's, and the result's (none: void)
+record Signature { params: list<Passing>, result: option<Passing>, }
+
+module calling {
+    // the ABI a target triple names: "arm64", "x86-64", "wasm32", or "" for one not known
+    abi: func(triple: string) -> string {
+        if triple.starts-with("aarch64") || triple.starts-with("arm64") { return "arm64"; }
+        if triple.starts-with("x86_64") && !triple.contains("windows") { return "x86-64"; }
+        if triple.starts-with("wasm32") { return "wasm32"; }
+        ""
+    }
+
+    // a pointer's bytes on a target
+    pointer-bytes: func(abi: string) -> s64 { if abi == "wasm32" { 4 } else { 8 } }
+
+    scalar-bytes: func(abi: string, s: Scalar) -> s64 {
+        match s.kind {
+            pointer => pointer-bytes(abi),
+            _ => if s.bits <= 8 { 1 } else { s.bits / 8 },
+        }
+    }
+
+    // a struct's layout from its fields' scalars (each field one scalar, laid out as C does)
+    layout: func(abi: string, fields: list<Scalar>) -> Layout {
+        let scalars: list<Scalar> = [];
+        let offset = 0;
+        let align = 1;
+        for f in fields {
+            let bytes = scalar-bytes(abi, f);
+            offset = (offset + bytes - 1) / bytes * bytes;
+            scalars.push({ kind: f.kind, bits: f.bits, offset: offset, });
+            offset += bytes;
+            if bytes > align { align = bytes; }
+        }
+        { aggregate: true, scalars: scalars, size: (offset + align - 1) / align * align, align: align, }
+    }
+
+    // a struct's layout from its scalars as they are laid out (each at its offset: a nested
+    // struct's padding kept), its size and alignment
+    aggregate: func(scalars: list<Scalar>, size: s64, align: s64) -> Layout {
+        { aggregate: true, scalars: scalars, size: size, align: align, }
+    }
+
+    // a scalar's layout (as a param or result: it goes as itself)
+    scalar: func(abi: string, kind: ScalarKind, bits: s64) -> Layout {
+        let s: Scalar = { kind: kind, bits: bits, offset: 0, };
+        let bytes = scalar-bytes(abi, s);
+        { aggregate: false, scalars: [s,], size: bytes, align: bytes, }
+    }
+
+    // how a signature's params and result cross on a target (abi: abi(triple)'s)
+    signature: func(abi: string, params: list<Layout>, result: option<Layout>) -> Signature {
+        if abi == "arm64" { return arm64(params, result); }
+        if abi == "x86-64" { return x86-64(params, result); }
+        wasm32(params, result)
+    }
+
+    direct: func() -> Passing { { how: PassingKind.direct, parts: [], } }
+
+    in-memory: func(byval: bool) -> Passing { { how: if byval { PassingKind.byval } else { PassingKind.memory }, parts: [], } }
+
+    in-parts: func(parts: list<Part>) -> Passing { { how: PassingKind.parts, parts: parts, } }
+
+    // ---- arm64
+
+    arm64: func(params: list<Layout>, result: option<Layout>) -> Signature {
+        let out: list<Passing> = [];
+        for p in params { out.push(arm64-value(p)); }
+        let r = match result {
+            some(layout) => {
+                // a float-only struct's result: as that struct ({ double, double }: clang's)
+                let passing = arm64-value(layout);
+                if passing.how == PassingKind.parts && passing.parts[0].kind == ScalarKind.float {
+                    passing.parts[0].form = PartForm.fields;
+                }
+                some(passing)
+            }
+            none => none,
+        };
+        { params: out, result: r, }
+    }
+
+    // (a result in memory: sret, which the caller makes the same way)
+    arm64-value: func(layout: Layout) -> Passing {
+        if !layout.aggregate { return direct(); }
+        if layout.size > 16 { return in-memory(false); }
+        // a homogeneous float aggregate: 1 to 4 floats of one width, in float registers
+        let floats = layout.scalars.filter({ s -> s.kind == ScalarKind.float });
+        if floats.len() == layout.scalars.len() && floats.len() <= 4 && floats.len() > 0 {
+            let bits = floats[0].bits;
+            if floats.all({ s -> s.bits == bits }) {
+                return in-parts([{ kind: ScalarKind.float, bits: bits, count: floats.len(), offset: 0, form: PartForm.array, },]);
+            }
+        }
+        let words = (layout.size + 7) / 8;
+        in-parts([{ kind: ScalarKind.integer, bits: 64, count: words, offset: 0, form: if words > 1 { PartForm.array } else { PartForm.scalar }, },])
+    }
+
+    // ---- x86-64 (System V)
+
+    x86-64: func(params: list<Layout>, result: option<Layout>) -> Signature {
+        // the registers left: 6 for integers and pointers, 8 for floats
+        let integers = 6;
+        let floats = 8;
+        let r: option<Passing> = none;
+        match result {
+            some(layout) => {
+                let passing = x86-64-value(layout);
+                if passing.how == PassingKind.memory || (layout.aggregate && layout.size > 16) {
+                    // sret: its pointer takes a register
+                    integers -= 1;
+                    r = some(in-memory(false));
+                } else {
+                    r = some(passing);
+                }
+            }
+            none => {}
+        }
+        let out: list<Passing> = [];
+        for p in params {
+            let passing = x86-64-value(p);
+            if passing.how == PassingKind.memory {
+                out.push(in-memory(true));
+                continue;
+            }
+            // what it needs of each kind of register, if it has them all; else all of it in memory
+            let need-integers = 0;
+            let need-floats = 0;
+            if passing.how == PassingKind.direct {
+                if p.scalars[0].kind == ScalarKind.float { need-floats = 1; } else { need-integers = 1; }
+            } else {
+                for part in passing.parts {
+                    if part.kind == ScalarKind.float { need-floats += 1; } else { need-integers += 1; }
+                }
+            }
+            if need-integers <= integers && need-floats <= floats {
+                integers -= need-integers;
+                floats -= need-floats;
+                out.push(passing);
+            } else if passing.how == PassingKind.direct {
+                // a scalar goes on the stack as itself
+                out.push(passing);
+            } else {
+                out.push(in-memory(true));
+            }
+        }
+        { params: out, result: r, }
+    }
+
+    // a value's eightbytes, each an integer's (any integer or pointer in it) or a float's; a bigger
+    // value in memory
+    x86-64-value: func(layout: Layout) -> Passing {
+        if !layout.aggregate { return direct(); }
+        if layout.size > 16 { return in-memory(true); }
+        let parts: list<Part> = [];
+        let offset = 0;
+        loop {
+            if offset >= layout.size { break; }
+            let inside = layout.scalars.filter({ s -> s.offset >= offset && s.offset < offset + 8 });
+            let bytes = if layout.size - offset < 8 { layout.size - offset } else { 8 };
+            if inside.len() == 1 && inside[0].offset == offset {
+                // one scalar at the eightbyte's start: as itself
+                let s = inside[0];
+                parts.push({ kind: s.kind, bits: s.bits, count: 1, offset: offset, form: PartForm.scalar, });
+            } else if inside.len() > 0 && inside.all({ s -> s.kind == ScalarKind.float }) {
+                // floats only (two f32s): one SSE register, as <2 x float>
+                parts.push({ kind: ScalarKind.float, bits: 32, count: 2, offset: offset, form: PartForm.vector, });
+            } else {
+                parts.push({ kind: ScalarKind.integer, bits: integer-bits(bytes), count: 1, offset: offset, form: PartForm.scalar, });
+            }
+            offset += 8;
+        }
+        in-parts(parts)
+    }
+
+    // an integer part's bits, of bytes (the last eightbyte's: as few as hold them)
+    integer-bits: func(bytes: s64) -> s64 {
+        if bytes <= 1 { return 8; }
+        if bytes <= 2 { return 16; }
+        if bytes <= 4 { return 32; }
+        64
+    }
+
+    // ---- wasm32
+
+    wasm32: func(params: list<Layout>, result: option<Layout>) -> Signature {
+        let out: list<Passing> = [];
+        for p in params { out.push(wasm32-value(p, true)); }
+        let r = match result {
+            some(layout) => some(wasm32-value(layout, false)),
+            none => none,
+        };
+        { params: out, result: r, }
+    }
+
+    // a struct of one scalar as that scalar; any other in memory (byval; a result: sret)
+    wasm32-value: func(layout: Layout, param: bool) -> Passing {
+        if !layout.aggregate { return direct(); }
+        if layout.scalars.len() == 1 {
+            let s = layout.scalars[0];
+            return in-parts([{ kind: s.kind, bits: s.bits, count: 1, offset: 0, form: PartForm.scalar, },]);
+        }
+        in-memory(param)
+    }
+}

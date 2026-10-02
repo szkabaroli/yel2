@@ -1,0 +1,26 @@
+// basics: functions, recursion, loops, strings, lists
+fib: func(n: s32) -> s32 {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+sum-to: func(n: s32) -> s32 {
+    let total = 0;
+    for i in 0..=n { total += i; }
+    total
+}
+
+main: func(argv: list<string>) -> s32 {
+    let names = ["yel", "zero",];
+    names.push("bootstrap");
+    print("fib(20) = {fib(20)}\n");
+    print("sum-to(100) = {sum-to(100)}\n");
+    print("names: {names.join(", ")} ({names.len()})\n");
+    let word = "hello";
+    let shout = "";
+    for i in 0..word.len() { shout = shout + from-byte(word.byte-at(i) - 32); }
+    print(shout + "!\n");
+    let m = map.new();
+    m.set("a", 1);
+    if m.has("a") && !m.has("b") { print("map ok {m["a"]}\n"); }
+    0
+}

@@ -1,0 +1,31 @@
+// structs holding floats given to C and given back (tests/bitcode/floats.c), each as the target's C
+// calling convention passes it
+
+@c(name = "floats_swap") swap: extern func(p: tuple<f64, f64>) -> tuple<f64, f64>;
+@c(name = "floats_sum5") sum5: extern func(a: tuple<f64, f64>, b: tuple<f64, f64>, c: tuple<f64, f64>, d: tuple<f64, f64>, e: tuple<f64, f64>) -> f64;
+@c(name = "floats_scale") scale: extern func(v: tuple<f32, f32, f32>, k: f32) -> tuple<f32, f32, f32>;
+@c(name = "floats_mix") mix: extern func(v: tuple<f64, s64>) -> tuple<f64, s64>;
+@c(name = "floats_pair") pair: extern func(v: tuple<s32, f32>) -> tuple<s32, f32>;
+@c(name = "floats_reverse") reverse: extern func(v: tuple<f64, f64, f64, f64, f64>) -> tuple<f64, f64, f64, f64, f64>;
+@c(name = "floats_half") half: extern func(v: option<f64>) -> option<f64>;
+@c(name = "floats_negate") negate: extern func(r: { x: f64 }) -> { x: f64 };
+@c(name = "floats_nested") nested: extern func(n: tuple<tuple<f32, s32>, f64>) -> tuple<tuple<f32, s32>, f64>;
+
+main: func() -> s32 {
+    let s = swap((1.5, 2.25));
+    print("swap {s.0} {s.1}\n");
+    print("sum5 {sum5((1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 0.5))}\n");
+    let v = scale((1.0, 2.5, -4.0), 2.0);
+    print("scale {v.0} {v.1} {v.2}\n");
+    let m = mix((0.75, 41));
+    print("mix {m.0} {m.1}\n");
+    let p = pair((7, 1.25));
+    print("pair {p.0} {p.1}\n");
+    let r = reverse((1.0, 2.0, 3.0, 4.0, 5.0));
+    print("reverse {r.0} {r.1} {r.2} {r.3} {r.4}\n");
+    print("half {half(some(5.0)):?} {half(none):?}\n");
+    print("negate {negate({ x: 2.5, }).x}\n");
+    let n = nested(((1.5, 3), 0.25));
+    print("nested {n.0.0} {n.0.1} {n.1}\n");
+    0
+}

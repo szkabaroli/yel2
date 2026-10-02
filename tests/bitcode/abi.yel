@@ -1,0 +1,26 @@
+// values across C calls (tests/bitcode/abi.c): a string both ways, narrow integers and bools
+// widened, more strings than registers, scalars and strings mixed
+
+@c(name = "abi_echo") echo: extern func(s: string) -> string;
+@c(name = "abi_narrow") narrow: extern func(a: s8, b: u8, c: s16, d: u16, e: bool) -> s64;
+@c(name = "abi_odd") odd: extern func(x: s32) -> bool;
+@c(name = "abi_negate") negate: extern func(x: s8) -> s8;
+@c(name = "abi_wide") wide: extern func(x: u16) -> u16;
+@c(name = "abi_fourth") fourth: extern func(a: string, b: string, c: string, d: string) -> string;
+@c(name = "abi_lengths") lengths: extern func(a: string, b: string, c: string, d: string) -> s64;
+@c(name = "abi_mixed") mixed: extern func(a: s64, s: string, b: s32, t: string, c: u8) -> s64;
+
+main: func() -> s32 {
+    print(echo("echoed\n"));
+    print(echo(""));
+    if narrow(-3, 200, -300, 60000, true) == -30000 + 200000 - 30000 + 600000 + 1 { print("narrow ok\n"); } else { print("narrow wrong\n"); }
+    if narrow(127, 255, 32767, 65535, false) == 1270000 + 255000 + 3276700 + 655350 { print("narrow edges ok\n"); } else { print("narrow edges wrong\n"); }
+    if odd(7) && !odd(8) { print("bool ok\n"); } else { print("bool wrong\n"); }
+    let n = negate(5);
+    if n == -5 && negate(-128) == -128 { print("s8 ok\n"); } else { print("s8 wrong\n"); }
+    if wide(40000) == 14464 { print("u16 ok\n"); } else { print("u16 wrong\n"); }
+    print(fourth("a", "bb", "ccc", "fourth\n"));
+    if lengths("a", "bb", "ccc", "dddd") == 1 + 20 + 300 + 4000 { print("lengths ok\n"); } else { print("lengths wrong\n"); }
+    if mixed(1, "xx", 3, "yyyy", 5) == 1 + 20 + 300 + 4000 + 50000 { print("mixed ok\n"); } else { print("mixed wrong\n"); }
+    0
+}

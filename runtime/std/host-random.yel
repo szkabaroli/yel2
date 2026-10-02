@@ -1,0 +1,47 @@
+//+build native
+
+// wasi:random natively, as host-filesystem.yel is wasi:filesystem: the system's entropy
+// (getentropy), for the secure and the insecure interfaces alike. A program's calls of wasi:random
+// bind to these natively and to the host itself in a component.
+
+module wasi-random-random {
+    get-random-bytes: func(max-len: u64) -> list<u8> { entropy.bytes(max-len as s64) }
+
+    get-random-u64: func() -> u64 { entropy.number() }
+}
+
+module wasi-random-insecure {
+    get-insecure-random-bytes: func(max-len: u64) -> list<u8> { entropy.bytes(max-len as s64) }
+
+    get-insecure-random-u64: func() -> u64 { entropy.number() }
+}
+
+module wasi-random-insecure-seed {
+    get-insecure-seed: func() -> tuple<u64, u64> { (entropy.number(), entropy.number()) }
+}
+
+module entropy {
+    // count random bytes, read from the system 256 at a time (getentropy's most)
+    bytes: func(count: s64) -> list<u8> {
+        let bytes: list<u8> = [];
+        for _ in 0..count { bytes.push(0); }
+        let at = memory.items-address(bytes);
+        let done = 0;
+        loop {
+            if done >= count { break; }
+            let chunk = if count - done > 256 { 256 } else { count - done };
+            if fill(at + done, chunk) != 0 { panic("the system gave no random bytes"); }
+            done += chunk;
+        }
+        bytes
+    }
+
+    // 8 random bytes as one number
+    number: func() -> u64 {
+        let value: u64 = 0;
+        for byte in bytes(8) { value = value << 8 | byte as u64; }
+        value
+    }
+
+    @c(name = "yel_host_random_fill") fill: extern func(at: s64, count: s64) -> s64;
+}

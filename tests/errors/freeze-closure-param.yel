@@ -1,0 +1,11 @@
+// error: 5:40: readonly is wanted here: w is a parameter: its caller may have it too
+main: func() {
+    let xs: list<s32> = [1,];
+    let f = { w: list<s32> ->
+        let fz: list<s32> & readonly = w;
+        print("fz {fz}\n");
+        xs.push(2);
+        print("fz {fz}\n");
+    };
+    f(xs);
+}

@@ -1,0 +1,82 @@
+// unions of kinds of values: held as a tag and a field for each kind, widened into where a value
+// fits, told apart by is, a match's literals and cases, and let n: T
+
+type value = s32 | string | bool;
+type id = s32 | string;
+type answer = "yes" | "no" | s32;
+
+record Item { name: string, count: s32, }
+
+type entry = Item | string;
+
+show: func(v: value) -> string {
+    match v {
+        let n: s32 => "an s32: {n + 1}",
+        let s: string => "a string of {s.len()}",
+        true => "yes",
+        false => "no",
+    }
+}
+
+// is narrows a union to a kind (and what is left to the others)
+describe: func(i: id) -> string {
+    if i is s32 { return "#{i * 2}"; }
+    "name {i}"
+}
+
+// a value of a narrower union where a wider one is wanted
+wider: func(i: id) -> value { i }
+
+answer-of: func(a: answer) -> string {
+    match a {
+        "yes" => "agreed",
+        "no" => "refused",
+        let n: s32 => "{n} votes",
+    }
+}
+
+entry-name: func(e: entry) -> string {
+    match e {
+        let { name, count: 0 } => "{name} (none)",
+        let { name, count } => "{name} ({count})",
+        let s: string => s,
+    }
+}
+
+maybe-id: func(n: s32) -> option<id> {
+    if n < 0 { return none; }
+    if n == 0 { return some("zero"); }
+    some(n)
+}
+
+main: func() {
+    let vs: list<value> = [1, "two", true, 41,];
+    for v in vs { print("{show(v)}\n"); }
+    print("{describe(21)} {describe("x")}\n");
+    print("{show(wider(5))} {show(wider("abc"))}\n");
+    print("{answer-of("yes")} {answer-of("no")} {answer-of(12)}\n");
+    print("{entry-name({ name: "pen", count: 0, })} {entry-name({ name: "cup", count: 3, })} {entry-name("loose")}\n");
+    for n in [-1, 0, 7,] {
+        match maybe-id(n) {
+            some(let i) => print("{describe(i)} "),
+            none => print("none "),
+        }
+    }
+    print("\n");
+    // equality across a union and its kinds, and printing one
+    let v: value = "two";
+    print("{v == "two"} {v == 2} {v}\n");
+    let x: id = 3;
+    print("{x} {x == 3}\n");
+    // as?: an option, never a failure
+    let n: option<s32> = x as? s32;
+    let s: option<string> = x as? string;
+    print("{n} {s} {v as? string} {v as? bool}\n");
+    for raw in ["yes", "maybe",] {
+        match raw as? answer {
+            some(let a) => print("{answer-of(a)} "),
+            none => print("not an answer "),
+        }
+    }
+    print("\n");
+}

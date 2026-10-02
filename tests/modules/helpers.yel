@@ -1,0 +1,3 @@
+// the package's other file: its top level and modules are the same package's
+
+helper: func() -> string { text.shout("helper") }

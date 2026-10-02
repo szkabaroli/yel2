@@ -1,0 +1,400 @@
+// Statements: lets (typed, inferred, readonly, a pattern's), assignments, a record's field and a
+// list's item set, a list pushed to, a map's entry set, ifs, fors (over a range, a list, a
+// generator), loops left by a break, returns, matches, prints, yields. A body is some, then its
+// value. Every loop ends: a for over what is made, a loop counted.
+
+module stmts {
+    // a body's statements, then its value (of t; for (), none): its lines, joined by sep
+    body: func(g: Gen, t: Ty, depth: s64, indent: string) -> string {
+        gen.push-scope(g);
+        let lines: list<string> = [];
+        let count = dice.between(g.dice, 0, g.width);
+        for i in 0..count {
+            if g.budget <= 0 { break; }
+            g.budget -= 1;
+            for line in stmt(g, depth, indent) { lines.push(line); }
+        }
+        gen.push-pending(g);
+        // a generator's body yields at least once (one that never does is no generator)
+        match g.yields[g.yields.len() - 1] {
+            some(item) => {
+                if g.results.len() == 1 {
+                    let y = "yield {exprs.expr(g, item, depth, true)};";
+                    for p in gen.pop-pending(g) { lines.push(indent + p); }
+                    gen.push-pending(g);
+                    lines.push(indent + y);
+                }
+            }
+            none => {}
+        }
+        let value = match t {
+            unit-t => "",
+            _ => exprs.expr(g, t, depth, true),
+        };
+        for p in gen.pop-pending(g) { lines.push(indent + p); }
+        if value != "" { lines.push(indent + value); }
+        gen.pop-scope(g);
+        if indent == "" { lines.join(" ") } else { lines.join("\n") }
+    }
+
+    // a block of statements with no value, in { }
+    block: func(g: Gen, depth: s64, indent: string) -> string {
+        let inner = if indent == "" { "" } else { indent + "    " };
+        let text = body(g, Ty.unit-t, depth + 1, inner);
+        if indent == "" { return gen.lb() + " " + text + " " + gen.rb(); }
+        if text == "" { return gen.lb() + gen.rb(); }
+        gen.lb() + "\n" + text + "\n" + indent + gen.rb()
+    }
+
+    // one statement: its lines, the lets made ahead of it first
+    stmt: func(g: Gen, depth: s64, indent: string) -> list<string> {
+        gen.push-pending(g);
+        let text = one(g, depth, indent);
+        let lines: list<string> = [];
+        for p in gen.pop-pending(g) { lines.push(indent + p); }
+        lines.push(indent + text);
+        lines
+    }
+
+    one: func(g: Gen, depth: s64, indent: string) -> string {
+        let in-loop = g.loops[g.loops.len() - 1] > 0;
+        let generator = match g.yields[g.yields.len() - 1] {
+            some(_) => true,
+            none => false,
+        };
+        let names = ["let", "let", "let", "let-infer", "assign", "assign", "field", "push", "set-item", "map-set", "if", "if", "for-range", "for-list", "loop", "match", "print", "print", "call", "let-pattern", "readonly", "sort", "for-gen", "return",];
+        let k = dice.pick(g.dice, names);
+        if in-loop && dice.chance(g.dice, 8) { k = "break"; }
+        if generator && dice.chance(g.dice, 30) { k = "yield"; }
+        let d = depth + 1;
+        if k == "let" { return let-typed(g, d); }
+        if k == "let-infer" {
+            let t = pick.any-type(g, 2);
+            let name = gen.fresh(g, "x");
+            let value = exprs.expr(g, t, d, false);
+            gen.bind(g, name, t, true);
+            return "let {name} = {value};";
+        }
+        if k == "assign" { return assign(g, d); }
+        if k == "field" { return field-write(g, d); }
+        if k == "push" { return push(g, d); }
+        if k == "set-item" { return set-item(g, d); }
+        if k == "map-set" { return map-set(g, d); }
+        if k == "if" {
+            let test = exprs.parens(exprs.expr(g, Ty.bool-t, d, true));
+            let yes = block(g, d, indent);
+            if dice.chance(g.dice, 50) { return "if {test} {yes}"; }
+            return "if {test} {yes} else {block(g, d, indent)}";
+        }
+        if k == "for-range" { return for-range(g, d, indent); }
+        if k == "for-list" { return for-list(g, d, indent); }
+        if k == "loop" { return counted-loop(g, d, indent); }
+        if k == "match" { return match-stmt(g, d, indent); }
+        if k == "print" { return "print({exprs.interp(g, d)} + \"\\n\");"; }
+        // let _ = v: no type wanted, so v says its own
+        if k == "call" { return "let _ = {exprs.expr(g, pick.any-type(g, 1), d, false)};"; }
+        if k == "let-pattern" { return let-pattern(g, d); }
+        if k == "readonly" { return readonly-let(g, d); }
+        if k == "sort" { return sort(g, d); }
+        if k == "for-gen" { return for-gen(g, d, indent); }
+        if k == "break" {
+            let word = dice.pick(g.dice, ["break", "continue",]);
+            return "if {exprs.parens(exprs.expr(g, Ty.bool-t, d, true))} {gen.lb()} {word}; {gen.rb()}";
+        }
+        if k == "yield" {
+            match g.yields[g.yields.len() - 1] {
+                some(item) => { return "yield {exprs.expr(g, item, d, true)};"; }
+                none => {}
+            }
+        }
+        if k == "return" && !generator {
+            let result = g.results[g.results.len() - 1];
+            let value = match result {
+                unit-t => "",
+                _ => " " + exprs.expr(g, result, d, true),
+            };
+            return "if {exprs.parens(exprs.expr(g, Ty.bool-t, d, true))} {gen.lb()} return{value}; {gen.rb()}";
+        }
+        let-typed(g, d)
+    }
+
+    let-typed: func(g: Gen, d: s64) -> string {
+        let t = pick.any-type(g, 2);
+        let name = gen.fresh(g, "x");
+        let value = exprs.expr(g, t, d, true);
+        gen.bind(g, name, t, true);
+        "let {name}: {types.show(t)} = {value};"
+    }
+
+    // x = v, or x op= v on a number or a string
+    assign: func(g: Gen, d: s64) -> string {
+        let all = gen.all-locals(g).filter({ l -> l.mutable });
+        if all.len() == 0 { return let-typed(g, d); }
+        let l = dice.pick(g.dice, all);
+        match l.ty {
+            int-t(n) => {
+                if dice.chance(g.dice, 60) {
+                    let op = dice.pick(g.dice, ["+=", "-=", "*=", "/=", "%=", "+=",]);
+                    let value = exprs.expr(g, l.ty, d, true);
+                    if op == "/=" || op == "%=" { return "{l.name} {op} ({value} | 1);"; }
+                    return "{l.name} {op} {value};";
+                }
+            }
+            float-t(n) => {
+                if dice.chance(g.dice, 50) { return "{l.name} {dice.pick(g.dice, ["+=", "-=", "*=",])} {exprs.expr(g, l.ty, d, true)};"; }
+            }
+            // a string's +: x = x + s (op= is a number's)
+            string-t => {
+                if dice.chance(g.dice, 50) { return "{l.name} = {l.name} + {exprs.expr(g, l.ty, d, true)};"; }
+            }
+            _ => {}
+        }
+        "{l.name} = {exprs.expr(g, l.ty, d, true)};"
+    }
+
+    // a declared record's field set (a record is held by reference: every name for it sees it)
+    field-write: func(g: Gen, d: s64) -> string {
+        for l in gen.all-locals(g) {
+            match l.ty {
+                named-t(n) => {
+                    let decl = gen.decl(g, n);
+                    if decl.kind == "record" && dice.chance(g.dice, 60) {
+                        let i = dice.below(g.dice, decl.names.len());
+                        match decl.types[i] {
+                            int-t(_) => {
+                                if dice.chance(g.dice, 40) { return "{l.name}.{decl.names[i]} += {exprs.expr(g, decl.types[i], d, true)};"; }
+                            }
+                            _ => {}
+                        }
+                        return "{l.name}.{decl.names[i]} = {exprs.expr(g, decl.types[i], d, true)};";
+                    }
+                }
+                _ => {}
+            }
+        }
+        let-typed(g, d)
+    }
+
+    // a list local's item pushed (not a list a for is reading)
+    push: func(g: Gen, d: s64) -> string {
+        for l in gen.all-locals(g) {
+            match l.ty {
+                list-t(x) => {
+                    if !frozen(g, l.name) && dice.chance(g.dice, 50) { return "{l.name}.push({exprs.expr(g, x, d, true)});"; }
+                }
+                _ => {}
+            }
+        }
+        let-typed(g, d)
+    }
+
+    // xs[i] = v (out of range stops the program), on a list or a fixed-length list local
+    set-item: func(g: Gen, d: s64) -> string {
+        for l in gen.all-locals(g) {
+            match l.ty {
+                list-t(x) => {
+                    if !frozen(g, l.name) && dice.chance(g.dice, 40) { return "{l.name}[{dice.between(g.dice, 0, 2)}] = {exprs.expr(g, x, d, true)};"; }
+                }
+                fixed-t(x) => {
+                    if l.mutable && dice.chance(g.dice, 60) { return "{l.name}[{dice.below(g.dice, x.len)}] = {exprs.expr(g, x.item, d, true)};"; }
+                }
+                _ => {}
+            }
+        }
+        let-typed(g, d)
+    }
+
+    map-set: func(g: Gen, d: s64) -> string {
+        for l in gen.all-locals(g) {
+            match l.ty {
+                map-t(m) => {
+                    if dice.chance(g.dice, 50) {
+                        if dice.chance(g.dice, 25) { return "let _ = {l.name}.remove({exprs.expr(g, m.key, d, true)});"; }
+                        return "{l.name}.set({exprs.expr(g, m.key, d, true)}, {exprs.expr(g, m.value, d, true)});";
+                    }
+                }
+                _ => {}
+            }
+        }
+        let-typed(g, d)
+    }
+
+    sort: func(g: Gen, d: s64) -> string {
+        for l in gen.all-locals(g) {
+            match l.ty {
+                list-t(x) => match x {
+                    int-t(n) => {
+                        if !frozen(g, l.name) {
+                            return "{l.name}.sort({gen.lb()} a: {n}, b: {n} -> a {dice.pick(g.dice, ["<", ">",])} b {gen.rb()});";
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        let-typed(g, d)
+    }
+
+    // ---- loops
+
+    loop-body: func(g: Gen, d: s64, indent: string) -> string {
+        let at = g.loops.len() - 1;
+        g.loops[at] = g.loops[at] + 1;
+        let b = block(g, d, indent);
+        g.loops[at] = g.loops[at] - 1;
+        b
+    }
+
+    for-range: func(g: Gen, d: s64, indent: string) -> string {
+        let name = gen.fresh(g, "i");
+        // an s32 counter (a literal range's is found from its first use)
+        let low = dice.between(g.dice, -2, 2);
+        let high = "({dice.between(g.dice, 0, 5)} as s32)";
+        let dots = dice.pick(g.dice, ["..", "..=",]);
+        gen.push-scope(g);
+        gen.bind(g, name, Ty.int-t("s32"), false);
+        let b = loop-body(g, d, indent);
+        gen.pop-scope(g);
+        "for {name} in {low}{dots}{high} {b}"
+    }
+
+    for-list: func(g: Gen, d: s64, indent: string) -> string {
+        let x = pick.plain-type(g, 1);
+        let lists = gen.locals(g, Ty.list-t(x), true);
+        let over = if lists.len() > 0 && dice.chance(g.dice, 50) { dice.pick(g.dice, lists).name } else { exprs.obj(g, Ty.list-t(x), d) };
+        let name = gen.fresh(g, "e");
+        gen.push-scope(g);
+        gen.bind(g, name, x, false);
+        // the list read is not pushed to while read (a for over a list that grows never ends)
+        freeze(g, over);
+        let b = loop-body(g, d, indent);
+        thaw(g, over);
+        gen.pop-scope(g);
+        "for {name} in {over} {b}"
+    }
+
+    // a loop left once its counter is past a bound
+    counted-loop: func(g: Gen, d: s64, indent: string) -> string {
+        let count = gen.fresh(g, "c");
+        let bound = dice.between(g.dice, 0, 4);
+        gen.push-scope(g);
+        let b = loop-body(g, d, indent);
+        gen.pop-scope(g);
+        let inner = if indent == "" { "" } else { indent + "    " };
+        let open = gen.lb();
+        let close = gen.rb();
+        let sep = if indent == "" { " " } else { "\n" };
+        "let {count}: s32 = 0;{sep}{indent}loop {open}{sep}{inner}{count} += 1;{sep}{inner}if {count} > {bound} {open} break; {close}{sep}{inner}if true {b}{sep}{indent}{close}"
+    }
+
+    // a for over a generator's values
+    for-gen: func(g: Gen, d: s64, indent: string) -> string {
+        let gens = g.funcs.filter({ f -> f.yields && f.type-params.len() == 0 });
+        if gens.len() == 0 { return let-typed(g, d); }
+        let f = dice.pick(g.dice, gens);
+        let args: list<string> = [];
+        for p in f.params { args.push(exprs.expr(g, p, d, true)); }
+        let name = gen.fresh(g, "y");
+        gen.push-scope(g);
+        gen.bind(g, name, f.result, false);
+        let b = loop-body(g, d, indent);
+        gen.pop-scope(g);
+        "for {name} in {f.name}({args.join(", ")}) {b}"
+    }
+
+    freeze: func(g: Gen, name: string) { g.frozen.push(name); }
+
+    thaw: func(g: Gen, name: string) { let _ = g.frozen.pop(); }
+
+    frozen: func(g: Gen, name: string) -> bool { g.frozen.contains(name) }
+
+    // ---- matches
+
+    // a match on a declared variant or enum (every case, or some and _), a bool, or an option
+    match-stmt: func(g: Gen, d: s64, indent: string) -> string {
+        let choices = g.decls.filter({ decl -> decl.kind == "variant" || decl.kind == "enum" || decl.kind == "strings" || decl.kind == "union" });
+        if choices.len() == 0 || dice.chance(g.dice, 20) {
+            let on = gen.hoist-hidden(g, Ty.bool-t, d);
+            return "match {on} {gen.lb()} true => {block(g, d, indent)}, false => {block(g, d, indent)}, {gen.rb()}";
+        }
+        let decl = dice.pick(g.dice, choices);
+        let on = gen.hoist-hidden(g, Ty.named-t(decl.name), d);
+        let arms: list<string> = [];
+        let all = dice.chance(g.dice, 60);
+        if decl.kind == "union" {
+            for t in decl.types {
+                let name = gen.fresh(g, "u");
+                gen.push-scope(g);
+                gen.bind(g, name, t, false);
+                arms.push("let {name}: {types.show(t)} => {block(g, d, indent)},");
+                gen.pop-scope(g);
+            }
+            return "match {on} {gen.lb()} {arms.join(" ")} {gen.rb()}";
+        }
+        for i in 0..decl.names.len() {
+            if !all && dice.chance(g.dice, 40) { continue; }
+            if decl.kind == "strings" {
+                arms.push("\"{decl.names[i]}\" => {block(g, d, indent)},");
+                continue;
+            }
+            let payload = if decl.kind == "variant" { decl.types[i] } else { Ty.unit-t };
+            match payload {
+                unit-t => arms.push("{decl.names[i]} => {block(g, d, indent)},"),
+                _ => {
+                    let name = gen.fresh(g, "v");
+                    gen.push-scope(g);
+                    gen.bind(g, name, payload, false);
+                    // a guard's lets are its own (the arm's bindings are in it)
+                    let guard = if dice.chance(g.dice, 20) { " if ({gen.scoped(g, Ty.bool-t, d, true)})" } else { "" };
+                    arms.push("{decl.names[i]}({name}){guard} => {block(g, d, indent)},");
+                    gen.pop-scope(g);
+                    if guard != "" { all = false; }
+                }
+            }
+        }
+        if !all || arms.len() < decl.names.len() { arms.push("_ => {block(g, d, indent)},"); }
+        "match {on} {gen.lb()} {arms.join(" ")} {gen.rb()}"
+    }
+
+    // ---- lets of patterns, readonly lets
+
+    // let (a, b) = a tuple; let { a, b } = an anonymous record
+    let-pattern: func(g: Gen, d: s64) -> string {
+        if dice.chance(g.dice, 50) {
+            let a = pick.plain-type(g, 1);
+            let b = pick.plain-type(g, 1);
+            let value = exprs.expr(g, Ty.tuple-t([a, b,]), d, false);
+            let x = gen.fresh(g, "t");
+            let y = gen.fresh(g, "t");
+            gen.bind(g, x, a, true);
+            gen.bind(g, y, b, true);
+            return "let ({x}, {y}) = {value};";
+        }
+        let t = pick.anon-type(g, 1);
+        let value = exprs.expr(g, t, d, false);
+        let f = match t {
+            anon-t(fields) => fields,
+            _ => panic("fuzz: an anonymous record"),
+        };
+        // each field bound by its own name (a, b, …): new names for them where they are taken
+        let parts: list<string> = [];
+        for i in 0..f.names.len() {
+            let name = gen.fresh(g, "r");
+            parts.push("{f.names[i]}: let {name}");
+            gen.bind(g, name, f.types[i], true);
+        }
+        "let " + gen.lb() + " " + parts.join(", ") + " " + gen.rb() + " = " + value + ";"
+    }
+
+    // a readonly list, made here (so readonly at once), read after
+    readonly-let: func(g: Gen, d: s64) -> string {
+        let x = dice.pick(g.dice, [Ty.int-t("s32"), Ty.string-t, Ty.int-t("u8"), Ty.char-t,]);
+        let name = gen.fresh(g, "ro");
+        let items: list<string> = [];
+        for i in 0..dice.between(g.dice, 0, 4) { items.push(exprs.expr(g, x, d, true)); }
+        let t = Ty.list-t(x);
+        g.scopes[g.scopes.len() - 1].push({ name: name, ty: t, mutable: false, readonly: true, });
+        "let {name}: {types.show(t)} & readonly = [" + items.join(", ") + (if items.len() > 0 { ",]" } else { "]" }) + ";"
+    }
+}

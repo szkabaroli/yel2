@@ -1,0 +1,4 @@
+// error: 3:13: as converts a number, a bool or a char, not string
+main: func() {
+    let n = "12" as s32;
+}

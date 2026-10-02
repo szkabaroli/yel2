@@ -1,0 +1,78 @@
+// T & readonly: values no one writes through this type, deep (what is read from one is readonly
+// too). Funcs that only read take them (and mutable values) as they are: what each func does with
+// its parameters is worked out from its body, so nothing of this is checked when the program runs
+
+record Team { name: string, members: list<string>, }
+
+type names = list<string> & readonly;
+
+// reads only: takes a readonly list and a mutable one alike
+longest: func(xs: list<string>) -> string {
+    let best = "";
+    for x in xs {
+        if x.len() > best.len() { best = x; }
+    }
+    best
+}
+
+// wants readonly, and keeps nothing: a mutable list is given it too
+count: func(xs: names) -> s64 { xs.len() }
+
+roster: func(t: Team & readonly) -> string { "{t.name}: {t.members.join(", ")}" }
+
+// a list made here and given back readonly: no other name has it
+initials: func() -> list<"a" | "b"> & readonly { ["a", "b", "a",] }
+
+// built a push at a time, then given back readonly: no other name ever had it
+squares: func(n: s32) -> list<s32> & readonly {
+    let out: list<s32> = [];
+    for i in 0..n { out.push(i * i); }
+    out
+}
+
+// a func whose result is new (no readonly in its type): its callers may make it readonly
+evens: func(n: s32) -> list<s32> {
+    let out: list<s32> = [];
+    for i in 0..n {
+        if i % 2 == 0 { out.push(i); }
+    }
+    out
+}
+
+// keeps what it is given: a value only it then has is fine
+record Shelf { items: list<string> & readonly, }
+
+shelve: func(items: list<string> & readonly) -> Shelf { { items: items, } }
+
+main: func() {
+    let fixed: names = ["ada", "grace", "barbara",];
+    let open = ["linus",];
+    open.push("dennis");
+    print("{longest(fixed)} {longest(open)} {count(fixed)} {count(open)}\n");
+    // deep: a readonly record's lists are readonly, and so are a readonly list's items
+    let team: Team & readonly = { name: "core", members: ["ada", "grace",], };
+    print("{roster(team)} {team.members.len()} {team.members[0]}\n");
+    let grid: list<list<s32>> & readonly = [[1, 2,], [3,],];
+    let total = 0;
+    for row in grid {
+        for x in row { total += x; }
+    }
+    print("{total} {grid[1]}\n");
+    // readonly lists are covariant where their items are held one way
+    let wide: list<string> & readonly = initials();
+    print("{wide} {longest(wide)}\n");
+    // made readonly where no other name has it: a func's new value, or a local built here and not
+    // used after
+    let sq = squares(5);
+    let ev: list<s32> & readonly = evens(9);
+    let words: list<string> = [];
+    for w in ["x", "yy", "zzz",] { words.push(w + w); }
+    let frozen: list<string> & readonly = words;
+    let shelf = shelve(["kept",]);
+    print("{sq} {ev} {frozen} {longest(frozen)} {shelf.items}\n");
+    // matched like any value
+    match team {
+        let { name: "core", members } => print("core has {members.len()}\n"),
+        _ => print("other\n"),
+    }
+}

@@ -1,0 +1,14 @@
+// Porffor's bench/truthy.js: two !!s, 100 million times
+
+from "wasi:clocks" include monotonic-clock;
+
+main: func() {
+    let n1 = 0;
+    let n2 = 1337;
+    let start = monotonic-clock.now();
+    for i in 0..100000000 {
+        let a = n1 != 0;
+        let b = n2 != 0;
+    }
+    print("{(monotonic-clock.now() - start) as s64 / 1000000}\n");
+}

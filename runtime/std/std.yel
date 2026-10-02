@@ -1,0 +1,6 @@
+// yel's standard library, written in yel over the prelude's externs (runtime/prelude.yel), as
+// Porffor's builtins (compiler/builtins) are written in JS over its intrinsics. Every program
+// reaches its names without an include, after its own and the prelude's: a program naming a func
+// as one here names its own. One file for each part: text, buffer, char, list, number, async, streams.
+
+package yel:std@0.1.0;

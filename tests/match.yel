@@ -1,0 +1,128 @@
+// match: literals, constants, | alternatives, let bindings, guards, records, tuples, nested cases
+
+const LIMIT = 10;
+const ORIGIN: s32 = 0;
+const GREETING = "hello";
+
+record Point { x: s32, y: s32, }
+
+variant Shape { dot(Point), circle(s32), square(s32), none-shape, }
+
+enum Color { red, green, blue, }
+
+size: func(n: s32) -> string {
+    match n {
+        ORIGIN => "zero",
+        1 | 2 | 3 => "small",
+        -1 => "minus one",
+        let k if k < LIMIT => "under {LIMIT}",
+        LIMIT => "the limit",
+        _ => "big",
+    }
+}
+
+word: func(s: string) -> s32 {
+    match s {
+        GREETING => 1,
+        "bye" | "ciao" => 2,
+        _ => 0,
+    }
+}
+
+where: func(p: Point) -> string {
+    match p {
+        { x: 0, y: 0 } => "origin",
+        { x: 0, y: let y } => "on the y axis at {y}",
+        let { y: 0, x } => "on the x axis at {x}",
+        let q if q.x == q.y => "on the diagonal",
+        _ => "somewhere",
+    }
+}
+
+shape: func(s: Shape) -> string {
+    match s {
+        dot({ x: 0, y }) => "a dot above the origin, {y} up",
+        dot(p) => "a dot at {p.x},{p.y}",
+        circle(0) | square(0) => "nothing",
+        circle(r) => "a circle of {r}",
+        square(1) => "a unit square",
+        square(side) => "a square of {side}",
+        none-shape => "no shape",
+    }
+}
+
+pair: func(t: tuple<s32, bool>) -> string {
+    match t {
+        (0, _) => "zero",
+        (let n, true) => "{n} yes",
+        let (n, false) => "{n} no",
+    }
+}
+
+nested: func(x: option<result<s32, string>>) -> string {
+    match x {
+        none => "none",
+        some(ok(0)) => "ok zero",
+        some(ok(n)) => "ok {n}",
+        some(err(e)) => "err {e}",
+    }
+}
+
+warm: func(c: Color) -> bool {
+    match c {
+        red => true,
+        green | blue => false,
+    }
+}
+
+main: func() {
+    for n in [0, 2, -1, 5, 10, 11,] { print("{n}: {size(n)}\n"); }
+    print("{word("hello")} {word("ciao")} {word("hi")}\n");
+    let points: list<Point> = [
+        { x: 0, y: 0, },
+        { x: 0, y: 4, },
+        { x: 3, y: 0, },
+        { x: 2, y: 2, },
+        { x: 1, y: 2, },
+    ];
+    for p in points { print("{where(p)}\n"); }
+    let shapes = [
+        Shape.dot({ x: 0, y: 5, }),
+        Shape.dot({ x: 1, y: 2, }),
+        Shape.circle(0),
+        Shape.circle(3),
+        Shape.square(0),
+        Shape.square(1),
+        Shape.square(7),
+        Shape.none-shape,
+    ];
+    for s in shapes { print("{shape(s)}\n"); }
+    print("{pair((0, true))} / {pair((4, true))} / {pair((5, false))}\n");
+    print("{nested(none)} / {nested(some(ok(0)))} / {nested(some(ok(9)))} / {nested(some(err("bad")))}\n");
+    print("{warm(Color.red)} {warm(Color.blue)}\n");
+    // a let binding a closure captures
+    let fs: list<func() -> s32> = [];
+    for i in 0..3 {
+        match some(i * 10) {
+            some(let v) => fs.push({ v + 1 }),
+            none => {}
+        }
+    }
+    for f in fs { print("{f()} "); }
+    print("{LIMIT + 1} {GREETING}\n");
+    // let with a pattern: a record's fields, a tuple's items, nested, and _ for a value not kept
+    let p: Point = { x: 3, y: 4, };
+    let { x, y: down } = p;
+    let (count, label) = (2, "pairs");
+    let (first, { x: fx, y: _ }) = (true, p);
+    let _ = size(1);
+    let (a, b): tuple<u8, u8> = (250, 5);
+    print("{x} {down} {count} {label} {first} {fx} {a + b}\n");
+    let gs: list<func() -> s32> = [];
+    for q in [p, { x: 7, y: 8, },] {
+        let { x: qx, y: qy } = q;
+        gs.push({ qx * 10 + qy });
+    }
+    for gf in gs { print("{gf()} "); }
+    print("\n");
+}

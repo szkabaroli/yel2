@@ -1,0 +1,6 @@
+["ada", "grace"] 85 false 2
+[40, 41, 42, 43, 44, 45, 46, 47, 48, 49] 2025
+two false
+seven true false
+["a", "b"] true false 2
+[some(1), none]

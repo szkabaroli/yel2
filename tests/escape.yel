@@ -1,0 +1,24 @@
+// escape analysis: records that never leave their func (add's and scale's, inlined into the loop)
+// stay on the stack; one kept past its loop's turn, or put in a list, stays on the heap
+
+record Vec { x: s32, y: s32, }
+
+add: func(a: Vec, b: Vec) -> Vec { { x: a.x + b.x, y: a.y + b.y, } }
+
+scale: func(v: Vec, k: s32) -> Vec { { x: v.x * k, y: v.y * k, } }
+
+main: func(argv: list<string>) -> s32 {
+    let total = 0;
+    for i in 0..10000 {
+        let v = add({ x: i, y: 1, }, scale({ x: 2, y: 3, }, i % 7));
+        total += v.x + v.y;
+    }
+    // last is read after the loop: each turn's record must be its own
+    let last: Vec = { x: 0, y: 0, };
+    let first = last;
+    for i in 0..3 { last = { x: i, y: i * i, }; }
+    let kept: list<Vec> = [];
+    for i in 0..3 { kept.push({ x: i, y: 0 - i, }); }
+    print("{total} {last} {first} {kept}\n");
+    0
+}

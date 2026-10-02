@@ -1,0 +1,14 @@
+// a fixed-length list a closure captures is the scope's, written in place (its item set in the
+// closure is the one the scope reads: not a copy's; found by tools/fuzz)
+
+main: func() -> s32 {
+    let names: list<string, 3> = ["a", "b", "c",];
+    let rename = { -> names[2] = "z"; };
+    rename();
+    let count: list<s32, 2> = [0, 0,];
+    let bump = { -> count[0] = count[0] + 1; };
+    bump();
+    bump();
+    print("{names:?} {count:?}\n");
+    0
+}

@@ -1,0 +1,3805 @@
+// The checker: every func's body against the types, names resolved to their keys.
+
+record FuncSig { type-params: list<string>, params: list<Type>, result: Type, }
+record Instance { params: list<Type>, result: Type, type-args: list<Type>, }
+record RecordInfo { fields: list<string>, types: list<Type>, }
+
+record Checker {
+    // the compile's context: its sources, the errors found so far, what was asked for
+    context: Context,
+    // an error was told in the statement being checked: another there is its echo (not told)
+    quiet: bool,
+    funcs: map<string, FuncSig>,
+    records: map<Name, RecordInfo>,
+    variants: map<Name, list<CaseDecl>>,
+    flags: map<Name, list<string>>,
+    // the WIT resources, and the names of their methods (a call x.name(...) of one is looked up by
+    // x's type)
+    resources: map<Name, bool>,
+    methods: map<string, bool>,
+    // the standard library's modules (by name: set.add names its module)
+    std-modules: set<string>,
+    // the externs (by key): no func value is made of one; the WIT funcs among them (a stream or a
+    // future given one is moved: its end leaves the component)
+    externs: map<string, bool>,
+    wit-externs: map<string, bool>,
+    // the builtins (the prelude's funcs and the standard library's) by name: their keys (a name
+    // with more than one is chosen by its first argument's type, builtin-pick)
+    builtins: map<string, list<string>>,
+    // a case name -> its variant or enum ("" when two declare it: then write Type.case)
+    case-owner: map<string, string>,
+    // the constants, and the globals, by key
+    consts: map<string, ConstDecl>,
+    globals: map<string, GlobalDecl>,
+    // the type aliases (type name = T;) by key, and those being expanded (one naming itself is an
+    // error)
+    aliases: map<string, TypeDecl>,
+    expanding: list<string>,
+    // the literal and union types aliases name, by how they show (their WIT names)
+    set-names: map<string, string>,
+    // the calls given readonly where the parameter is not, or not where it is (effects.yel checks
+    // them once every func's effects are known)
+    sites: list<EffectSite>,
+    // async: the async funcs (by key); whether the body being checked is an async func's (a
+    // closure's is not); and whether the call being checked is a wait's or a start's
+    async-funcs: map<string, bool>,
+    in-async: bool,
+    // the type a generator being checked yields (none: no yield here)
+    yield-type: option<Type>,
+    // the func being checked's bindings: where each name it reads or assigns is bound
+    bindings: Bindings,
+    async-call: bool,
+    // whether the call being checked is a start's (its arguments are the task's while it runs)
+    starting: bool,
+    // the names each scope narrows (an is test held there: not in a closure, which may run later;
+    // the other names the scope binds are its own, seen anywhere), and the names the func being
+    // checked assigns anywhere (never narrowed: a value tested once stays that value)
+    narrows: list<set<Name>>,
+    assigned: map<Name, bool>,
+    scopes: list<map<Name, Type>>,
+    // each scope's bindings' marks, and how many closures deep it is (a name read from a closure
+    // deeper than its binding is captured); the closure depth and unit being checked
+    marks: list<map<Name, Mark>>,
+    depths: list<s64>,
+    closure-depth: s64,
+    unit: Unit,
+    result: Type,
+    file: string,
+    in-func: string,
+    // the checked func's type parameters
+    type-params: list<string>,
+    vars: s64,
+    // the type arguments of the last generic call checked
+    last-type-args: list<Type>,
+    // what is being checked, for errors
+    span: Span,
+    // where the func being checked is written, and the prelude's names (reached from anywhere)
+    scope: Scope,
+    prelude: map<string, bool>,
+    // how many for loops enclose what is being checked (break and continue need one)
+    loops: s64,
+}
+
+module checker {
+    // an error at what is being checked (the innermost expression), told: the checker goes on (what
+    // was wrong given the error type, which fits anything)
+    type-error: func(c: Checker, message: string) { tell(c, diagnostics.error(c.span, message, "")); }
+
+    // an error found, kept, unless it is an echo: one more in a statement that has one already, or
+    // one about an error's type (what was wrong made it)
+    tell: func(c: Checker, d: Diagnostic) {
+        if c.quiet || d.message.contains("\{error\}") { return; }
+        // in a func's body, the rest of the statement is quiet (a declaration's errors are each its own)
+        if c.in-func != "the declarations" { c.quiet = true; }
+        diagnostics.report(c.context, d);
+    }
+
+    // a name not found: the error, and a name like it that is there (a likely typo), if one is
+    not-found: func(c: Checker, message: string, name: string, candidates: list<string>) {
+        let like = diagnostics.closest(name, candidates);
+        type-error-help(c, message, "", if like == "" { "" } else { "did you mean {like}?" });
+    }
+
+    // a WIT interface's or resource's func not found (key: its module's or resource's): a name
+    // like it, else why it may not be there
+    wit-not-found: func(c: Checker, message: string, name: string, key: string) {
+        let d = diagnostics.error(c.span, message, "");
+        let like = diagnostics.closest(name, funcs-of(c, key));
+        if like != "" { diagnostics.help(d, "did you mean {like}?"); }
+        else if find-byte(key, 58).unwrap-or(-1) > 0 {
+            diagnostics.note(d, "a WIT func that needs a WIT type that is not known is left out");
+        }
+        tell(c, d);
+    }
+
+    // the names a name may be here: the locals in scope, the funcs, the constants and the cases
+    names-here: func(c: Checker) -> list<string> {
+        let out: list<string> = [];
+        for sc in c.scopes {
+            for k in sc.keys() { out.push(name-text(k)); }
+        }
+        for k in c.funcs.keys() { out.push(base-name(k)); }
+        for k in c.consts.keys() { out.push(base-name(k)); }
+        for k in c.case-owner.keys() { out.push(k); }
+        for k in c.builtins.keys() { out.push(k); }
+        out
+    }
+
+    // the funcs of a module or a resource (by its key): their names
+    funcs-of: func(c: Checker, key: string) -> list<string> {
+        let out: list<string> = [];
+        let prefix = key + ".";
+        for k in c.funcs.keys() {
+            if starts-at(k, 0, prefix) { out.push(k.substring(prefix.len(), k.len())); }
+        }
+        out
+    }
+
+    // one with more to say: a label under it, and help ("" for none)
+    type-error-help: func(c: Checker, message: string, label: string, help: string) {
+        let d = diagnostics.error(c.span, message, label);
+        if help != "" { diagnostics.help(d, help); }
+        tell(c, d);
+    }
+
+    fresh: func(c: Checker) -> Type {
+        c.vars += 1;
+        Type.var({ id: c.vars, kind: 0, bound: none, })
+    }
+
+    // a variable for a literal: kind 1, an integer's; 2, a float's
+    fresh-kind: func(c: Checker, kind: s64) -> Type {
+        c.vars += 1;
+        Type.var({ id: c.vars, kind: kind, bound: none, })
+    }
+
+    // that t is a number (a variable not yet one becomes an integer's)
+    numeric: func(c: Checker, t0: Type, what: string) {
+        let t = resolve(t0);
+        match t {
+            var(v) => { if v.kind == 0 { v.bound = some(fresh-kind(c, 1)); } }
+            num(n) => {}
+            _ => type-error(c, "{what}: expected a number, found {show-type(t)}"),
+        }
+    }
+
+    // that t is an integer, or (flags) a flags type
+    integral: func(c: Checker, t0: Type, what: string, flags: bool) {
+        let t = resolve(t0);
+        match t {
+            var(v) => {
+                if v.kind == 0 { v.bound = some(fresh-kind(c, 1)); }
+                if v.kind == 2 { type-error(c, "{what}: expected an integer, found a float"); }
+            }
+            num(n) => { if !is-int(n) { type-error(c, "{what}: expected an integer, found {n}"); } }
+            named(n) => {
+                if !(flags && c.flags.has(n)) {
+                    type-error(c, "{what}: expected an integer, found {n}");
+                }
+            }
+            _ => type-error(c, "{what}: expected an integer, found {show-type(t)}"),
+        }
+    }
+
+    // that < and the rest compare t: a number, char, bool or enum
+    comparable: func(c: Checker, t0: Type, what: string) {
+        let t = resolve(t0);
+        match t {
+            var(v) => { if v.kind == 0 { v.bound = some(fresh-kind(c, 1)); } }
+            num(n) => {}
+            char-type => {}
+            bool-type => {}
+            // a distinct type: as what it is held as
+            distinct-type(x) => comparable(c, x.base, what),
+            named(n) => {
+                if !c.variants.has(n) || !all-bare(c.variants[n]) {
+                    type-error(c, "{what}: {n} is not ordered");
+                }
+            }
+            _ => type-error(c, "{what}: a {show-type(t)} is not ordered"),
+        }
+    }
+
+    // whether no case carries a payload (an enum)
+    all-bare: func(cases: list<CaseDecl>) -> bool {
+        for k in cases {
+            if k.has-payload { return false; }
+        }
+        true
+    }
+
+    // got where want is wanted: the same type, or (types as sets) a subset of it
+    unify: func(c: Checker, want: Type, got: Type, what: string) {
+        // a call that never returns gives no value: it fits whatever is wanted (and settles nothing)
+        if is-never(got) { return; }
+        if !unifies(want, got) && !subtype(c, got, want) {
+            type-error-help(
+                c,
+                "{what}: expected {show-type(want)}, found {show-type(got)}",
+                "",
+                literal-hint(c, want, got),
+            );
+        }
+    }
+
+    // why a record literal is not the declared record wanted later: it is one only where one is
+    // wanted ("" when that is not the mismatch)
+    literal-hint: func(c: Checker, want: Type, got: Type) -> string {
+        match resolve(want) {
+            named(n) => {
+                match resolve(got) {
+                    anon-record(r) => {
+                        if c.records.has(n) && same-fields(
+                            c.records[n].fields,
+                            r.fields,
+                        ) {
+                            return "a record literal is a {base-name(name-text(n))} where one is wanted: write its type (let p: {base-name(name-text(n))} = …)";
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        ""
+    }
+
+    // that a written type names types that exist
+    known-type: func(c: Checker, t: Type, what: string) { known-type-in(c, t, what, false); }
+
+    // t, each name in it a known type (else told), and as the checker goes on with it: what was not
+    // known an error's type (its uses not told again)
+    known: func(c: Checker, t: Type, what: string, open: bool) -> Type {
+        known-type-in(c, t, what, open);
+        without-unknown(c, t)
+    }
+
+    without-unknown: func(c: Checker, t: Type) -> Type {
+        match t {
+            named(n) => if is-type-key(c, name-text(n)) { t } else { Type.error-type },
+            _ => if child-count(t) == 0 { t } else { map-children(t, { x -> without-unknown(c, x) }) },
+        }
+    }
+
+    // open: a list's length may be left to the value (list<T, ?>: a let's type)
+    known-type-in: func(c: Checker, t: Type, what: string, open: bool) {
+        match t {
+            named(n) => if !is-type-key(c, name-text(n)) { type-error(c, "{what}: no type {n}"); },
+            fixed-list(x) => {
+                if x.len < 0 && !open {
+                    type-error(
+                        c,
+                        "{what}: list<T, ?> takes its length from a let's value: write the length",
+                    );
+                }
+            }
+            _ => {}
+        }
+        for index in 0..child-count(t) { known-type-in(c, child(t, index), what, open); }
+    }
+
+    // n bound in the innermost scope, its mark in the unit being checked
+    bind: func(c: Checker, n: Name, t: Type, mark: Mark) {
+        c.scopes[c.scopes.len() - 1].set(n, t);
+        c.marks[c.marks.len() - 1].set(n, mark);
+        // a binding of its own (not what a test narrowed): seen in a closure too
+        let _ = c.narrows[c.narrows.len() - 1].remove(n);
+        mark.unit = c.unit;
+        mark.ty = t;
+    }
+
+    // the binding a local's name is where it is read (the innermost: narrowing keeps its binding)
+    binding-of: func(c: Checker, n: Name) -> option<Mark> {
+        let count = c.marks.len();
+        for k in 0..count {
+            let i = count - 1 - k;
+            if c.marks[i].has(n) { return some(c.marks[i][n]); }
+        }
+        none
+    }
+
+    push-scope: func(c: Checker) {
+        c.scopes.push(map.new());
+        c.marks.push(map.new());
+        c.depths.push(c.closure-depth);
+        c.narrows.push(set.new());
+    }
+
+    pop-scope: func(c: Checker) {
+        c.scopes.pop();
+        c.marks.pop();
+        c.depths.pop();
+        c.narrows.pop();
+    }
+
+    // a local's type (none: no local has that name); read from a closure deeper than its binding,
+    // the binding is captured (and its unit has an environment)
+    local-type: func(c: Checker, n: Name) -> option<Type> {
+        let count = c.scopes.len();
+        for k in 0..count {
+            let i = count - 1 - k;
+            // a closure may run later: what an is test found does not hold in it
+            let skip = c.narrows[i].has(n) && c.depths[i] < c.closure-depth;
+            if c.scopes[i].has(n) && !skip {
+                if c.depths[i] < c.closure-depth {
+                    let mark = c.marks[i][n];
+                    mark.captured = true;
+                    mark.unit.env = true;
+                }
+                return some(c.scopes[i][n]);
+            }
+        }
+        none
+    }
+
+    instantiate: func(c: Checker, sig: FuncSig) -> Instance {
+        let vars: map<string, Type> = map.new();
+        let type-args: list<Type> = [];
+        for tp in sig.type-params {
+            let v = fresh(c);
+            vars.set(tp, v);
+            type-args.push(v);
+        }
+        let params: list<Type> = [];
+        for t in sig.params { params.push(substitute(t, vars)); }
+        { params: params, result: substitute(sig.result, vars), type-args: type-args, }
+    }
+
+    // the program: every func's body against its signature
+    // every func's body checked; the places readonly and moves are checked at once the program's
+    // flow is known (effects.yel, after codegen)
+    check-program: func(context: Context, decls: list<Decl>, prelude: map<string, bool>) -> list<EffectSite> {
+        let file = context.input;
+        let c: Checker = {
+            context: context,
+            quiet: false,
+            funcs: map.new(), records: map.new(), variants: map.new(),
+            flags: map.new(), resources: map.new(), methods: map.new(), externs: map.new(),
+            wit-externs: map.new(), std-modules: set.new(), builtins: map.new(),
+            case-owner: map.new(), consts: map.new(), globals: map.new(), aliases: map.new(), expanding: [],
+            set-names: map.new(), sites: [], async-funcs: map.new(), in-async: false,
+            async-call: false,
+            starting: false,
+            yield-type: none,
+            bindings: { exprs: map.new(), assigns: map.new(), },
+            narrows: [], assigned: map.new(),
+            scopes: [], marks: [], depths: [], closure-depth: 0, unit: { env: false, },
+            result: Type.unit-type, file: file, in-func: "the declarations",
+            type-params: [], vars: 0, last-type-args: [],
+            span: { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, }, scope: blank-scope(file),
+            prelude: prelude, loops: 0,
+        };
+        // the builtins, by name: the prelude's funcs (keyed by their names) and the standard
+        // library's
+        for d in decls {
+            match d {
+                func-decl(f) => {
+                    if f.scope.pkg.id == "yel:std"
+                        || prelude.has(f.name) { builtin(c, f.name); }
+                    if f.scope.pkg.id == "yel:std" && f.scope.module != "" { c.std-modules.add(f.scope.module); }
+                }
+                extern-decl(x) => {
+                    if x.scope.pkg.id == "yel:std"
+                        || prelude.has(x.name) { builtin(c, x.name); }
+                    if x.scope.pkg.id == "yel:std" && x.scope.module != "" { c.std-modules.add(x.scope.module); }
+                }
+                _ => {}
+            }
+        }
+        // the types' names first, then every type written in a declaration resolved to its key
+        for d in decls {
+            match d {
+                record-decl(r) => {
+                    c.records.set(intern(r.name), { fields: r.fields, types: r.field-types, });
+                }
+                variant-decl(v) => {
+                    c.variants.set(intern(v.name), v.cases);
+                    for k in v.cases {
+                        if c.case-owner.has(k.name) { c.case-owner.set(k.name, ""); }
+                        else { c.case-owner.set(k.name, v.name); }
+                    }
+                }
+                flags-decl(fl) => {
+                    // held in a u64: one bit each
+                    if fl.flags.len() > 64 {
+                        let d = diagnostics.error(
+                            fl.span,
+                            "flags {base-name(fl.name)} has {fl.flags.len()} flags: a flags type holds 64 at most",
+                            "",
+                        );
+                        diagnostics.help(d, "split it into two flags types");
+                        tell(c, d);
+                    }
+                    c.flags.set(intern(fl.name), fl.flags);
+                }
+                resource-decl(r) => c.resources.set(intern(r.name), true),
+                const-decl(x) => c.consts.set(x.name, x),
+                global-decl(x) => c.globals.set(x.name, x),
+                type-decl(x) => c.aliases.set(x.name, x),
+                func-decl(f) => { if f.is-async { c.async-funcs.set(f.name, true); } }
+                // a resource's method: its handle is its first param, self
+                extern-decl(x) => {
+                    c.externs.set(x.name, true);
+                    if x.wit-module != "" { c.wit-externs.set(x.name, true); }
+                    if x.is-async { c.async-funcs.set(x.name, true); }
+                    if x.params.len() > 0 && x.params[0] == "self" {
+                        c.methods.set(base-name(x.name), true);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for d in decls {
+            match d {
+                record-decl(r) => {
+                    r.field-types = resolve-types(c, r.scope, r.field-types, []);
+                    c.records.set(intern(r.name), { fields: r.fields, types: r.field-types, });
+                }
+                variant-decl(v) => {
+                    for k in v.cases {
+                        k.payload = resolve-type(c, v.scope, k.payload, []);
+                    }
+                }
+                func-decl(f) => {
+                    f.param-types = resolve-types(c, f.scope, f.param-types, f.type-params);
+                    f.result = resolve-type(c, f.scope, f.result, f.type-params);
+                    add-sig(c, f.span, f.name, signature(f.type-params, f.param-types, f.result));
+                    // what its signature names that is not a type: told here, before any body (a
+                    // call of it checked first sees an error's type, not the name)
+                    let sig = c.funcs[f.name];
+                    for i in 0..sig.params.len() { sig.params[i] = known(c, sig.params[i], "a parameter", false); }
+                    sig.result = known(c, sig.result, "the result", false);
+                }
+                extern-decl(x) => {
+                    x.param-types = resolve-types(c, x.scope, x.param-types, x.type-params);
+                    x.result = resolve-type(c, x.scope, x.result, x.type-params);
+                    add-sig(c, x.span, x.name, signature(x.type-params, x.param-types, x.result));
+                }
+                flags-decl(fl) => {}
+                resource-decl(r) => {}
+                const-decl(x) => check-const(c, x),
+                global-decl(x) => check-global(c, x),
+                type-decl(x) => {
+                    c.span = x.span;
+                    // what it names, resolved (the generator names literal and union types at a
+                    // component's boundary by it)
+                    x.resolved = alias-type(c, x.name);
+                    let k = show-type(x.resolved);
+                    if !c.set-names.has(k) { c.set-names.set(k, x.name); }
+                }
+            }
+        }
+        for d in decls {
+            match d {
+                record-decl(r) => {
+                    c.span = r.span;
+                    for i in 0..r.field-types.len() { r.field-types[i] = known(c, r.field-types[i], "record {r.name}", false); }
+                }
+                variant-decl(v) => {
+                    c.span = v.span;
+                    for k in v.cases { k.payload = known(c, k.payload, "variant {v.name}", false); }
+                }
+                func-decl(f) => {
+                    check-crossings(c, f);
+                    check-func(c, f);
+                }
+                _ => {}
+            }
+        }
+        c.sites
+    }
+
+    // the key of the module named m where sc is (an include, or one of its package's), or ""
+    module-key: func(sc: Scope, m: string) -> string {
+        if sc.includes.has(m) { return sc.includes[m]; }
+        if sc.pkg.modules.has(m) { return sc.pkg.prefix + m; }
+        ""
+    }
+
+    // whether a type's key names one whose members are written Type.member (a variant's or an enum's
+    // cases, a flags type's flags, a resource's funcs)
+    has-members: func(c: Checker, k: string) -> bool {
+        let type-name = intern(k);
+        c.variants.has(type-name) || c.flags.has(type-name) || c.resources.has(type-name)
+    }
+
+    is-type-key: func(c: Checker, k: string) -> bool {
+        let type-name = intern(k);
+        c.records.has(type-name) || c.variants.has(type-name) || c.flags.has(type-name)
+            || c.resources.has(type-name) || c.aliases.has(k)
+    }
+
+    // a type's name as written where sc is (Name, or module.Name), as its key: the module's own,
+    // then its package's top level; unchanged when there is none (known-type reports it)
+    type-key: func(c: Checker, sc: Scope, n: string) -> string {
+        let dot = find-byte(n, 46).unwrap-or(-1);
+        if dot > 0 {
+            let m = n.substring(0, dot);
+            let mk = module-key(sc, m);
+            // a std module's type (value.value-kind), as its funcs are reached
+            if mk == "" && c.std-modules.has(m) { return "yel:std/" + n; }
+            if mk == "" { return n; }
+            return mk + "." + n.substring(dot + 1, n.len());
+        }
+        if sc.module != "" && is-type-key(c, sc.pkg.prefix + sc.module + "." + n) {
+            return sc.pkg.prefix + sc.module + "." + n;
+        }
+        if is-type-key(c, sc.pkg.prefix + n) { return sc.pkg.prefix + n; }
+        if is-type-key(c, "yel:std/" + n) { return "yel:std/" + n; }
+        n
+    }
+
+    // a type as written where sc is, its names as keys (tps: the func's type parameters, left as
+    // they are)
+    resolve-type: func(c: Checker, sc: Scope, t: Type, tps: list<string>) -> Type {
+        match t {
+            named(n) => {
+                if contains(tps, name-text(n)) { return t; }
+                let k = type-key(c, sc, name-text(n));
+                if c.aliases.has(k) {
+                    // a distinct type: its own, held as what it names
+                    if c.aliases[k].distinct {
+                        return Type.distinct-type({ name: k, base: alias-type(c, k), });
+                    }
+                    return alias-type(c, k);
+                }
+                Type.named(intern(k))
+            }
+            union-type(xs) => union-of(resolve-types(c, sc, xs, tps)),
+            anon-record(r) => {
+                for i in 0..r.fields.len() {
+                    if r.fields.index-of(r.fields[i]) != i {
+                        type-error(c, "field {r.fields[i]} is written twice in {show-type(t)}");
+                    }
+                }
+                anon-record-of(r.fields, resolve-types(c, sc, r.types, tps))
+            }
+            readonly-type(x) => readonly-of(resolve-type(c, sc, x, tps)),
+            range-type(r) => {
+                if semtype.decimal-order(r.lo, r.hi) > 0 {
+                    type-error(c, "{r.text} holds no value: its end is before its start");
+                }
+                t
+            }
+            _ => map-children(t, { x -> resolve-type(c, sc, x, tps) }),
+        }
+    }
+
+    // an alias's type: what it names, resolved where it is declared
+    alias-type: func(c: Checker, k: string) -> Type {
+        if contains(c.expanding, k) {
+            type-error(c, "type {base-name(k)} names itself");
+            return Type.error-type;
+        }
+        c.expanding.push(k);
+        let a = c.aliases[k];
+        let t = known(c, resolve-type(c, a.scope, a.target, []), "type {base-name(k)}", false);
+        c.expanding.pop();
+        t
+    }
+
+    // the declarations the type sets open into
+    d-of: func(c: Checker) -> Decls { { records: c.records, variants: c.variants, } }
+
+    // whether every value of a is one of b (types as sets: semtype.yel)
+    subtype: func(c: Checker, a: Type, b: Type) -> bool {
+        let d = d-of(c);
+        semtype.is-empty(d, semtype.diff(d, semtype.translate(d, a), semtype.translate(d, b)))
+    }
+
+    // a type a literal or a union of them has left, for an operation on its values (1 | 2 + 1 is
+    // an s32)
+    widened: func(t: Type) -> Type {
+        match resolve(t) {
+            singleton(s) => representation(t),
+            range-type(r) => representation(t),
+            union-type(xs) => representation(t),
+            _ => t,
+        }
+    }
+
+    // a literal where literals of a union are wanted: its own type, the one value (a member of the
+    // union, or not: unify says)
+    literal-singleton: func(c: Checker, e: Expr, want: Type) -> option<Type> {
+        let w = resolve(want);
+        let wants = match w {
+            union-type(xs) => true,
+            singleton(s) => true,
+            range-type(r) => true,
+            _ => false,
+        };
+        if !wants || !is-literal(e) { return none; }
+        // the union's kind the literal is written in
+        let base = Type.unit-type;
+        let fits = false;
+        for k in kinds(w) {
+            if !fits && literal-fits(e, k) {
+                base = k;
+                fits = true;
+            }
+        }
+        if !fits { return none; }
+        match e.kind {
+            unary(u) => { u.value.ty = base; }
+            _ => {}
+        }
+        let key = semtype.literal-key(e);
+        let text = match e.kind {
+            str-lit(x) => "\"{x}\"",
+            char-lit(x) => "'{from-byte(x)}'",
+            _ => key,
+        };
+        some(Type.singleton({ base: base, key: key, text: text, }))
+    }
+
+    // whether a literal is written in kind k
+    literal-fits: func(e: Expr, k: Type) -> bool {
+        match e.kind {
+            int-lit(x) => fits-kind(1, k),
+            float-lit(x) => fits-kind(2, k),
+            char-lit(x) => show-type(k) == "char",
+            str-lit(x) => show-type(k) == "string",
+            bool-lit(x) => show-type(k) == "bool",
+            unary(u) => {
+                match u.value.kind {
+                    int-lit(x) => fits-kind(1, k),
+                    float-lit(x) => fits-kind(2, k),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    resolve-types: func(c: Checker, sc: Scope, ts: list<Type>, tps: list<string>) -> list<Type> {
+        let out: list<Type> = [];
+        for t in ts { out.push(resolve-type(c, sc, t, tps)); }
+        out
+    }
+
+    // a func's name, called where the func being checked is: the module's own, its package's top
+    // level, then the builtins' (a name they have more than one of is chosen by builtin-pick, from
+    // the call's first argument); "" for none (a case, some, ok)
+    func-key: func(c: Checker, n: string) -> string {
+        let own = own-key(c, n);
+        if own != "" { return own; }
+        if c.builtins.has(n) && c.builtins[n].len() == 1 {
+            return c.builtins[n][0];
+        }
+        ""
+    }
+
+    // whether a func's first parameter takes a call's first argument (as builtin-pick asks)
+    takes-first: func(c: Checker, key: string, args: list<Expr>) -> bool {
+        let sig = c.funcs[key];
+        if sig.params.len() == 0 || args.len() == 0 { return false; }
+        let t = resolve(widened(check(c, args[0], fresh(c), "the first argument of {base-name(key)}")));
+        match t {
+            var(v) => { if v.kind == 0 { return true; } }
+            _ => {}
+        }
+        could-fit(sig.params[0], t)
+    }
+
+    // a func's name as the module's own or its package's top level's; "" for neither
+    own-key: func(c: Checker, n: string) -> string {
+        let sc = c.scope;
+        if sc.module != "" && c.funcs.has(sc.pkg.prefix + sc.module + "." + n) {
+            return sc.pkg.prefix + sc.module + "." + n;
+        }
+        // (a program without a package's name keys its items as the prelude does: a prelude's name
+        // is the prelude's)
+        if c.funcs.has(sc.pkg.prefix + n) && !(sc.pkg.prefix == "" && c.prelude.has(n)) {
+            return sc.pkg.prefix + n;
+        }
+        ""
+    }
+
+    // a builtin's key, under its name
+    builtin: func(c: Checker, k: string) {
+        let n = base-name(k);
+        if !c.builtins.has(n) { c.builtins.set(n, []); }
+        c.builtins[n].push(k);
+    }
+
+    // the one of the builtins named n whose first parameter takes the first argument's type (that
+    // argument checked here, first: x.f(a) is f(x, a)); "" for no such name
+    builtin-pick: func(c: Checker, n: string, args: list<Expr>) -> string {
+        if !c.builtins.has(n) { return ""; }
+        let keys = c.builtins[n];
+        if args.len() == 0 {
+            type-error(c, "{n}: which one depends on its first argument, and it has none");
+            return "";
+        }
+        let t = resolve(widened(check(c, args[0], fresh(c), "the first argument of {n}")));
+        match t {
+            var(v) => {
+                if v.kind == 0 {
+                    type-error(
+                        c,
+                        "{n}: which one depends on its first argument's type, not known yet: annotate it",
+                    );
+                }
+            }
+            _ => {}
+        }
+        let fits: list<string> = [];
+        for k in keys {
+            let sig = c.funcs[k];
+            if sig.params.len() > 0 && could-fit(sig.params[0], t) { fits.push(k); }
+        }
+        if fits.len() == 1 { return fits[0]; }
+        // more than one: the ones taking this type itself before any taking every type (T)
+        let particular: list<string> = [];
+        for k in fits {
+            match c.funcs[k].params[0] {
+                param(x) => {}
+                _ => particular.push(k),
+            }
+        }
+        if particular.len() == 1 { return particular[0]; }
+        // still more than one: the most particular, whose first parameter's type is one of every
+        // other's (a set<K>, a map<K, ()>, before a map<K, V>)
+        for k in particular {
+            let narrowest = particular.all({ other -> other == k || could-fit(c.funcs[other].params[0], c.funcs[k].params[0]) });
+            if narrowest { return k; }
+        }
+        let takes: list<string> = [];
+        for k in keys {
+            let sig = c.funcs[k];
+            if sig.params.len() > 0 { takes.push(show-type(sig.params[0])); }
+        }
+        if fits.len() == 0 {
+            type-error(
+                c,
+                "{n}: none takes this first argument ({show-type(t)}); one takes each of {takes.join(", ")}",
+            );
+        } else {
+            type-error(
+                c,
+                "{n}: more than one takes this first argument ({show-type(t)}): {takes.join(", ")}",
+            );
+        }
+        ""
+    }
+
+    // whether a value of type t could be given where p (a parameter's, its type parameters any) is
+    // wanted, settling nothing
+    could-fit: func(p0: Type, t1: Type) -> bool {
+        // readonly or not, the same kind of value
+        let t = match resolve(t1) {
+            readonly-type(x) => resolve(x),
+            _ => resolve(t1),
+        };
+        let p = match p0 {
+            readonly-type(x) => x,
+            _ => p0,
+        };
+        match p {
+            param(x) => { return true; }
+            _ => {}
+        }
+        match t {
+            var(v) => { return v.kind == 0 || fits-kind(v.kind, p); }
+            _ => {}
+        }
+        match p {
+            fixed-list(x) => match t {
+                fixed-list(y) => { if x.len != y.len && x.len >= 0 { return false; } }
+                _ => {}
+            },
+            // shown as they are (a stream's, a future's and a seq's item fits as a list's does)
+            func-type(x) => { return show-type(p) == show-type(t); }
+            readonly-type(x) => { return show-type(p) == show-type(t); }
+            _ => {}
+        }
+        match pair-parts(p, t, could-fit) {
+            some(r) => r,
+            none => show-type(p) == show-type(t),
+        }
+    }
+
+    // an interpolation's value with a spec ("{x:>8}": the parser's ~format(x, spec)), else none
+    format-call: func(part: Expr) -> option<Call> {
+        match part.kind {
+            call(call) => if call.name == "~format" { some(call) } else { none },
+            _ => none,
+        }
+    }
+
+    // a value with a spec in an interpolation: checked, and its spec one its type takes (a base or
+    // zeros an integer's, a precision a float's)
+    check-format: func(c: Checker, part: Expr, call: Call) {
+        let value-type = erase-distinct(resolve(check(c, call.args[0], fresh(c), "an interpolation")));
+        part.ty = Type.string-type;
+        call.args[1].ty = Type.string-type;
+        let spec = match call.args[1].kind {
+            str-lit(text) => text,
+            _ => "",
+        };
+        // a number's kind (an integer or float literal's not settled yet: an s64's, an f64's)
+        let number = match value-type {
+            num(name) => name,
+            var(variable) => if variable.kind == 1 { "s64" } else if variable.kind == 2 { "f64" } else { "" },
+            _ => "",
+        };
+        let shown = show-type(value-type);
+        match format-spec(spec) {
+            some(format) => {
+                let base = format.kind == "x" || format.kind == "X" || format.kind == "b" || format.kind == "o";
+                if base && (number == "" || !is-int(number)) {
+                    type-error(c, "{format.kind} in a spec: expected an integer, found {shown}");
+                }
+                if format.precision >= 0 && (number == "" || is-int(number)) {
+                    type-error(c, ".{format.precision} in a spec: expected a float, found {shown}");
+                }
+                if format.zero && number == "" { type-error(c, "0 in a spec: expected a number, found {shown}"); }
+            }
+            // the parser has told it
+            none => {}
+        }
+    }
+
+    // a generic func of yel's std
+    std-generic: func(c: Checker, key: string) -> bool {
+        if !c.funcs.has(key) { return false; }
+        starts-with(key, "yel:std/") && c.funcs[key].type-params.len() > 0
+    }
+
+    // the module a name is, where no local has that name ("" for none)
+    module-ref: func(c: Checker, e: Expr) -> string {
+        match e.kind {
+            name(n) => {
+                if !is-none(local-type(c, n)) { return ""; }
+                let k = module-key(c.scope, name-text(n));
+                // a module of the standard library's, by its name (set.add(s, x))
+                if k == "" && c.std-modules.has(name-text(n)) { return "yel:std/" + name-text(n); }
+                k
+            }
+            _ => "",
+        }
+    }
+
+    // the variant, flags or resource type an expression names (Type, or module.Type), as its key;
+    // "" for none
+    type-ref: func(c: Checker, e: Expr) -> string {
+        match e.kind {
+            name(n) => {
+                if !is-none(local-type(c, n)) { return ""; }
+                let k = type-key(c, c.scope, name-text(n));
+                if has-members(c, k) {
+                    k
+                } else {
+                    ""
+                }
+            }
+            field(f) => {
+                let mk = module-ref(c, f.target);
+                if mk == "" { return ""; }
+                let k = mk + "." + f.name;
+                if has-members(c, k) {
+                    k
+                } else {
+                    ""
+                }
+            }
+            _ => "",
+        }
+    }
+
+    // a name that is a func (no local has it) used as a value: its key ("" for none). Not a
+    // generic func's (which instance?), nor an extern's (a C macro, or C types)
+    func-value: func(c: Checker, n: string) -> string {
+        if !is-none(local-type(c, intern(n))) { return ""; }
+        let k = func-key(c, n);
+        if k == "" { return ""; }
+        if c.funcs[k].type-params.len() > 0 {
+            type-error(c, "{n} is generic: a generic func is not a value yet");
+        }
+        if c.externs.has(k) { type-error(c, "{n} is an extern: an extern is not a value yet"); }
+        if c.async-funcs.has(k) {
+            type-error(c, "{n} is async: an async func is not a value yet");
+        }
+        k
+    }
+
+    func-sig-type: func(c: Checker, k: string) -> Type {
+        let sig = c.funcs[k];
+        Type.func-type({ params: sig.params, result: sig.result, })
+    }
+
+    // a call through a local holding a func
+    call-value: func(c: Checker, n: string, t: Type, args: list<Expr>) -> Type {
+        let params: list<Type> = [];
+        let result = fresh(c);
+        match resolve(t) {
+            func-type(f) => {
+                params = f.params;
+                result = f.result;
+            }
+            var(v) => {
+                if v.kind != 0 {
+                    type-error(c, "{n} is not a func ({show-type(t)}): it cannot be called");
+                }
+                // a func not known yet: what the call gives it
+                for a in args { params.push(fresh(c)); }
+                unify(c, t, Type.func-type({ params: params, result: result, }), "{n}");
+            }
+            _ => {
+                type-error(c, "{n} is not a func ({show-type(t)}): it cannot be called");
+                result = Type.error-type;
+            }
+        }
+        if args.len() != params.len() {
+            type-error(c, "{n} takes {params.len()} arguments, given {args.len()}");
+        }
+        // each argument checked (one past the params: against the error type, told already)
+        for i in 0..args.len() {
+            check(c, args[i], if i < params.len() { params[i] } else { Type.error-type }, "argument {i + 1} of {n}");
+        }
+        c.last-type-args = [];
+        result
+    }
+
+    // get, set and len (the prelude's) on a fixed-length list: its item, set in place (a local's or
+    // a record field's), its length; none for any other call (xs is checked either way)
+    fixed-call: func(c: Checker, n: string, args: list<Expr>) -> option<Type> {
+        if !(n == "at" || n == "set" || n == "len") || own-key(c, n) != ""
+            || !c.builtins.has(n) || args.len() == 0 { return none; }
+        let lt = resolve(check(c, args[0], fresh(c), "a list"));
+        let fixed = match lt {
+            fixed-list(x) => true,
+            _ => false,
+        };
+        if !fixed { return none; }
+        let item = match lt {
+            fixed-list(x) => x.item,
+            _ => Type.unit-type,
+        };
+        let want = if n == "len" { 1 } else if n == "at" { 2 } else { 3 };
+        if args.len() != want {
+            type-error(c, "{n} takes {want} arguments");
+            return some(Type.error-type);
+        }
+        if n == "len" { return some(Type.num("s64")); }
+        check(c, args[1], Type.num("s64"), "an index");
+        if n == "at" { return some(item); }
+        match args[0].kind {
+            name(v) => {}
+            field(f) => {}
+            _ => type-error(
+                c,
+                "a fixed-length list's item is set in a variable or a field, where the list is",
+            ),
+        }
+        check(c, args[2], item, "the item set");
+        some(Type.unit-type)
+    }
+
+    add-sig: func(c: Checker, span: Span, n: string, sig: FuncSig) {
+        c.span = span;
+        if c.funcs.has(n) { type-error(c, "func {n} is declared twice"); }
+        c.funcs.set(n, sig);
+    }
+
+    signature: func(tps: list<string>, params: list<Type>, result: Type) -> FuncSig {
+        let ps: list<Type> = [];
+        for t in params { ps.push(generalize(t, tps)); }
+        { type-params: tps, params: ps, result: generalize(result, tps), }
+    }
+
+    check-func: func(c: Checker, f: Func) {
+        c.quiet = false;
+        c.in-func = f.name;
+        c.bindings = f.bindings;
+        c.scope = f.scope;
+        c.span = f.span;
+        c.type-params = f.type-params;
+        let sig = c.funcs[f.name];
+        c.scopes = [];
+        c.marks = [];
+        c.depths = [];
+        c.narrows = [];
+        c.in-async = f.is-async;
+        c.async-call = false;
+        c.assigned = map.new();
+        assigned-in(f.body, c.assigned);
+        c.closure-depth = 0;
+        c.unit = f.unit;
+        push-scope(c);
+        for i in 0..f.params.len() { bind(c, intern(f.params[i]), sig.params[i], f.marks[i]); }
+        c.result = sig.result;
+        // a generator (its body yields): a seq<T> given back, its values T; its body's value none
+        f.is-generator = yields-in(f.body);
+        c.yield-type = none;
+        if f.is-generator {
+            match resolve(sig.result) {
+                seq-type(x) => { c.yield-type = some(x); }
+                _ => {
+                    c.span = f.span;
+                    type-error(c, "{base-name(f.name)} yields: it gives back a seq<T> (its values T)");
+                    // its yields are a generator's all the same (not told again)
+                    c.yield-type = some(Type.error-type);
+                }
+            }
+            if f.is-async { type-error(c, "{base-name(f.name)} yields: a generator is not an async func"); }
+            c.result = Type.unit-type;
+            check-block(c, f.body, fresh(c), false);
+            return;
+        }
+        // a func with no result ignores its body's value
+        match sig.result {
+            unit-type => check-block(c, f.body, fresh(c), false),
+            _ => check-block(c, f.body, sig.result, true),
+        };
+    }
+
+    // whether a block yields (not a closure's)
+    yields-in: func(b: Block) -> bool {
+        for e in walk.exprs(b, false) {
+            match e.kind {
+                yield-expr(x) => { return true; }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    // a block's statements: its value's type (unit for none). keep: the value is used (else, as a
+    // statement, its last if's or match's branches need not agree)
+    check-block: func(c: Checker, b: Block, want: Type, keep: bool) -> Type {
+        push-scope(c);
+        let value = Type.unit-type;
+        // the scopes an if that leaves narrows the rest of the block in
+        let exits = 0;
+        // a nested block's statements are its own: the one around it is back on its span after
+        let saved = c.span;
+        for i in 0..b.stmts.len() {
+            c.span = b.spans[i];
+            // each statement's errors its own: one told for each
+            c.quiet = false;
+            match b.stmts[i] {
+                let-stmt(l) => {
+                    let t = fresh(c);
+                    match l.ty {
+                        some(ty) => {
+                            t = known(
+                                c,
+                                generalize(resolve-type(c, c.scope, ty, c.type-params), c.type-params),
+                                "the type of {l.name}",
+                                true,
+                            );
+                        }
+                        none => {}
+                    }
+                    let vt = check(c, l.value, t, "the value of {l.name}");
+                    // list<T, ?>: the value's length
+                    bind(c, intern(l.name), if open-length(t) { vt } else { t }, l.mark);
+                }
+                let-pattern(l) => {
+                    let t = fresh(c);
+                    match l.ty {
+                        some(ty) => {
+                            t = known(
+                                c,
+                                generalize(resolve-type(c, c.scope, ty, c.type-params), c.type-params),
+                                "the type of a let's pattern",
+                                false,
+                            );
+                        }
+                        none => {}
+                    }
+                    let before = c.context.errors.len();
+                    check(c, l.value, t, "a let's value");
+                    let seen: map<string, bool> = map.new();
+                    check-pattern(c, l.pattern, t, seen, false);
+                    // what the pattern covers, where its types are sound (no error in it)
+                    if well-typed(c, before) {
+                        match uncovered(c, [l.pattern,], t) {
+                            some(w) => type-error(c, "a let's pattern does not fit {w}: use a match"),
+                            none => {}
+                        }
+                    }
+                }
+                return-stmt(e) => { check(c, e, c.result, "{c.in-func}'s result"); }
+                for-stmt(f) => check-for(c, f),
+                loop-stmt(x) => {
+                    let outer = c.unit;
+                    c.unit = x.unit;
+                    c.loops += 1;
+                    check-block(c, x.body, fresh(c), false);
+                    c.loops -= 1;
+                    c.unit = outer;
+                }
+                assign(a) => {
+                    match binding-of(c, a.name) {
+                        some(m) => c.bindings.assigns.set(a, m),
+                        none => {}
+                    }
+                    match local-type(c, a.name) {
+                        some(t) => check-assign(c, t, a.op, a.value, name-text(a.name)),
+                        none => {
+                            // a global: named by its key from here on
+                            let gk = global-key(c, name-text(a.name));
+                            if gk == "" {
+                                not-found(c, "{a.name} is not declared", name-text(a.name), names-here(c));
+                            } else {
+                                let shown = a.name;
+                                a.name = intern(gk);
+                                check-assign(c, c.globals[gk].ty, a.op, a.value, name-text(shown));
+                            }
+                        }
+                    }
+                }
+                assign-field(a) => {
+                    let rt = check(c, a.target, fresh(c), "a record");
+                    // a value: a new one is made, not changed (no other name sees it change)
+                    match resolve(rt) {
+                        readonly-type(x) => type-error(
+                            c,
+                            ".{a.name} of a {show-type(rt)}: a readonly value's fields are not assigned",
+                        ),
+                        anon-record(r) => type-error(
+                            c,
+                            ".{a.name} of a {show-type(rt)}: an anonymous record is a value, its fields not assigned (make another)",
+                        ),
+                        _ => {}
+                    }
+                    check-assign(c, field-type(c, rt, a.name), a.op, a.value, ".{a.name}");
+                }
+                expr-stmt(x) => {
+                    if x.is-value && keep { value = check(c, x.value, want, "the value"); }
+                    else { discard(c, x.value); }
+                    // if cond { return; }: what fails cond holds after it
+                    match x.value.kind {
+                        if-else(ie) => {
+                            if is-none-block(ie.otherwise) && leaves(ie.then) {
+                                push-narrowing(c, facts(c, ie.cond).no);
+                                exits += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                break-stmt => { if c.loops == 0 { type-error(c, "break outside a loop"); } }
+                continue-stmt => { if c.loops == 0 { type-error(c, "continue outside a loop"); } }
+            }
+        }
+        for k in 0..exits { pop-scope(c); }
+        pop-scope(c);
+        // a block that never gets to its end (a return, a break, a loop no break leaves) has no
+        // value of its own: it is any
+        if keep && !leaves(b) {
+            if is-never(want) {
+                type-error(c, "a func whose result is never gets to its end: end it with a call that never returns (panic, exit)");
+            } else {
+                unify(c, want, value, "the value");
+            }
+        }
+        c.span = saved;
+        value
+    }
+
+    // whether a type leaves a list's length to its value (list<T, ?>)
+    open-length: func(t: Type) -> bool {
+        match t {
+            fixed-list(x) => x.len < 0 || open-length(x.item),
+            list-type(x) => open-length(x),
+            option-type(x) => open-length(x),
+            result-type(r) => open-length(r.ok) || open-length(r.err),
+            tuple-type(xs) => {
+                for x in xs { if open-length(x) { return true; } }
+                false
+            }
+            anon-record(r) => {
+                for x in r.types { if open-length(x) { return true; } }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    check-assign: func(c: Checker, t: Type, op: string, value: Expr, what: string) {
+        if op == "=" {
+            check(c, value, t, "the value given {what}");
+        } else {
+            numeric(c, t, "{op} on {what}");
+            check(c, value, t, "the right of {op}");
+        }
+    }
+
+    // a for: its variable and body in the for's unit (an environment each turn, when a closure
+    // captures one of its bindings)
+    check-for: func(c: Checker, f: For) {
+        let outer = c.unit;
+        push-scope(c);
+        match f.stop {
+            none => {
+                // a list, or a fixed-length one
+                let item = fresh(c);
+                let lt = check(c, f.start, fresh(c), "a for's list");
+                // a readonly list's items: readonly (they are, settled)
+                match resolve(lt) {
+                    readonly-type(x) => { lt = x; }
+                    _ => {}
+                }
+                match resolve(lt) {
+                    fixed-list(x) => { item = x.item; }
+                    // a generator's values, read as they come
+                    seq-type(x) => { item = x; }
+                    _ => unify(c, Type.list-type(item), lt, "a for's list"),
+                }
+                c.unit = f.unit;
+                bind(c, intern(f.name), item, f.mark);
+            }
+            some(stop) => {
+                // a range of any one integer type
+                let t = fresh-kind(c, 1);
+                check(c, f.start, t, "a range's start");
+                check(c, stop, t, "a range's end");
+                c.unit = f.unit;
+                bind(c, intern(f.name), t, f.mark);
+            }
+        }
+        c.loops += 1;
+        check-block(c, f.body, fresh(c), false);
+        c.loops -= 1;
+        pop-scope(c);
+        c.unit = outer;
+    }
+
+    // what a type is to as: "int", "float", "bool", "char", or "" (no conversion has it); an
+    // unsettled literal's is its kind's
+    cast-class: func(t: Type) -> string {
+        match t {
+            num(n) => if is-int(n) { "int" } else { "float" },
+            bool-type => "bool",
+            char-type => "char",
+            var(v) => if v.kind == 1 { "int" } else if v.kind == 2 { "float" } else { "" },
+            _ => "",
+        }
+    }
+
+    // x as T: from a number, a bool or a char to a number or a char, as the conversions' table has
+    // them (an integer from any, a float from a number, a char from an integer); a literal takes
+    // T's type (1 as s64 is an s64)
+    infer-cast: func(c: Checker, x: Cast) -> Type {
+        let target = generalize(resolve-type(c, c.scope, x.ty, c.type-params), c.type-params);
+        let source = resolve(widened(check(c, x.value, fresh(c), "a value converted")));
+        // into or out of a distinct type: between what each is held as (a value its base holds
+        // already, as it is; else a number's conversion)
+        let to-base = distinct-base(target);
+        let from-base = distinct-base(source);
+        if !(to-base == target) || !(from-base == source) {
+            if unifies(to-base, from-base) || subtype(c, from-base, to-base) {
+                unify(c, to-base, from-base, "a value converted");
+                return target;
+            }
+            numeric-cast(c, from-base, to-base);
+            return target;
+        }
+        numeric-cast(c, source, target)
+    }
+
+    // what a distinct type is held as (any other type: itself)
+    distinct-base: func(t: Type) -> Type {
+        match resolve(t) {
+            distinct-type(x) => x.base,
+            _ => t,
+        }
+    }
+
+    // x as T between numbers, chars and bools (as the conversions' table has them)
+    numeric-cast: func(c: Checker, source: Type, target: Type) -> Type {
+        let from = cast-class(source);
+        let to = match target {
+            var(v) => "",
+            _ => cast-class(target),
+        };
+        if to == "" || to == "bool" {
+            type-error(c, "as gives a number or a char, not {show-type(target)}");
+        }
+        if from == "" {
+            type-error(c, "as converts a number, a bool or a char, not {show-type(source)}");
+        }
+        match source {
+            var(v) => {
+                if v.kind == 1 && to == "int" || v.kind == 2 && to == "float" {
+                    unify(c, target, source, "a literal converted");
+                    return target;
+                }
+            }
+            _ => {}
+        }
+        let ok = to == "int" || to == "float" && (from == "int" || from == "float") || to == "char"
+            && from == "int";
+        if !ok {
+            type-error(
+                c,
+                "{show-type(source)} as {show-type(target)}: as gives a char only from an integer, and a float only from a number",
+            );
+        }
+        target
+    }
+
+    // a closure literal: its params' types (written, or the wanted func's), its body checked a
+    // closure deeper (its return and its loops its own)
+    infer-closure: func(c: Checker, cl: Closure, want: Type) -> Type {
+        let n = cl.params.len();
+        let wanted: list<Type> = [];
+        let result = fresh(c);
+        match resolve(want) {
+            func-type(f) => {
+                if f.params.len() == n {
+                    wanted = f.params;
+                    result = f.result;
+                }
+            }
+            _ => {}
+        }
+        let params: list<Type> = [];
+        for i in 0..n {
+            let t = match cl.types[i] {
+                some(x) => generalize(resolve-type(c, c.scope, x, c.type-params), c.type-params),
+                none => if wanted.len() == n { wanted[i] } else { fresh(c) },
+            };
+            if wanted.len() == n {
+                unify(c, wanted[i], t, "parameter {cl.params[i]} of a closure");
+            }
+            params.push(t);
+        }
+        let saved-result = c.result;
+        let saved-yield = c.yield-type;
+        c.yield-type = none;
+        let saved-loops = c.loops;
+        let saved-unit = c.unit;
+        // a closure's body waits for nothing (an async closure is not there yet)
+        let saved-async = c.in-async;
+        c.in-async = false;
+        c.closure-depth += 1;
+        c.unit = cl.unit;
+        push-scope(c);
+        for i in 0..n { bind(c, intern(cl.params[i]), params[i], cl.marks[i]); }
+        c.result = result;
+        c.loops = 0;
+        // a closure whose result is unit (a handler) ignores its body's value
+        match resolve(result) {
+            unit-type => { check-block(c, cl.body, fresh(c), false); }
+            _ => { check-block(c, cl.body, result, true); }
+        }
+        pop-scope(c);
+        c.closure-depth -= 1;
+        c.in-async = saved-async;
+        c.unit = saved-unit;
+        c.result = saved-result;
+        c.yield-type = saved-yield;
+        c.loops = saved-loops;
+        Type.func-type({ params: params, result: result, })
+    }
+
+    // an expression whose value is not used: an if's or a match's branches need not agree
+    discard: func(c: Checker, e: Expr) {
+        match e.kind {
+            if-else(x) => {
+                check(c, x.cond, Type.bool-type, "an if's condition");
+                let f = facts(c, x.cond);
+                push-narrowing(c, f.yes);
+                check-block(c, x.then, fresh(c), false);
+                pop-scope(c);
+                push-narrowing(c, f.no);
+                match x.otherwise {
+                    some(b) => check-block(c, b, fresh(c), false),
+                    none => Type.unit-type,
+                };
+                pop-scope(c);
+            }
+            match-expr(m) => infer-match(c, m, fresh(c), false),
+            block(b) => check-block(c, b, fresh(c), false),
+            _ => check(c, e, fresh(c), "a statement"),
+        };
+    }
+
+    // an expression's type, which must be want's (what says where, for an error)
+    check: func(c: Checker, e: Expr, want: Type, what: string) -> Type {
+        // an error in e is at e: the innermost expression checked
+        let saved = c.span;
+        c.span = e.span;
+        let t = infer(c, e, want);
+        // a type still to be found (a closure's result, an inferred let's) takes a narrowed local's
+        // base type, not the one value a test left it (as a literal's: let s = "get" is a string);
+        // a local declared of one value (type only = "post") keeps it
+        match resolve(want) {
+            var(v) => {
+                if v.kind == 0 && narrowed-to-one(c, e, t) { t = representation(t); }
+            }
+            _ => {}
+        }
+        e.ty = t;
+        if !unifies(want, t) {
+            if freezes(want, t) && (value-local(c, e) != "" || value-source(e) != "") {
+                // a value where readonly is wanted: no other name may write it (effects.yel checks
+                // it is made here or by a func that makes it, and not used after)
+                c.sites.push({
+                    file: c.scope.file,
+                    span: e.span,
+                    in-func: c.in-func,
+                    kind: "freeze",
+                    callee: "",
+                    index: -1,
+                    local: value-local(c, e),
+                    binding: value-binding(c, e),
+                    source: value-source(e),
+                    started: false,
+                    result-readonly: false,
+                });
+                t = want;
+            } else {
+                // a subset of want's values (else an error), held as want's when it holds them
+                // another way
+                unify(c, want, t, what);
+                if widen-to(e, t, want) { t = want; }
+            }
+        }
+        c.span = saved;
+        t
+    }
+
+    // a call's argument against its parameter. Readonly or not may differ, as the func's effects
+    // allow (checked once every func's are known: a readonly value given a parameter the func never
+    // writes or keeps; a value given a readonly parameter the func never keeps or gives back)
+    check-arg: func(c: Checker, callee: string, i: s64, arg: Expr, param: Type) {
+        // whether it is a start's call (read before the argument's own calls clear it)
+        let started = c.starting;
+        c.starting = false;
+        let what = "argument {i + 1} of {callee}";
+        let saved = c.span;
+        c.span = arg.span;
+        // a readonly parameter is the call's (what it is lent, it reads: a borrow, checked below
+        // for each value the argument may be), not a type the argument is made readonly to: a
+        // block's or an if's value is lent as a name is
+        let t = infer(c, arg, if is-readonly(param) { without-readonly(param) } else { param });
+        arg.ty = t;
+        if !unifies(param, t) {
+            let given-readonly = is-readonly(t) && !is-readonly(param);
+            let wanted-readonly = is-readonly(param) && !is-readonly(t);
+            let relaxed = false;
+            if given-readonly {
+                // what it reads stays readonly (a list's items are T: T is them, readonly)
+                relaxed = unifies(top-type(param), top-type(t));
+            } else if wanted-readonly {
+                relaxed = unifies(without-readonly(param), without-readonly(t));
+            }
+            // an extern's readonly parameter only says it reads it (its result's type follows the
+            // argument's: nothing readonly of a value given it comes back), and so does a generic
+            // std func's (list.get over memory.yel's intrinsics, as the extern it replaced)
+            if relaxed && wanted-readonly && (c.externs.has(callee) || std-generic(c, callee)) {
+                c.span = saved;
+                return;
+            }
+            if relaxed {
+                // each value it may be (a block's, each branch's): a literal is new, a name and a
+                // call's result checked as they are
+                for v in if given-readonly { [arg,] } else { value-leaves(arg) } {
+                    if !given-readonly && is-literal-value(v) { continue; }
+                    c.sites.push({
+                        file: c.scope.file,
+                        span: v.span,
+                        in-func: c.in-func,
+                        kind: if given-readonly { "read" } else { "borrow" },
+                        callee: callee,
+                        index: i,
+                        local: value-local(c, v),
+                        binding: value-binding(c, v),
+                        source: value-source(v),
+                        started: started,
+                        result-readonly: false,
+                    });
+                }
+            } else {
+                unify(c, param, t, what);
+                widen-to(arg, t, param);
+            }
+        }
+        c.span = saved;
+    }
+
+    // a local holding a stream or a future given a WIT func: moved (its end leaves the component),
+    // so not used after (effects.yel checks it once every func is read)
+    note-move: func(c: Checker, callee: string, i: s64, arg: Expr) {
+        let n = value-local(c, arg);
+        let seen: map<string, bool> = map.new();
+        if n == "" || !holds-handles(c, arg.ty, seen) { return; }
+        c.sites.push({
+            file: c.scope.file,
+            span: arg.span,
+            in-func: c.in-func,
+            kind: "move",
+            callee: callee,
+            index: i,
+            local: n,
+            binding: binding-of(c, intern(n)),
+            source: "",
+            started: false,
+            result-readonly: false,
+        });
+    }
+
+    // a local given one argument readonly and another that may write it (or a closure that may):
+    // the readonly name would see it change during the call
+    same-value-twice: func(c: Checker, callee: string, args: list<Expr>, params: list<Type>) {
+        for i in 0..args.len() {
+            let n = value-local(c, args[i]);
+            if n != "" && is-readonly(params[i]) {
+                for j in 0..args.len() {
+                    if j != i && !is-readonly(params[j]) && !effects.settled-immutable(params[j])
+                        && walk.mentions(args[j], n) {
+                        let saved = c.span;
+                        c.span = args[j].span;
+                        type-error-help(
+                            c,
+                            "{n} is given argument {i + 1} of {base-name(callee)} readonly, and argument {j + 1} may write it",
+                            "",
+                            "the readonly argument would see it change during the call: give one of them a copy",
+                        );
+                        c.span = saved;
+                    }
+                }
+            }
+        }
+    }
+
+    // whether a value of type t is where t & readonly is wanted (the same type, readonly)
+    freezes: func(want: Type, t: Type) -> bool {
+        is-readonly(want) && !is-readonly(t) && unifies(without-readonly(want), without-readonly(t))
+    }
+
+    // the local a value is ("" for another value)
+    value-local: func(c: Checker, e: Expr) -> string {
+        match e.kind {
+            name(n) => if is-none(local-type(c, n)) { "" } else { name-text(n) },
+            _ => "",
+        }
+    }
+
+    // whether e is a local a test narrowed to one value (its type one value; its binding's not)
+    narrowed-to-one: func(c: Checker, e: Expr, t: Type) -> bool {
+        let one = match resolve(t) {
+            singleton(_) => true,
+            _ => false,
+        };
+        if !one { return false; }
+        match e.kind {
+            name(n) => match binding-of(c, n) {
+                some(m) => match resolve(m.ty) {
+                    singleton(_) => false,
+                    _ => true,
+                },
+                none => false,
+            },
+            _ => false,
+        }
+    }
+
+    // the values an expression may be: a block's last, each branch's of an if, each arm's of a
+    // match (through them), else itself
+    value-leaves: func(e: Expr) -> list<Expr> {
+        match e.kind {
+            block(b) => block-leaves(b),
+            if-else(x) => {
+                let out = block-leaves(x.then);
+                match x.otherwise {
+                    some(b) => { for v in block-leaves(b) { out.push(v); } }
+                    none => {}
+                }
+                out
+            }
+            match-expr(m) => {
+                let out: list<Expr> = [];
+                for arm in m.arms {
+                    for v in value-leaves(arm.body) { out.push(v); }
+                }
+                out
+            }
+            _ => [e,],
+        }
+    }
+
+    block-leaves: func(b: Block) -> list<Expr> {
+        if b.stmts.len() == 0 { return []; }
+        match b.stmts[b.stmts.len() - 1] {
+            expr-stmt(x) => if x.is-value { value-leaves(x.value) } else { [] },
+            _ => [],
+        }
+    }
+
+    // a literal made here (a list's, a record's, a tuple's, a map's): no other name has it
+    is-literal-value: func(e: Expr) -> bool {
+        match e.kind {
+            list-lit(_) => true,
+            record-lit(_) => true,
+            tuple-lit(_) => true,
+            str-lit(_) => true,
+            int-lit(_) => true,
+            float-lit(_) => true,
+            bool-lit(_) => true,
+            char-lit(_) => true,
+            _ => false,
+        }
+    }
+
+    // the binding of a local a value is (none for another value)
+    value-binding: func(c: Checker, e: Expr) -> option<Mark> {
+        if value-local(c, e) == "" { return none; }
+        match e.kind {
+            name(n) => binding-of(c, n),
+            _ => none,
+        }
+    }
+
+    // the func (by key) whose result a value is ("" for another value)
+    value-source: func(e: Expr) -> string {
+        match e.kind {
+            call(x) => x.name,
+            method(m) => m.name,
+            _ => "",
+        }
+    }
+
+    // a type, readonly or not at its top: what it is
+    top-type: func(t: Type) -> Type {
+        match resolve(t) {
+            readonly-type(x) => x,
+            _ => t,
+        }
+    }
+
+    // e against want, its type kept as its own (a pattern's literal: compared as its kind, never
+    // converted)
+    check-unwidened: func(c: Checker, e: Expr, want: Type, what: string) -> Type {
+        let saved = c.span;
+        c.span = e.span;
+        let t = infer(c, e, want);
+        e.ty = t;
+        unify(c, want, t, what);
+        c.span = saved;
+        t
+    }
+
+    // e, of type from, where to is wanted: a conversion when to holds its values another way (an
+    // s32 where s32 | string is); whether it made one
+    widen-to: func(e: Expr, from: Type, to: Type) -> bool {
+        if show-type(represented(from)) == show-type(represented(to)) { return false; }
+        let inner: Expr = { kind: e.kind, span: e.span, ty: from, };
+        e.kind = ExprKind.widen({ value: inner, ty: to, });
+        e.ty = to;
+        true
+    }
+
+    infer: func(c: Checker, e: Expr, want: Type) -> Type {
+        // a literal where a union of literals is wanted: its one value
+        match literal-singleton(c, e, want) {
+            some(t) => { return t; }
+            none => {}
+        }
+        match e.kind {
+            // a literal takes the number type its context wants
+            int-lit(v) => {
+                let w = resolve(want);
+                if fits-kind(1, w) { return w; }
+                fresh-kind(c, 1)
+            }
+            float-lit(v) => {
+                let w = resolve(want);
+                if fits-kind(2, w) { return w; }
+                fresh-kind(c, 2)
+            }
+            char-lit(code) => Type.char-type,
+            tuple-lit(items) => {
+                let types: list<Type> = [];
+                match resolve(want) {
+                    tuple-type(xs) => { if xs.len() == items.len() { types = xs; } }
+                    _ => {}
+                }
+                let out: list<Type> = [];
+                for i in 0..items.len() {
+                    let t = if types.len() > 0 { types[i] } else { fresh(c) };
+                    out.push(check(c, items[i], t, "item {i} of a tuple"));
+                }
+                Type.tuple-type(out)
+            }
+            bool-lit(b) => Type.bool-type,
+            str-lit(s) => Type.string-type,
+            unit => Type.unit-type,
+            interp(parts) => {
+                for part in parts {
+                    match format-call(part) {
+                        some(call) => check-format(c, part, call),
+                        none => { check(c, part, fresh(c), "an interpolation"); }
+                    }
+                }
+                Type.string-type
+            }
+            list-lit(items) => {
+                let item = fresh(c);
+                match resolve(want) {
+                    // a new list, so no other name writes it: readonly where that is wanted (its
+                    // items readonly too)
+                    readonly-type(rx) => {
+                        match resolve(rx) {
+                            list-type(x) => {
+                                for i in items { check(c, i, x, "a list's item"); }
+                                return want;
+                            }
+                            _ => {}
+                        }
+                    }
+                    list-type(x) => { item = x; }
+                    // a fixed-length list where one is wanted: that many items
+                    fixed-list(x) => {
+                        if x.len >= 0 && items.len() != x.len {
+                            type-error(
+                                c,
+                                "a list<{show-type(x.item)}, {x.len}> of {items.len()} items",
+                            );
+                        }
+                        for i in items { check(c, i, x.item, "a list's item"); }
+                        return Type.fixed-list({ item: x.item, len: items.len(), });
+                    }
+                    _ => {}
+                }
+                for x in items { check(c, x, item, "a list's item"); }
+                Type.list-type(item)
+            }
+            name(n) => {
+                // a func as a value: named by its key from here on
+                let fk = func-value(c, name-text(n));
+                if fk != "" {
+                    e.kind = ExprKind.name(intern(fk));
+                    return func-sig-type(c, fk);
+                }
+                // a constant: its literal, of its type
+                if is-none(local-type(c, n)) {
+                    let ck = const-key(c, name-text(n));
+                    if ck != "" {
+                        let v = const-copy(c, ck, e.span);
+                        e.kind = v.kind;
+                        match c.consts[ck].ty {
+                            some(t) => { return check(c, e, t, "the constant {n}"); }
+                            none => { return infer(c, e, want); }
+                        }
+                    }
+                }
+                // a global (no local hides it): named by its key from here on
+                if is-none(local-type(c, n)) {
+                    let gk = global-key(c, name-text(n));
+                    if gk != "" {
+                        e.kind = ExprKind.name(intern(gk));
+                        return c.globals[gk].ty;
+                    }
+                }
+                // a local: which binding it is
+                match binding-of(c, n) {
+                    some(m) => c.bindings.exprs.set(e, m),
+                    none => {}
+                }
+                infer-name(c, name-text(n), want)
+            }
+            call(x) => {
+                // a local holding a func: called through it, as any func value (its name read as
+                // where it is: a narrowed one's value of that kind)
+                match local-type(c, intern(x.name)) {
+                    some(t) => {
+                        e.kind = ExprKind.apply({
+                            callee: { kind: ExprKind.name(intern(x.name)), span: e.span, ty: t, },
+                            args: x.args,
+                        });
+                        return infer(c, e, want);
+                    }
+                    none => {}
+                }
+                // a fixed-length list's at, set or len, as made by a check before this one (an
+                // expression a literal's parts are checked twice for): the same again
+                if starts-with(x.name, "~") {
+                    match fixed-call(c, x.name.substring(1, x.name.len()), x.args) {
+                        some(t) => { return t; }
+                        none => {}
+                    }
+                }
+                match fixed-call(c, x.name, x.args) {
+                    some(t) => {
+                        x.name = "~" + x.name;
+                        return t;
+                    }
+                    none => {}
+                }
+                let key = func-key(c, x.name);
+                if key == "" { key = builtin-pick(c, x.name, x.args); }
+                if key != "" { x.name = key; }
+                let given = x.args.len();
+                let t = infer-call(c, x.name, x.args, want);
+                x.type-args = c.last-type-args;
+                // a case given () carries nothing: its bare name
+                if given == 1 && x.args.len() == 0 { e.kind = ExprKind.name(intern(x.name)); }
+                t
+            }
+            method(m) => {
+                // Type.case(payload), module.Type.case(payload): the type named by its key from
+                // here on
+                let tk = type-ref(c, m.target);
+                if tk != "" && c.resources.has(intern(tk)) {
+                    // Resource.f(a): the resource's constructor (new) or a static func
+                    let key = tk + "." + m.name;
+                    if !c.funcs.has(key) {
+                        wit-not-found(c, "resource {base-name(tk)} has no func {m.name}", m.name, tk);
+                        return Type.error-type;
+                    }
+                    e.kind = ExprKind.call({ name: key, args: m.args, type-args: [], });
+                    return infer(c, e, want);
+                }
+                if tk != "" {
+                    m.target.kind = ExprKind.name(intern(tk));
+                    let given = m.args.len();
+                    let t = infer-case(c, tk, m.name, m.args);
+                    // Type.case(()) of a case carrying nothing: Type.case
+                    if given == 1 && m.args.len() == 0 {
+                        e.kind = ExprKind.field({ target: m.target, name: m.name, });
+                    }
+                    return t;
+                }
+                // module.f(a): a call of the module's func
+                let mk = module-ref(c, m.target);
+                if mk != "" {
+                    let key = mk + "." + m.name;
+                    if !c.funcs.has(key) {
+                        wit-not-found(c, "module {expr-name(m.target)} has no func {m.name}", m.name, mk);
+                        return Type.error-type;
+                    }
+                    e.kind = ExprKind.call({ name: key, args: m.args, type-args: [], });
+                    return infer(c, e, want);
+                }
+                // the call's arguments, its target first
+                let args: list<Expr> = [m.target,];
+                for a in m.args { args.push(a); }
+                // xs.len() of a fixed-length list
+                match fixed-call(c, m.name, args) {
+                    some(t) => {
+                        e.kind = ExprKind.call({ name: "~" + m.name, args: args, type-args: [], });
+                        return t;
+                    }
+                    none => {}
+                }
+                // x.f(a) on a resource's handle: its method
+                if c.methods.has(m.name) {
+                    match resolve(check(c, m.target, fresh(c), "a method's target")) {
+                        named(n) => {
+                            if c.resources.has(n) && c.funcs.has(name-text(n) + "." + m.name) {
+                                e.kind = ExprKind.call({
+                                    name: name-text(n) + "." + m.name,
+                                    args: args,
+                                    type-args: [],
+                                });
+                                return infer(c, e, want);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // x.f(a): the module's own f (or its package's) where its first parameter takes x,
+                // else the one of the builtins named f that does (a set's add in a module with an
+                // add of its own is the set's)
+                let key = own-key(c, m.name);
+                if key == "" { key = func-key(c, m.name); }
+                else if !takes-first(c, key, args) && c.builtins.has(m.name) {
+                    key = builtin-pick(c, m.name, args);
+                }
+                if key == "" { key = builtin-pick(c, m.name, args); }
+                if key != "" { m.name = key; }
+                else {
+                    // no func of that name: a resource's method yel has not
+                    match resolve(check(c, m.target, fresh(c), "a method's target")) {
+                        named(n) => {
+                            if c.resources.has(n) {
+                                wit-not-found(c, "resource {base-name(name-text(n))} has no method {m.name}", m.name, name-text(n));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let t = infer-call(c, m.name, args, want);
+                m.type-args = c.last-type-args;
+                t
+            }
+            field(f) => {
+                let tk = type-ref(c, f.target);
+                if tk != "" && c.resources.has(intern(tk)) {
+                    type-error(
+                        c,
+                        "{expr-name(f.target)}.{f.name}: a resource's func is called: {expr-name(f.target)}.{f.name}(...)",
+                    );
+                    return Type.error-type;
+                }
+                if tk != "" {
+                    f.target.kind = ExprKind.name(intern(tk));
+                    return infer-case(c, tk, f.name, []);
+                }
+                // module.f as a value
+                let fmk = module-ref(c, f.target);
+                if fmk != "" && c.funcs.has(fmk + "." + f.name) {
+                    let fk = fmk + "." + f.name;
+                    if c.funcs[fk].type-params.len() > 0 {
+                        type-error(c, "{fk} is generic: a generic func is not a value yet");
+                    }
+                    e.kind = ExprKind.name(intern(fk));
+                    return func-sig-type(c, fk);
+                }
+                if module-ref(c, f.target) != "" {
+                    type-error(
+                        c,
+                        "{expr-name(f.target)}.{f.name}: a module's func is called, and its types are named in types",
+                    );
+                    return Type.error-type;
+                }
+                let t = check(c, f.target, fresh(c), "a record");
+                field-type(c, t, f.name)
+            }
+            binary(b) => infer-binary(c, b),
+            unary(u) => {
+                if u.op == "-" {
+                    // a number type wanted is the operand's too; another (a union holding numbers)
+                    // is the result's to fit
+                    let operand-want = match resolve(want) {
+                        num(n) => want,
+                        var(v) => want,
+                        _ => fresh(c),
+                    };
+                    let t = check(c, u.value, operand-want, "the operand of -");
+                    numeric(c, t, "-");
+                    return t;
+                }
+                check(c, u.value, Type.bool-type, "the operand of !");
+                Type.bool-type
+            }
+            if-else(x) => {
+                check(c, x.cond, Type.bool-type, "an if's condition");
+                let f = facts(c, x.cond);
+                match x.otherwise {
+                    some(b) => {
+                        push-narrowing(c, f.yes);
+                        let t = check-block(c, x.then, want, true);
+                        pop-scope(c);
+                        // both branches against what is wanted (when it is known: the then's
+                        // value may be one of its values, "variant" where a union is wanted)
+                        let target = match resolve(want) {
+                            var(v) => t,
+                            _ => want,
+                        };
+                        push-narrowing(c, f.no);
+                        check-block(c, b, target, true);
+                        pop-scope(c);
+                        target
+                    }
+                    none => {
+                        push-narrowing(c, f.yes);
+                        check-block(c, x.then, fresh(c), false);
+                        pop-scope(c);
+                        Type.unit-type
+                    }
+                }
+            }
+            is-test(x) => infer-is(c, x),
+            try-as(x) => {
+                infer-is(c, x);
+                // some of the value, as what the test narrows it to
+                let d = d-of(c);
+                Type.option-type(split(c, x.value.ty, semtype.translate(d, x.ty), some(x.ty)).yes)
+            }
+            // checked once already (a conversion the checker made)
+            widen(x) => x.ty,
+            start-expr(x) => {
+                // std's host may start a task in a sync func: a sync WIT func that gives a stream and
+                // a future (read-via-stream), its task run by the executor of whoever reads it
+                if c.scope.pkg.id != "yel:std" { need-async(c, "start"); }
+                if !is-async-call(c, x) {
+                    type-error(c, "start begins an async func's call: start f(…), f an async func");
+                }
+                c.async-call = true;
+                c.starting = true;
+                Type.future-type(check(c, x, fresh(c), "a started call"))
+            }
+            wait-expr(w) => infer-wait(c, w),
+            yield-expr(x) => {
+                match c.yield-type {
+                    some(t) => { check(c, x, t, "a value yielded"); }
+                    none => type-error(c, "yield is in a generator's body (a func that gives back a seq<T>), not a closure's"),
+                }
+                Type.unit-type
+            }
+            block(b) => {
+                // a block where a func of no params is wanted: a closure ({ count += 1; })
+                match resolve(want) {
+                    func-type(f) => {
+                        if f.params.len() == 0 {
+                            e.kind = ExprKind.closure({
+                                params: [],
+                                types: [],
+                                body: b,
+                                marks: [],
+                                unit: { env: false, },
+                            });
+                            return infer(c, e, want);
+                        }
+                    }
+                    _ => {}
+                }
+                check-block(c, b, want, true)
+            }
+            closure(cl) => infer-closure(c, cl, want),
+            cast(x) => infer-cast(c, x),
+            apply(x) => {
+                // a closure called where it is made: the call's wanted result is its body's (as a
+                // closure given where a func is wanted takes its params' and result's types from
+                // it), so ({ -> [1, 2,] })() is a list<u8, 2> where one is wanted
+                let callee-want = match x.callee.kind {
+                    closure(cl) => {
+                        let params: list<Type> = [];
+                        for a in x.args { params.push(fresh(c)); }
+                        Type.func-type({ params: params, result: want, })
+                    }
+                    _ => fresh(c),
+                };
+                call-value(
+                    c,
+                    match x.callee.kind {
+                        name(n) => name-text(n),
+                        _ => "the func called",
+                    },
+                    check(c, x.callee, callee-want, "a func called"),
+                    x.args,
+                )
+            }
+            record-lit(fields) => infer-record(c, fields, want),
+            match-expr(m) => infer-match(c, m, want, true),
+        }
+    }
+
+    is-none: func(t: option<Type>) -> bool {
+        match t {
+            none => true,
+            _ => false,
+        }
+    }
+
+    infer-name: func(c: Checker, n: string, want: Type) -> Type {
+        match local-type(c, intern(n)) {
+            some(t) => { return t; }
+            none => {}
+        }
+        if n == "none" {
+            match resolve(want) {
+                option-type(x) => { return want; }
+                _ => {}
+            }
+            return Type.option-type(fresh(c));
+        }
+        if is-result-case(c, n, want) { return infer-result(c, n, [], want); }
+        let wanted = wanted-case(c, n, want);
+        if wanted != "" { return infer-case(c, wanted, n, []); }
+        // the two floats no numeral spells
+        if n == "inf" || n == "nan" {
+            let w = resolve(want);
+            if fits-kind(2, w) { return w; }
+            return fresh-kind(c, 2);
+        }
+        if c.case-owner.has(n) {
+            let owner = c.case-owner[n];
+            if owner == "" {
+                type-error(c, "{n} is a case of more than one type: write Type.{n}");
+                return Type.error-type;
+            }
+            return infer-case(c, owner, n, []);
+        }
+        not-found(c, "{n} is not declared", n, names-here(c));
+        Type.error-type
+    }
+
+    infer-call: func(c: Checker, n: string, args: list<Expr>, want: Type) -> Type {
+        // an async func's call: what a wait or a start does (its arguments are not)
+        let waited = c.async-call;
+        c.async-call = false;
+        // a start's call: its arguments' sites say so (the flag is this call's, not its arguments')
+        let starting = c.starting;
+        c.starting = false;
+        if c.async-funcs.has(n) && !waited {
+            type-error(
+                c,
+                "{base-name(n)} is async: wait {base-name(n)}(…) for its result, or start {base-name(n)}(…) for a future",
+            );
+        }
+        if c.funcs.has(n) {
+            let inst = instantiate(c, c.funcs[n]);
+            if args.len() != inst.params.len() {
+                type-error(c, "{n} takes {inst.params.len()} arguments, given {args.len()}");
+                // its arguments checked on their own; the call's result is still the func's
+                for a in args { check(c, a, Type.error-type, "an argument of {n}"); }
+                return inst.result;
+            }
+            let first-site = c.sites.len();
+            for i in 0..args.len() {
+                c.starting = starting;
+                check-arg(c, n, i, args[i], inst.params[i]);
+                c.starting = false;
+            }
+            // the result, its type arguments known: whether it is readonly
+            let readonly-result = is-readonly(resolve(inst.result))
+                || effects.settled-immutable(inst.result);
+            for k in first-site..c.sites.len() {
+                if c.sites[k].callee == n { c.sites[k].result-readonly = readonly-result; }
+            }
+            same-value-twice(c, n, args, inst.params);
+            if c.wit-externs.has(n) {
+                for i in 0..args.len() { note-move(c, n, i, args[i]); }
+            }
+            c.last-type-args = inst.type-args;
+            return inst.result;
+        }
+        c.last-type-args = [];
+        if n == "some" && args.len() == 1 {
+            let inner = fresh(c);
+            match resolve(want) {
+                option-type(x) => { inner = x; }
+                _ => {}
+            }
+            check(c, args[0], inner, "some's payload");
+            return Type.option-type(inner);
+        }
+        if is-result-case(c, n, want) { return infer-result(c, n, args, want); }
+        let wanted = wanted-case(c, n, want);
+        if wanted != "" { return infer-case(c, wanted, n, args); }
+        if c.case-owner.has(n) {
+            let owner = c.case-owner[n];
+            if owner == "" {
+                type-error(c, "{n} is a case of more than one type: write Type.{n}(...)");
+                return Type.error-type;
+            }
+            return infer-case(c, owner, n, args);
+        }
+        // no func of that name: told, unless an argument is an error's (x.f() on what an error made
+        // is that error's echo)
+        let echo = false;
+        for a in args {
+            if is-error(check(c, a, fresh(c), "an argument of {n}")) { echo = true; }
+        }
+        if !echo { type-error(c, "no func {n}"); }
+        Type.error-type
+    }
+
+    // the variant wanted here, when it has a case n (so a bare case needs no Type. where it is
+    // expected)
+    wanted-case: func(c: Checker, n: string, want: Type) -> string {
+        match resolve(want) {
+            named(k) => {
+                if !c.variants.has(k) { return ""; }
+                for kc in c.variants[k] {
+                    if kc.name == n { return name-text(k); }
+                }
+                ""
+            }
+            _ => "",
+        }
+    }
+
+    // whether ok or err is result's: when a result is wanted, or when no variant has that case
+    is-result-case: func(c: Checker, n: string, want: Type) -> bool {
+        if n != "ok" && n != "err" { return false; }
+        match resolve(want) {
+            result-type(r) => true,
+            _ => !c.case-owner.has(n),
+        }
+    }
+
+    // ok, ok(v), err or err(e)
+    infer-result: func(c: Checker, n: string, args: list<Expr>, want: Type) -> Type {
+        let ok = fresh(c);
+        let err = fresh(c);
+        match resolve(want) {
+            result-type(r) => {
+                ok = r.ok;
+                err = r.err;
+            }
+            _ => {}
+        }
+        let side = if n == "ok" { ok } else { err };
+        // ok(()): ok, a side carrying nothing holding ()
+        if args.len() == 1 && is-unit-lit(args[0]) { args.pop(); }
+        if args.len() == 0 {
+            unify(c, side, Type.unit-type, "{n} with no payload");
+        } else {
+            if args.len() != 1 { type-error(c, "{n} takes one payload"); }
+            match resolve(side) {
+                unit-type => type-error(c, "{n} carries no payload in a {show-type(want)}"),
+                _ => {}
+            }
+            check(c, args[0], side, "{n}'s payload");
+        }
+        Type.result-type({ ok: ok, err: err, })
+    }
+
+    // (): what a case carrying nothing holds
+    is-unit-lit: func(e: Expr) -> bool {
+        match e.kind {
+            unit => true,
+            _ => false,
+        }
+    }
+
+    // Type.case, or Type.case(payload); a flags type's Type.flag
+    infer-case: func(c: Checker, tname: string, cname: string, args: list<Expr>) -> Type {
+        let owner = intern(tname);
+        if c.flags.has(owner) {
+            if !contains(c.flags[owner], cname) {
+                not-found(c, "{tname} has no flag {cname}", cname, c.flags[owner]);
+            }
+            if args.len() != 0 { type-error(c, "{tname}.{cname} is a flag, not a func"); }
+            return Type.named(owner);
+        }
+        let known = if c.variants.has(owner) { c.variants[owner] } else { [] };
+        for k in known {
+            if k.name == cname {
+                if !k.has-payload && args.len() == 1 && is-unit-lit(args[0]) { args.pop(); }
+                // a payload of () may be left out (it carries nothing: Type.case is Type.case(()))
+                let unit-payload = match resolve(k.payload) {
+                    unit-type => true,
+                    _ => false,
+                };
+                if k.has-payload && unit-payload && args.len() == 0 { return Type.named(owner); }
+                if k.has-payload {
+                    if args.len() != 1 {
+                        type-error(c, "{tname}.{cname} carries a payload");
+                        return Type.named(owner);
+                    }
+                    check(c, args[0], k.payload, "{tname}.{cname}'s payload");
+                } else if args.len() != 0 {
+                    type-error(c, "{tname}.{cname} carries no payload");
+                }
+                return Type.named(owner);
+            }
+        }
+        let cases: list<string> = [];
+        if c.variants.has(owner) {
+            for k in c.variants[owner] { cases.push(k.name); }
+        }
+        not-found(c, "{tname} has no case {cname}", cname, cases);
+        Type.error-type
+    }
+
+    field-type: func(c: Checker, t0: Type, f: string) -> Type {
+        let t = resolve(t0);
+        match t {
+            // a readonly value's field: readonly too
+            readonly-type(x) => readonly-of(field-type(c, x, f)),
+            anon-record(r) => {
+                let i = index-of(r.fields, f);
+                if i < 0 {
+                    not-found(c, "a {show-type(t)} has no field {f}", f, r.fields);
+                    return Type.error-type;
+                }
+                r.types[i]
+            }
+            tuple-type(xs) => {
+                let i = tuple-index(f);
+                if i < 0 || i >= xs.len() {
+                    type-error(c, "a {show-type(t)} has no field {f}");
+                    return Type.error-type;
+                }
+                xs[i]
+            }
+            named(n) => {
+                // a flag of a flags value, read as a bool
+                if c.flags.has(n) {
+                    if !contains(c.flags[n], f) {
+                        not-found(c, "{n} has no flag {f}", f, c.flags[n]);
+                    }
+                    return Type.bool-type;
+                }
+                if !c.records.has(n) {
+                    type-error(c, ".{f} of {n}, which is not a record");
+                    return Type.error-type;
+                }
+                let info = c.records[n];
+                let i = index-of(info.fields, f);
+                if i < 0 {
+                    not-found(c, "record {n} has no field {f}", f, info.fields);
+                    return Type.error-type;
+                }
+                info.types[i]
+            }
+            _ => {
+                type-error(
+                    c,
+                    ".{f} of a {show-type(t)}, not a record (its type is not known yet: annotate it)",
+                );
+                Type.error-type
+            }
+        }
+    }
+
+    infer-binary: func(c: Checker, b: Binary) -> Type {
+        let op = b.op;
+        if op == "&&" || op == "||" {
+            check(c, b.left, Type.bool-type, "the left of {op}");
+            // the right is reached when the left held (&&) or failed (||)
+            let f = facts(c, b.left);
+            push-narrowing(c, if op == "&&" { f.yes } else { f.no });
+            check(c, b.right, Type.bool-type, "the right of {op}");
+            pop-scope(c);
+            return Type.bool-type;
+        }
+        if op == "==" || op == "!=" {
+            let t = check(c, b.left, fresh(c), "the left of {op}");
+            // the two may differ where one's values hold the other's ("get" == s)
+            let saved = c.span;
+            c.span = b.right.span;
+            let rt = infer(c, b.right, t);
+            b.right.ty = rt;
+            if !unifies(t, rt) && !unifies(without-readonly(t), without-readonly(rt)) {
+                // one side's values are the other's: compared as the wider
+                if subtype(c, rt, t) { widen-to(b.right, rt, t); }
+                else if subtype(c, t, rt) { widen-to(b.left, t, rt); }
+                else {
+                    type-error(
+                        c,
+                        "the right of {op}: expected {show-type(t)}, found {show-type(rt)}",
+                    );
+                }
+            }
+            c.span = saved;
+            return Type.bool-type;
+        }
+        let t = widened(check(c, b.left, fresh(c), "the left of {op}"));
+        if op == "<" || op == "<=" || op == ">" || op == ">=" {
+            comparable(c, t, op);
+            check(c, b.right, t, "the right of {op}");
+            return Type.bool-type;
+        }
+        // << and >>: by any integer
+        if op == "<<" || op == ">>" {
+            integral(c, t, op, false);
+            check(c, b.right, fresh-kind(c, 1), "the right of {op}");
+            return t;
+        }
+        if op == "|" || op == "&" || op == "^" {
+            integral(c, t, op, true);
+            check(c, b.right, t, "the right of {op}");
+            return t;
+        }
+        // + joins two strings; the rest (and + otherwise) are on two numbers of one type
+        match resolve(t) {
+            string-type => {
+                if op == "+" {
+                    check(c, b.right, Type.string-type, "the right of +");
+                    return Type.string-type;
+                }
+            }
+            _ => {}
+        }
+        numeric(c, t, op);
+        check(c, b.right, t, "the right of {op}");
+        t
+    }
+
+    // a record literal: the declared record context wants (that, or the one record of a union it
+    // wants with exactly these fields), else an anonymous record of its fields' types
+    infer-record: func(c: Checker, fields: list<FieldInit>, want: Type) -> Type {
+        let names: list<string> = [];
+        for f in fields {
+            if contains(names, f.name) {
+                // no record has a field twice: its values checked, and the literal an error's
+                type-error(c, "field {f.name} is given twice");
+                for g in fields { check(c, g.value, fresh(c), "field {g.name}"); }
+                return Type.error-type;
+            }
+            names.push(f.name);
+        }
+        let w = resolve(want);
+        match w {
+            anon-record(r) => {
+                if !same-fields(r.fields, names) {
+                    type-error(
+                        c,
+                        "{show-type(w)} has the fields \{ {r.fields.join(", ")} \}, given \{ {names.join(", ")} \}",
+                    );
+                }
+                for f in fields {
+                    let i = index-of(r.fields, f.name);
+                    check(c, f.value, if i < 0 { Type.error-type } else { r.types[i] }, "field {f.name}");
+                }
+                return w;
+            }
+            _ => {}
+        }
+        // a new record, so readonly where that is wanted: its fields readonly too
+        let frozen = is-readonly(w);
+        let target = wanted-record(c, if frozen { without-readonly(w) } else { w }, names);
+        if target == "" {
+            // an anonymous record: each field's own type
+            let types: list<Type> = [];
+            for f in fields { types.push(check(c, f.value, fresh(c), "field {f.name}")); }
+            return anon-record-of(names, types);
+        }
+        let record-name = intern(target);
+        let info = c.records[record-name];
+        if !same-fields(info.fields, names) {
+            type-error(
+                c,
+                "record {target} has the fields \{ {info.fields.join(", ")} \}, given \{ {names.join(", ")} \}",
+            );
+        }
+        for f in fields {
+            let i = index-of(info.fields, f.name);
+            let ft = if i < 0 { Type.error-type } else { info.types[i] };
+            check(
+                c,
+                f.value,
+                if frozen { readonly-of(ft) } else { ft },
+                "field {f.name} of {target}",
+            );
+        }
+        if frozen { readonly-of(Type.named(record-name)) } else { Type.named(record-name) }
+    }
+
+    // the declared record a literal with these fields is where w is wanted: w, or the one record
+    // of a union w with exactly them; "" for none (the literal is anonymous)
+    wanted-record: func(c: Checker, w: Type, names: list<string>) -> string {
+        match w {
+            named(n) => { if c.records.has(n) { return name-text(n); } }
+            union-type(xs) => {
+                let found: list<string> = [];
+                for x in xs {
+                    match resolve(x) {
+                        named(n) => {
+                            if c.records.has(n) && same-fields(
+                                c.records[n].fields,
+                                names,
+                            ) {
+                                found.push(name-text(n));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if found.len() == 1 { return found[0]; }
+            }
+            _ => {}
+        }
+        ""
+    }
+
+    same-fields: func(a: list<string>, b: list<string>) -> bool {
+        if a.len() != b.len() { return false; }
+        for x in b {
+            if !contains(a, x) { return false; }
+        }
+        true
+    }
+
+    // a match: each arm's pattern against the value's type, its guard a bool; the arms' values one
+    // type (when kept); every value fits an arm without a guard
+    infer-match: func(c: Checker, m: Match, want: Type, keep: bool) -> Type {
+        let before = c.context.errors.len();
+        let vt = check(c, m.value, fresh(c), "a match's value");
+        let saved = c.span;
+        let d = d-of(c);
+        // what the arms before (without guards) left, and the local matched (narrowed in each arm)
+        let rest = vt;
+        let subject = match m.value.kind {
+            name(n) => some(n),
+            _ => none,
+        };
+        let subject-mark = match subject {
+            some(n) => narrowable(c, n),
+            none => none,
+        };
+        for arm in m.arms {
+            c.span = arm.span;
+            push-scope(c);
+            let seen: map<string, bool> = map.new();
+            check-pattern(c, arm.pattern, vt, seen, false);
+            let parts = split(
+                c,
+                rest,
+                pattern-type(c, d, arm.pattern, vt),
+                pattern-as-type(c, arm.pattern),
+            );
+            // a binding of the whole value: what the arms before left of it, that this one fits
+            match arm.pattern {
+                name(pn) => { if pn.kind == "bind" { bind(c, intern(pn.name), parts.yes, pn.mark); } }
+                _ => {}
+            }
+            // the subject narrowed in the arm, unless its pattern binds that name (some(x) on x:
+            // the arm's x is the payload)
+            match (subject, subject-mark) {
+                (some(n), some(mark)) => if seen.has(name-text(n)) {
+                    push-narrowing(c, [])
+                } else {
+                    push-narrowing(c, [{ name: n, ty: parts.yes, mark: mark, },])
+                },
+                _ => push-narrowing(c, []),
+            }
+            match arm.guard {
+                some(g) => { check(c, g, Type.bool-type, "a match arm's guard"); }
+                none => { rest = parts.no; }
+            }
+            if keep {
+                match arm.body.kind {
+                    block(b) => check-block(c, b, want, true),
+                    _ => check(c, arm.body, want, "a match arm"),
+                };
+            } else {
+                discard(c, arm.body);
+            }
+            pop-scope(c);
+            pop-scope(c);
+        }
+        c.span = saved;
+        if well-typed(c, before) { exhaustive(c, m, vt); }
+        if keep { return want; }
+        Type.unit-type
+    }
+
+    // a pattern against the type t of the value at its place; seen: the names its arm binds; alt:
+    // under a |, where nothing binds
+    check-pattern: func(c: Checker, p: Pattern, t0: Type, seen: map<string, bool>, alt: bool) {
+        // at a union, the members the pattern looks inside (one kind of value)
+        let t = pattern-member(c, p, t0);
+        match p {
+            wild => {}
+            typed(x) => {
+                let ty = known(c, in-kind(generalize(resolve-type(c, c.scope, x.ty, c.type-params), c.type-params), t), "a pattern's type", false);
+                x.ty = ty;
+                if disjoint(c, t, ty) {
+                    type-error(c, "a {show-type(t)} is never a {show-type(ty)}");
+                }
+                let d = d-of(c);
+                x.test = some(is-pattern(c, ty, t));
+                check-pattern(
+                    c,
+                    x.sub,
+                    split(c, t, semtype.translate(d, ty), some(ty)).yes,
+                    seen,
+                    alt,
+                );
+            }
+            member(x) => check-pattern(c, x.sub, x.ty, seen, alt),
+            // lo..=hi: two literals of an integer or char type, in order
+            range(x) => {
+                check-unwidened(c, x.lo, t, "a range pattern's start");
+                check-unwidened(c, x.hi, t, "a range pattern's end");
+                match representation(t) {
+                    num(n) => {
+                        if !is-int(n) {
+                            type-error(
+                                c,
+                                "a range pattern on a {n}: ranges are of integers or chars",
+                            );
+                        }
+                    }
+                    char-type => {}
+                    var(v) => {}
+                    _ => type-error(
+                        c,
+                        "a range pattern on a {show-type(t)}: ranges are of integers or chars",
+                    ),
+                }
+                if semtype.is-empty(d-of(c), pattern-type(c, d-of(c), p, t)) {
+                    type-error(c, "the range holds no value: its end is before its start");
+                }
+            }
+            literal(e) => {
+                check-unwidened(c, e, t, "a literal pattern");
+                literal-type(c, t, "a literal pattern");
+            }
+            name(pn) => check-name-pattern(c, pn, t, seen, alt),
+            case(pc) => {
+                settle(c, pc.name, t);
+                let pt = case-payload(c, pc.name, t);
+                // a case carrying nothing holds (): its pattern (), _ or a name (bound to ()); an
+                // option's some carries a payload, () too
+                match resolve(pt) {
+                    unit-type => {
+                        let empty = pc.name == "some" || match pc.sub {
+                            wild => true,
+                            tuple(ps) => ps.len() == 0,
+                            name(pn) => pn.binds,
+                            _ => false,
+                        };
+                        if !empty {
+                            type-error(
+                                c,
+                                "{pc.name} carries no payload in a {show-type(resolve(t))}",
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                check-pattern(c, pc.sub, pt, seen, alt);
+            }
+            record(pr) => {
+                let rt = resolve(t);
+                let info = match record-shape(c, rt) {
+                    some(x) => x,
+                    none => {
+                        type-error(
+                            c,
+                            "a record pattern on a {show-type(rt)} (annotate the value's type)",
+                        );
+                        let empty: RecordInfo = { fields: [], types: [], };
+                        empty
+                    }
+                };
+                for i in 0..pr.fields.len() {
+                    let k = field-index(info.fields, pr.fields[i]);
+                    if k < 0 { type-error(c, "a {show-type(rt)} has no field {pr.fields[i]}"); }
+                    check-pattern(c, pr.patterns[i], if k < 0 { Type.error-type } else { info.types[k] }, seen, alt);
+                }
+                // ...rest: an anonymous record of the fields not named
+                if pr.rest != "" {
+                    if alt {
+                        type-error(
+                            c,
+                            "{pr.rest} is bound under a |, where a pattern binds nothing",
+                        );
+                    }
+                    if seen.has(pr.rest) {
+                        type-error(c, "{pr.rest} is bound twice in one pattern");
+                    }
+                    seen.set(pr.rest, true);
+                    bind(c, intern(pr.rest), rest-type(info, pr.fields), pr.rest-mark);
+                }
+            }
+            tuple(ps) => {
+                // (): unit's one value (of a union, its () member)
+                if ps.len() == 0 {
+                    if disjoint(c, Type.unit-type, t) {
+                        unify(c, Type.unit-type, t, "a () pattern");
+                    }
+                    return;
+                }
+                match resolve(t) {
+                    var(v) => {
+                        let xs: list<Type> = [];
+                        for q in ps { xs.push(fresh(c)); }
+                        unify(c, Type.tuple-type(xs), t, "a tuple pattern");
+                    }
+                    _ => {}
+                }
+                match resolve(t) {
+                    tuple-type(xs) => {
+                        if xs.len() != ps.len() {
+                            type-error(
+                                c,
+                                "a tuple pattern of {ps.len()} on a {show-type(resolve(t))}",
+                            );
+                        }
+                        for i in 0..ps.len() {
+                            check-pattern(c, ps[i], if i < xs.len() { xs[i] } else { Type.error-type }, seen, alt);
+                        }
+                    }
+                    _ => type-error(c, "a tuple pattern on a {show-type(resolve(t))}"),
+                }
+            }
+            alt(ps) => { for q in ps { check-pattern(c, q, t, seen, true); } }
+        }
+    }
+
+    // a record type's fields and their types (a declared record's, an anonymous one's); none for
+    // another type
+    record-shape: func(c: Checker, t: Type) -> option<RecordInfo> {
+        match resolve(t) {
+            // a readonly record's fields read readonly
+            readonly-type(x) => match record-shape(c, x) {
+                some(info) => {
+                    let ts: list<Type> = [];
+                    for y in info.types { ts.push(readonly-of(y)); }
+                    some({ fields: info.fields, types: ts, })
+                }
+                none => none,
+            },
+            named(n) => if c.records.has(n) { some(c.records[n]) } else { none },
+            anon-record(r) => some({ fields: r.fields, types: r.types, }),
+            _ => none,
+        }
+    }
+
+    // the anonymous record of a record's fields but named
+    rest-type: func(info: RecordInfo, named: list<string>) -> Type {
+        let fs: list<string> = [];
+        let ts: list<Type> = [];
+        for i in 0..info.fields.len() {
+            if !contains(named, info.fields[i]) {
+                fs.push(info.fields[i]);
+                ts.push(info.types[i]);
+            }
+        }
+        anon-record-of(fs, ts)
+    }
+
+    // a union's members a case, record or tuple pattern looks inside (as a union), which must be
+    // one kind of value (it is told by its tag); t itself for another pattern or type
+    pattern-member: func(c: Checker, p: Pattern, t: Type) -> Type {
+        let members: list<Type> = match resolve(t) {
+            union-type(xs) => xs,
+            _ => [],
+        };
+        if members.len() == 0 { return t; }
+        let fits: list<Type> = [];
+        for m in members {
+            let rm = resolve(m);
+            let ok = match p {
+                case(pc) => is-case-name(c, pc.name, rm),
+                name(pn) => is-case-name(c, pn.name, rm),
+                record(pr) => match rm {
+                    named(n) => c.records.has(n),
+                    anon-record(r) => {
+                        let all = true;
+                        for f in pr.fields {
+                            if !contains(r.fields, f) { all = false; }
+                        }
+                        all
+                    }
+                    _ => false,
+                },
+                tuple(ps) => match rm {
+                    tuple-type(xs) => ps.len() > 0 && xs.len() == ps.len(),
+                    unit-type => ps.len() == 0,
+                    _ => false,
+                },
+                _ => false,
+            };
+            if ok { fits.push(m); }
+        }
+        if fits.len() == 0 { return t; }
+        let u = union-of(fits);
+        match representation(u) {
+            union-type(ks) => type-error(
+                c,
+                "the pattern fits more than one kind of {show-type(t)}: match its type first (let x: T)",
+            ),
+            _ => {}
+        }
+        u
+    }
+
+    // a name in a pattern: a case of t, else (where names bind) a binding, else a constant
+    check-name-pattern: func(c: Checker, pn: NamePattern, t: Type, seen: map<string, bool>, alt: bool) {
+        settle(c, pn.name, t);
+        if is-case-name(c, pn.name, t) {
+            pn.kind = "case";
+            return;
+        }
+        if !pn.binds {
+            let ck = const-key(c, pn.name);
+            if ck != "" {
+                pn.kind = "const";
+                pn.key = ck;
+                let v = const-copy(c, ck, pn.span);
+                match c.consts[ck].ty {
+                    some(ct) => unify(c, ct, t, "the constant {pn.name}"),
+                    none => {}
+                }
+                check-unwidened(c, v, t, "the constant {pn.name}");
+                literal-type(c, t, "the constant {pn.name} as a pattern");
+                pn.value = some(v);
+                return;
+            }
+        }
+        if !pn.binds && c.case-owner.has(pn.name) {
+            type-error(c, "{pn.name} is not a case of {show-type(resolve(t))}");
+        }
+        if !pn.binds {
+            type-error(
+                c,
+                "{pn.name} is not a case of {show-type(resolve(t))} or a constant: bind it with let {pn.name}",
+            );
+        }
+        if alt { type-error(c, "{pn.name} is bound under a |, where a pattern binds nothing"); }
+        if seen.has(pn.name) { type-error(c, "{pn.name} is bound twice in one pattern"); }
+        seen.set(pn.name, true);
+        pn.kind = "bind";
+        bind(c, intern(pn.name), t, pn.mark);
+    }
+
+    // that a literal pattern's type is one a literal is written in
+    literal-type: func(c: Checker, t: Type, what: string) {
+        match representation(t) {
+            union-type(xs) => {}
+            num(n) => {}
+            char-type => {}
+            string-type => {}
+            bool-type => {}
+            var(v) => {}
+            _ => type-error(c, "{what} on a {show-type(resolve(t))}"),
+        }
+    }
+
+    field-index: func(fields: list<string>, f: string) -> s64 {
+        for i in 0..fields.len() {
+            if fields[i] == f { return i; }
+        }
+        -1
+    }
+
+    // a type not known yet, settled by the case n matched against it (none: an option)
+    settle: func(c: Checker, n: string, t: Type) {
+        match resolve(t) {
+            var(v) => {
+                if v.kind != 0 { return; }
+                if n == "none"
+                    || n == "some" { unify(c, Type.option-type(fresh(c)), t, "a match"); }
+                else if n == "ok" || n == "err" {
+                    unify(c, Type.result-type({ ok: fresh(c), err: fresh(c), }), t, "a match");
+                } else if n == "true" || n == "false" { unify(c, Type.bool-type, t, "a match"); }
+                else if c.case-owner.has(n) && c.case-owner[n] != "" {
+                    unify(c, Type.named(intern(c.case-owner[n])), t, "a match");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // whether n is a case of t
+    is-case-name: func(c: Checker, n: string, t: Type) -> bool {
+        match resolve(t) {
+            readonly-type(x) => is-case-name(c, n, x),
+            union-type(xs) => {
+                for x in xs {
+                    if is-case-name(c, n, x) { return true; }
+                }
+                false
+            }
+            singleton(s) => match s.base {
+                bool-type => n == s.key,
+                _ => false,
+            },
+            option-type(x) => n == "none" || n == "some",
+            result-type(r) => n == "ok" || n == "err",
+            bool-type => n == "true" || n == "false",
+            named(k) => {
+                if !c.variants.has(k) { return false; }
+                for kc in c.variants[k] {
+                    if kc.name == n { return true; }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    // the payload's type of t's case n (an error when it is not a case); () when it carries nothing
+    case-payload: func(c: Checker, n: string, t: Type) -> Type {
+        let rt = resolve(t);
+        match rt {
+            readonly-type(x) => { return readonly-of(case-payload(c, n, x)); }
+            _ => {}
+        }
+        // a union's: the payloads of the members with that case
+        match rt {
+            union-type(xs) => {
+                let ps: list<Type> = [];
+                for x in xs {
+                    if is-case-name(c, n, x) { ps.push(case-payload(c, n, x)); }
+                }
+                if ps.len() == 0 {
+                    type-error(c, "{n} is not a case of {show-type(rt)}");
+                    return Type.error-type;
+                }
+                return union-of(ps);
+            }
+            _ => {}
+        }
+        if !is-case-name(c, n, rt) {
+            type-error(c, "{n} is not a case of {show-type(rt)}");
+            return Type.error-type;
+        }
+        match rt {
+            option-type(x) => { if n == "some" { return x; } }
+            result-type(r) => {
+                let side = if n == "ok" { r.ok } else { r.err };
+                match resolve(side) {
+                    unit-type => {}
+                    _ => { return side; }
+                }
+            }
+            named(k) => {
+                if c.variants.has(k) {
+                    for kc in c.variants[k] {
+                        if kc.name == n && kc.has-payload { return kc.payload; }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Type.unit-type
+    }
+
+    // ================================================================ exhaustiveness
+
+    // whether no error was found since the errors numbered before (none told, and the statement
+    // not quiet: an echo there would not be told): what a pattern covers is only asked of sound types
+    well-typed: func(c: Checker, before: s64) -> bool { c.context.errors.len() == before && !c.quiet }
+
+    // that every value fits an arm without a guard: else an error naming one that fits none
+    exhaustive: func(c: Checker, m: Match, vt: Type) {
+        let patterns: list<Pattern> = [];
+        for arm in m.arms {
+            match arm.guard {
+                some(g) => {}
+                none => patterns.push(arm.pattern),
+            }
+        }
+        match uncovered(c, patterns, vt) {
+            some(w) => type-error(c, "the match has no arm for {w}: add one, or a _ arm"),
+            none => {}
+        }
+    }
+
+    // a value of type vt none of the patterns fit, shown as a pattern: the type's values less
+    // each pattern's, as sets (semtype.yel); none when none is left
+    uncovered: func(c: Checker, patterns: list<Pattern>, vt0: Type) -> option<string> {
+        let d = d-of(c);
+        // which values there are (readonly is who may write them, not which they are)
+        let vt = without-readonly(vt0);
+        let rest = semtype.translate(d, vt);
+        for p in patterns { rest = semtype.diff(d, rest, pattern-type(c, d, p, vt)); }
+        match semtype.sample(d, rest) {
+            some(w) => {
+                // any value of a union's kind: that kind's pattern
+                if w == "_" && kinds(vt).len() > 1 {
+                    for k in kinds(vt) {
+                        let part = kind-part(vt, k);
+                        if !semtype.is-empty(
+                            d,
+                            semtype.inter(d, rest, semtype.translate(d, part)),
+                        ) {
+                            return some("let x: {show-type(part)}");
+                        }
+                    }
+                }
+                some(w)
+            }
+            none => none,
+        }
+    }
+
+    // the values a pattern (checked) fits, of type t
+    pattern-type: func(c: Checker, d: Decls, p: Pattern, t1: Type) -> SemType {
+        let t0 = without-readonly(t1);
+        let t = resolve(pattern-member(c, p, t0));
+        match p {
+            wild => semtype.translate(d, t),
+            // its one value, of the type it was checked as
+            literal(e) => literal-set(d, e),
+            typed(x) => semtype.inter(d, semtype.translate(d, t), semtype.translate(d, x.ty)),
+            range(x) => semtype.range(
+                t,
+                semtype.literal-key(x.lo),
+                semtype.literal-key(x.hi),
+                x.inclusive,
+            ),
+            member(x) => pattern-type(c, d, x.sub, x.ty),
+            name(pn) => {
+                if pn.kind == "case" { return case-type(c, d, pn.name, t, none); }
+                if pn.kind == "const" {
+                    match pn.value {
+                        some(e) => { return literal-set(d, e); }
+                        none => {}
+                    }
+                }
+                semtype.translate(d, t)
+            }
+            case(pc) => {
+                let pt = case-payload(c, pc.name, t);
+                case-type(c, d, pc.name, t, some(pattern-type(c, d, pc.sub, pt)))
+            }
+            record(pr) => {
+                match t {
+                    named(rn) => {
+                        if !c.records.has(rn) { return semtype.translate(d, t); }
+                        let info = c.records[rn];
+                        let fields: list<SemType> = [];
+                        for i in 0..info.fields.len() {
+                            let k = field-index(pr.fields, info.fields[i]);
+                            fields.push(if k < 0 {
+                                semtype.translate(d, info.types[i])
+                            } else {
+                                pattern-type(c, d, pr.patterns[k], info.types[i])
+                            });
+                        }
+                        semtype.product(name-text(rn), name-text(rn), fields)
+                    }
+                    anon-record(r) => {
+                        let fields: list<SemType> = [];
+                        for i in 0..r.fields.len() {
+                            let k = field-index(pr.fields, r.fields[i]);
+                            fields.push(if k < 0 {
+                                semtype.translate(d, r.types[i])
+                            } else {
+                                pattern-type(c, d, pr.patterns[k], r.types[i])
+                            });
+                        }
+                        semtype.product(semtype.anon-tag(r.fields), "", fields)
+                    }
+                    _ => semtype.translate(d, t),
+                }
+            }
+            tuple(ps) => {
+                if ps.len() == 0 { return semtype.translate(d, Type.unit-type); }
+                match t {
+                    tuple-type(xs) => {
+                        let fields: list<SemType> = [];
+                        for i in 0..ps.len() { fields.push(pattern-type(c, d, ps[i], xs[i])); }
+                        semtype.product("tuple/{ps.len()}", "", fields)
+                    }
+                    _ => semtype.translate(d, t),
+                }
+            }
+            alt(ps) => {
+                let out = semtype.nothing();
+                for q in ps { out = semtype.union(out, pattern-type(c, d, q, t)); }
+                out
+            }
+        }
+    }
+
+    // a literal's one value (its type a literal type inside a union, else its kind)
+    literal-set: func(d: Decls, e: Expr) -> SemType {
+        match resolve(e.ty) {
+            singleton(s) => semtype.translate(d, e.ty),
+            _ => semtype.literal(e.ty, semtype.literal-key(e)),
+        }
+    }
+
+    // the values of t's case n, its payload's in sub (none: any payload)
+    case-type: func(c: Checker, d: Decls, n: string, t: Type, sub: option<SemType>) -> SemType {
+        let payload = match sub {
+            some(s) => s,
+            none => semtype.translate(d, case-payload(c, n, t)),
+        };
+        // a field for its payload (none for a case carrying nothing; an option's some has one)
+        let fields = match resolve(case-payload(c, n, t)) {
+            unit-type => if n == "some" { [payload,] } else { [] },
+            _ => [payload,],
+        };
+        if (n == "true" || n == "false") && show-type(representation(t)) == "bool" {
+            return semtype.bools(if n == "true" { 1 } else { 2 });
+        }
+        match t {
+            named(k) => semtype.product(name-text(k) + "." + n, name-text(k), fields),
+            _ => semtype.product(n, "", fields),
+        }
+    }
+
+    // ================================================================ async
+
+    // that a wait or a start is in an async func's body
+    need-async: func(c: Checker, what: string) {
+        if !c.in-async && c.closure-depth > 0 {
+            type-error(
+                c,
+                "{what} is not in a closure yet (a closure is not async): {what} in the async func around it",
+            );
+        }
+        if !c.in-async {
+            type-error(
+                c,
+                "{what} is only in an async func: make {base-name(c.in-func)} async (name: async func(…))",
+            );
+        }
+    }
+
+    // whether a builtin named n is async (one of several of that name: which one its first argument
+    // picks is settled when the call is checked)
+    async-builtin: func(c: Checker, n: string) -> bool {
+        if !c.builtins.has(n) { return false; }
+        c.builtins[n].any({ key -> c.async-funcs.has(key) })
+    }
+
+    // whether an expression is a call of an async func (its key settled by the checker, or a name
+    // that is one)
+    is-async-call: func(c: Checker, e: Expr) -> bool {
+        match e.kind {
+            call(x) => c.async-funcs.has(x.name) || c.async-funcs.has(func-key(c, x.name)) || async-builtin(c, x.name),
+            method(m) => {
+                // module.f(a): the module's func, and only it; h.f(a) on a resource's handle: its method
+                match m.target.kind {
+                    name(n) => {
+                        match local-type(c, n) {
+                            some(t) => {
+                                match resolve(t) {
+                                    named(r) => {
+                                        if c.resources.has(r) { return c.async-funcs.has(name-text(r) + "." + m.name); }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            none => {
+                                let mk = module-key(c.scope, name-text(n));
+                                if mk != "" { return c.async-funcs.has(mk + "." + m.name); }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                c.async-funcs.has(m.name) || c.async-funcs.has(func-key(c, m.name)) || async-builtin(c, m.name)
+            }
+            _ => false,
+        }
+    }
+
+    // what one value waited for gives: an async call's result, a future's
+    waited: func(c: Checker, e: Expr) -> Type {
+        if is-async-call(c, e) {
+            c.async-call = true;
+            return check(c, e, fresh(c), "a call waited for");
+        }
+        let t = check(c, e, fresh(c), "a value waited for");
+        match resolve(t) {
+            future-type(x) => x,
+            _ => {
+                type-error(c, "wait takes an async func's call or a future, found {show-type(t)}");
+                Type.error-type
+            }
+        }
+    }
+
+    // wait x: its result; wait a | b: whichever is done first (a union of their results); wait
+    // { a: x, b: y }: all of them, an anonymous record of their results
+    infer-wait: func(c: Checker, w: Wait) -> Type {
+        need-async(c, "wait");
+        let ts: list<Type> = [];
+        for v in w.values { ts.push(waited(c, v)); }
+        if w.mode == "one" { return ts[0]; }
+        if w.mode == "any" { return union-of(ts); }
+        for i in 0..w.fields.len() {
+            if index-of(w.fields, w.fields[i]) != i {
+                type-error(c, "field {w.fields[i]} is waited for twice");
+            }
+        }
+        anon-record-of(w.fields, ts)
+    }
+
+    // ================================================================ a component's boundary
+
+    // an exported func's types: a literal or union type that crosses as a WIT enum or variant
+    // named by an alias (its WIT name), an enum's strings WIT's names
+    check-crossings: func(c: Checker, f: Func) {
+        let sc = f.scope;
+        if !(
+            sc.pkg.prefix == "" && sc.module != "" && sc.pkg.modules[sc.module] == "export"
+        ) {
+            return;
+        }
+        c.span = f.span;
+        c.scope = f.scope;
+        c.in-func = f.name;
+        let seen: map<string, bool> = map.new();
+        let all: list<Type> = [];
+        for t in f.param-types { all.push(t); }
+        all.push(f.result);
+        for t in all {
+            // a stream or a future, its own or inside a value: its end crosses (a task of the call
+            // pumps it, so the call is an async func's)
+            let hseen: map<string, bool> = map.new();
+            if holds-handles(c, t, hseen) { crossing-call(c, f); }
+            check-crossing(c, t, seen);
+        }
+    }
+
+    // whether a type holds a stream or a future (in a record's fields, a variant's cases, …)
+    holds-handles: func(c: Checker, t0: Type, seen: map<string, bool>) -> bool {
+        let t = resolve(t0);
+        match t {
+            stream-type(x) => true,
+            future-type(x) => true,
+            named(n) => {
+                if seen.has(name-text(n)) { return false; }
+                seen.set(name-text(n), true);
+                if c.records.has(n) {
+                    for x in c.records[n].types {
+                        if holds-handles(c, x, seen) { return true; }
+                    }
+                }
+                if c.variants.has(n) {
+                    for k in c.variants[n] {
+                        if holds-handles(c, k.payload, seen) { return true; }
+                    }
+                }
+                false
+            }
+            _ => any-child(t, { x -> holds-handles(c, x, seen) }),
+        }
+    }
+
+    crossing-call: func(c: Checker, f: Func) {
+        if !f.is-async {
+            type-error(
+                c,
+                "a stream or a future crosses WIT only in an async func's type: make {base-name(f.name)} async",
+            );
+        }
+    }
+
+    check-crossing: func(c: Checker, t0: Type, seen: map<string, bool>) {
+        let t = resolve(t0);
+        match t {
+            singleton(s) => check-set-crossing(c, t, seen),
+            union-type(xs) => check-set-crossing(c, t, seen),
+            list-type(x) => check-crossing(c, x, seen),
+            fixed-list(x) => check-crossing(c, x.item, seen),
+            option-type(x) => check-crossing(c, x, seen),
+            result-type(r) => {
+                check-crossing(c, r.ok, seen);
+                check-crossing(c, r.err, seen);
+            }
+            tuple-type(xs) => { for x in xs { check-crossing(c, x, seen); } }
+            stream-type(x) => check-crossing(c, x.item, seen),
+            future-type(x) => check-crossing(c, x, seen),
+            // an anonymous record: a WIT record, named by its alias
+            anon-record(r) => {
+                if !c.set-names.has(show-type(t)) {
+                    type-error(
+                        c,
+                        "{show-type(t)} crosses WIT as a record, which needs a name: type name = {show-type(t)};",
+                    );
+                }
+                for x in r.types { check-crossing(c, x, seen); }
+            }
+            named(n) => {
+                if seen.has(name-text(n)) { return; }
+                seen.set(name-text(n), true);
+                if c.records.has(n) {
+                    for x in c.records[n].types {
+                        check-crossing(c, x, seen);
+                    }
+                }
+                if c.variants.has(n) {
+                    for k in c.variants[n] { check-crossing(c, k.payload, seen); }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    check-set-crossing: func(c: Checker, t: Type, seen: map<string, bool>) {
+        let how = gen.crossing(t);
+        if how == "checked" {
+            check-crossing(c, representation(t), seen);
+            return;
+        }
+        if !c.set-names.has(show-type(t)) {
+            type-error(
+                c,
+                "{show-type(t)} crosses WIT as {if how == "enum" { "an enum" } else { "a variant" }}, which needs a name: type name = {show-type(t)};",
+            );
+        }
+        if how == "enum" {
+            for v in gen.enum-values(t) {
+                if !is-wit-name(v) {
+                    type-error(
+                        c,
+                        "\"{v}\" is no WIT name (kebab-case, a-z, 0-9 and -): it cannot be a WIT enum's case",
+                    );
+                }
+            }
+        }
+        if how == "variant" { for k in kinds(t) { check-crossing(c, k, seen); } }
+    }
+
+    // whether a string is a WIT name: words of a-z and 0-9 (each starting with a letter) joined
+    // by -
+    is-wit-name: func(v: string) -> bool {
+        if v.len() == 0 { return false; }
+        let start = true;
+        for i in 0..v.len() {
+            let ch = v.byte-at(i);
+            if ch == 45 {
+                if start { return false; }
+                start = true;
+            } else if ch >= 97 && ch <= 122 {
+                start = false;
+            } else if ch >= 48 && ch <= 57 {
+                if start { return false; }
+            } else {
+                return false;
+            }
+        }
+        !start
+    }
+
+    // ================================================================ is, and narrowing
+
+    // x is T: x's type and T's must share a value; the test, a pattern of x's type
+    infer-is: func(c: Checker, x: IsTest) -> Type {
+        let vt = check(c, x.value, fresh(c), "the value an is tests");
+        let t = known(c, in-kind(generalize(resolve-type(c, c.scope, x.ty, c.type-params), c.type-params), vt), "an is test's type", false);
+        x.ty = t;
+        if disjoint(c, vt, t) {
+            type-error(c, "a {show-type(vt)} is never a {show-type(t)}: the test is always false");
+        }
+        x.pattern = some(is-pattern(c, t, vt));
+        Type.bool-type
+    }
+
+    // a range written as a type (its ends literals: an s32's unless they say), tested against an
+    // integer of another kind: that kind's range (x: u64 is 0..18446744073709551615)
+    in-kind: func(t: Type, value: Type) -> Type {
+        // the value's integer kind (a range's: its base's)
+        let base = match resolve(value) {
+            range-type(vr) => resolve(vr.base),
+            let other => other,
+        };
+        match t {
+            range-type(r) => match base {
+                num(n) => if is-int(n) && r.base == Type.num("s32") {
+                    Type.range-type({ base: Type.num(n), lo: r.lo, hi: r.hi, text: r.text, })
+                } else {
+                    t
+                },
+                _ => t,
+            },
+            _ => t,
+        }
+    }
+
+    // whether a and b share no value
+    disjoint: func(c: Checker, a: Type, b: Type) -> bool {
+        let d = d-of(c);
+        semtype.is-empty(d, semtype.inter(d, semtype.translate(d, a), semtype.translate(d, b)))
+    }
+
+    // a pattern's values as a type, where it is literals (their checked types): none otherwise
+    pattern-as-type: func(c: Checker, p: Pattern) -> option<Type> {
+        match p {
+            literal(e) => some(e.ty),
+            range(x) => {
+                let lo = semtype.literal-key(x.lo);
+                let hi = semtype.literal-key(x.hi);
+                // an exclusive range's last value, in its own kind (a u64's past s64's)
+                let kind = semtype.int-kind(representation(x.lo.ty));
+                let last = if x.inclusive { hi } else { semtype.key-before(kind, hi) };
+                some(Type.range-type({
+                    base: representation(x.lo.ty),
+                    lo: lo,
+                    hi: last,
+                    text: "{lo}..={last}",
+                }))
+            }
+            name(pn) => {
+                if pn.kind == "case" && (pn.name == "true" || pn.name == "false") {
+                    return some(Type.singleton({
+                        base: Type.bool-type,
+                        key: pn.name,
+                        text: pn.name,
+                    }));
+                }
+                match pn.value {
+                    some(e) => some(e.ty),
+                    none => none,
+                }
+            }
+            alt(ps) => {
+                let ts: list<Type> = [];
+                for q in ps {
+                    match pattern-as-type(c, q) {
+                        some(t) => ts.push(t),
+                        none => { return none; }
+                    }
+                }
+                some(union-of(ts))
+            }
+            _ => none,
+        }
+    }
+
+    // the pattern a value of type vt fits when it is one of t's
+    is-pattern: func(c: Checker, t: Type, vt: Type) -> Pattern {
+        if subtype(c, vt, t) { return Pattern.wild; }
+        // a union of kinds: its tag, then the test within the kind's values
+        let vk = kinds(vt);
+        if vk.len() > 1 {
+            let alts: list<Pattern> = [];
+            for k in vk {
+                let part = kind-part(vt, k);
+                if !disjoint(c, part, t) {
+                    alts.push(Pattern.member({ ty: part, sub: is-pattern(c, t, part), }));
+                }
+            }
+            if alts.len() == 1 { return alts[0]; }
+            return Pattern.alt(alts);
+        }
+        let rv = resolve(vt);
+        match resolve(t) {
+            union-type(xs) => {
+                let alts: list<Pattern> = [];
+                for x in xs {
+                    if !disjoint(c, x, vt) { alts.push(is-pattern(c, x, vt)); }
+                }
+                if alts.len() == 1 { return alts[0]; }
+                return Pattern.alt(alts);
+            }
+            singleton(s) => { return literal-pattern(c, s); }
+            range-type(r) => {
+                return Pattern.range({
+                    lo: literal-expr(c, r.base, r.lo),
+                    hi: literal-expr(c, r.base, r.hi),
+                    inclusive: true,
+                    span: c.span,
+                });
+            }
+            option-type(x) => {
+                match rv {
+                    option-type(y) => {
+                        return Pattern.alt([
+                            case-pattern(c, "none"),
+                            Pattern.case({ name: "some", sub: is-pattern(c, x, y), span: c.span, }),
+                        ]);
+                    }
+                    _ => {}
+                }
+            }
+            tuple-type(xs) => {
+                match rv {
+                    tuple-type(ys) => {
+                        let items: list<Pattern> = [];
+                        for i in 0..xs.len() { items.push(is-pattern(c, xs[i], ys[i])); }
+                        return Pattern.tuple(items);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        type-error(c, "an is test of {show-type(t)} on a {show-type(vt)} is not supported yet");
+        Pattern.wild
+    }
+
+    // a union's members of kind k (held as k), as a type
+    kind-part: func(vt: Type, k: Type) -> Type {
+        let members = union-members(vt);
+        let out: list<Type> = [];
+        for m in members {
+            if show-type(represented(m)) == show-type(k) { out.push(m); }
+        }
+        union-of(out)
+    }
+
+    // the pattern of a literal type's one value
+    literal-pattern: func(c: Checker, s: Singleton) -> Pattern {
+        match s.base {
+            bool-type => case-pattern(c, s.key),
+            _ => Pattern.literal(literal-expr(c, s.base, s.key)),
+        }
+    }
+
+    case-pattern: func(c: Checker, n: string) -> Pattern {
+        Pattern.name({
+            name: n,
+            binds: false,
+            kind: "case",
+            key: "",
+            value: none,
+            mark: { captured: false, unit: { env: false, }, ty: Type.unit-type, },
+            span: c.span,
+        })
+    }
+
+    // a literal of base type with key's value (a negative's - before it)
+    literal-expr: func(c: Checker, base: Type, k: string) -> Expr {
+        if k.byte-at(0) == 45 {
+            let inner = literal-expr(c, base, k.substring(1, k.len()));
+            return { kind: ExprKind.unary({ op: "-", value: inner, }), span: c.span, ty: base, };
+        }
+        let kind = match base {
+            char-type => ExprKind.char-lit(semtype.decimal(k)),
+            string-type => ExprKind.str-lit(k),
+            num(n) => if is-int(n) { ExprKind.int-lit(k) } else { ExprKind.float-lit(k) },
+            _ => ExprKind.unit,
+        };
+        { kind: kind, span: c.span, ty: base, }
+    }
+
+    // what holds where an expression is true and where it is false: its is tests of names
+    facts: func(c: Checker, e: Expr) -> Narrowing {
+        match e.kind {
+            is-test(x) => {
+                match x.value.kind {
+                    name(n) => {
+                        match narrowable(c, n) {
+                            some(mark) => {
+                                let d = d-of(c);
+                                let parts = split(
+                                    c,
+                                    x.value.ty,
+                                    semtype.translate(d, x.ty),
+                                    some(x.ty),
+                                );
+                                return {
+                                    yes: [{ name: n, ty: parts.yes, mark: mark, },],
+                                    no: [{ name: n, ty: parts.no, mark: mark, },],
+                                };
+                            }
+                            none => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            unary(u) => {
+                if u.op == "!" {
+                    let f = facts(c, u.value);
+                    return { yes: f.no, no: f.yes, };
+                }
+            }
+            binary(b) => {
+                if b.op == "&&" || b.op == "||" {
+                    let l = facts(c, b.left);
+                    let r = facts(c, b.right);
+                    // both held (&&), or both failed (||): the right's, found under the left's
+                    if b.op == "&&" { return { yes: narrowed-and(l.yes, r.yes), no: [], }; }
+                    return { yes: [], no: narrowed-and(l.no, r.no), };
+                }
+            }
+            _ => {}
+        }
+        { yes: [], no: [], }
+    }
+
+    narrowed-and: func(a: list<Narrowed>, b: list<Narrowed>) -> list<Narrowed> {
+        let out: list<Narrowed> = [];
+        for x in a {
+            let later = false;
+            for y in b {
+                if y.name == x.name { later = true; }
+            }
+            if !later { out.push(x); }
+        }
+        for y in b { out.push(y); }
+        out
+    }
+
+    // a local the func never assigns: its binding's mark (none for another name)
+    narrowable: func(c: Checker, n: Name) -> option<Mark> {
+        if c.assigned.has(n) { return none; }
+        let count = c.scopes.len();
+        for k in 0..count {
+            let i = count - 1 - k;
+            if c.scopes[i].has(n) { return some(c.marks[i][n]); }
+        }
+        none
+    }
+
+    // a scope where the names are narrowed (the same bindings, their types narrower)
+    push-narrowing: func(c: Checker, ns: list<Narrowed>) {
+        push-scope(c);
+        let i = c.scopes.len() - 1;
+        for x in ns {
+            c.scopes[i].set(x.name, x.ty);
+            c.marks[i].set(x.name, x.mark);
+            c.narrows[i].add(x.name);
+        }
+    }
+
+    // a type's values split by a set p: those in it (yes) and those not (no). Each member of a
+    // union goes to one side, or (some of its values in p) to both; yes takes the members of pt
+    // (p as a type, when there is one) a partial member holds
+    split: func(c: Checker, vt: Type, p: SemType, pt: option<Type>) -> Split {
+        let d = d-of(c);
+        let members = union-members(vt);
+        let yes: list<Type> = [];
+        let no: list<Type> = [];
+        for m in members {
+            let mt = semtype.translate(d, m);
+            if semtype.is-empty(d, semtype.diff(d, mt, p)) { yes.push(m); }
+            else if semtype.is-empty(d, semtype.inter(d, mt, p)) { no.push(m); }
+            else {
+                no.push(m);
+                yes.push(match pt {
+                    some(t) => within(c, t, m),
+                    none => m,
+                });
+            }
+        }
+        {
+            yes: if yes.len() == 0 { vt } else { union-of(yes) },
+            no: if no.len() == 0 { vt } else { union-of(no) },
+        }
+    }
+
+    // t's values that are m's, as a type: t when all are, else t's members that are (m when none
+    // is)
+    within: func(c: Checker, t: Type, m: Type) -> Type {
+        if subtype(c, t, m) { return t; }
+        let out: list<Type> = [];
+        match resolve(t) {
+            union-type(xs) => {
+                for x in xs {
+                    if subtype(c, x, m) { out.push(x); }
+                }
+            }
+            _ => {}
+        }
+        if out.len() == 0 { m } else { union-of(out) }
+    }
+
+    is-none-block: func(b: option<Block>) -> bool {
+        match b {
+            some(x) => false,
+            none => true,
+        }
+    }
+
+    // whether a block always leaves (its last statement a return, break or continue, a loop no
+    // break leaves, or a call that never returns)
+    leaves: func(b: Block) -> bool {
+        if b.stmts.len() == 0 { return false; }
+        match b.stmts[b.stmts.len() - 1] {
+            return-stmt(e) => true,
+            break-stmt => true,
+            continue-stmt => true,
+            loop-stmt(x) => !breaks-out(x.body),
+            // a call that never returns (panic, exit)
+            expr-stmt(x) => is-never(x.value.ty),
+            _ => false,
+        }
+    }
+
+    // whether a break in a block leaves the loop around it (not one in a loop of its own, nor a
+    // closure's)
+    breaks-out: func(b: Block) -> bool {
+        for st in walk.stmts(b, false, false) {
+            match st {
+                break-stmt => { return true; }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    // the names a block assigns (=, += and the rest), at any depth, closures' too
+    assigned-in: func(b: Block, out: map<Name, bool>) {
+        for st in walk.stmts(b, true, true) {
+            match st {
+                assign(a) => out.set(a.name, true),
+                _ => {}
+            }
+        }
+    }
+
+    // ================================================================ constants
+
+    // a constant's name where the func being checked is: the module's own, then its package's top
+    // level; "" for neither
+    const-key: func(c: Checker, n: string) -> string {
+        let sc = c.scope;
+        if sc.module != "" && c.consts.has(sc.pkg.prefix + sc.module + "." + n) {
+            return sc.pkg.prefix + sc.module + "." + n;
+        }
+        if c.consts.has(sc.pkg.prefix + n) { return sc.pkg.prefix + n; }
+        ""
+    }
+
+    // a global's name where the func being checked is (as const-key: the module's own, then its
+    // package's top level); "" for neither
+    global-key: func(c: Checker, n: string) -> string {
+        let sc = c.scope;
+        if sc.module != "" && c.globals.has(sc.pkg.prefix + sc.module + "." + n) {
+            return sc.pkg.prefix + sc.module + "." + n;
+        }
+        if c.globals.has(sc.pkg.prefix + n) { return sc.pkg.prefix + n; }
+        ""
+    }
+
+    // a global: its type resolved; it starts as a literal of it, or as its zero value (no code of
+    // the program runs before its first: what a global needs made, the program makes)
+    check-global: func(c: Checker, x: GlobalDecl) {
+        c.quiet = false;
+        c.span = x.span;
+        c.scope = x.scope;
+        c.in-func = "let {base-name(x.name)}";
+        x.ty = resolve-type(c, x.scope, x.ty, []);
+        match x.value {
+            some(v) => {
+                if !is-literal(v) {
+                    let d = diagnostics.error(x.span, "a global starts as a literal or as its type's zero value", "");
+                    diagnostics.help(d, "no code runs before the program's first: leave it out (let {base-name(x.name)}: T;) and set it where it is first needed");
+                    tell(c, d);
+                }
+                literal-type(c, x.ty, "a global's literal");
+                check(c, v, x.ty, "the global's value");
+            }
+            none => {
+                if !has-zero(c, x.ty) {
+                    let d = diagnostics.error(x.span, "a {show-type(x.ty)} has no zero value for the global {base-name(x.name)} to start as", "");
+                    diagnostics.help(d, "hold it in an option (let {base-name(x.name)}: option<{show-type(x.ty)}>;): none until it is set");
+                    tell(c, d);
+                }
+            }
+        }
+    }
+
+    // whether a type has a zero value (what a global starts as): a number's 0, false, '\0', "",
+    // none, a list, map or set made empty, and a tuple, anonymous record, fixed-length list or
+    // distinct type of such. A record, a variant, a result, a func, a stream's or a future's end
+    // has none (a record is a reference, never a null one: an option's none is)
+    has-zero: func(c: Checker, t: Type) -> bool {
+        match resolve(t) {
+            num(_) => true,
+            bool-type => true,
+            char-type => true,
+            string-type => true,
+            unit-type => true,
+            option-type(_) => true,
+            list-type(_) => true,
+            map-type(_) => true,
+            tuple-type(xs) => xs.all({ x -> has-zero(c, x) }),
+            anon-record(r) => r.types.all({ x -> has-zero(c, x) }),
+            fixed-list(x) => has-zero(c, x.item),
+            distinct-type(x) => has-zero(c, x.base),
+            // a flags type's: none set
+            named(n) => c.flags.has(n),
+            _ => false,
+        }
+    }
+
+    // a constant's literal, copied to where it is used (checked there)
+    const-copy: func(c: Checker, k: string, span: Span) -> Expr {
+        copy-literal(c.consts[k].value, span)
+    }
+
+    copy-literal: func(e: Expr, span: Span) -> Expr {
+        let kind = match e.kind {
+            unary(u) => ExprKind.unary({ op: u.op, value: copy-literal(u.value, span), }),
+            _ => e.kind,
+        };
+        { kind: kind, span: span, ty: Type.unit-type, }
+    }
+
+    // a literal: a number (- before one), a string, a char or a bool
+    is-literal: func(e: Expr) -> bool {
+        match e.kind {
+            int-lit(x) => true,
+            float-lit(x) => true,
+            char-lit(x) => true,
+            str-lit(x) => true,
+            bool-lit(x) => true,
+            unary(u) => {
+                if u.op != "-" { return false; }
+                match u.value.kind {
+                    int-lit(x) => true,
+                    float-lit(x) => true,
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    // a constant: its value a literal, of its type (when written)
+    check-const: func(c: Checker, x: ConstDecl) {
+        c.quiet = false;
+        c.span = x.span;
+        c.scope = x.scope;
+        c.in-func = "const {base-name(x.name)}";
+        if !is-literal(x.value) {
+            type-error(c, "a const's value is a literal: a number, a string, a char or a bool");
+        }
+        match x.ty {
+            some(t0) => {
+                let t = resolve-type(c, x.scope, t0, []);
+                x.ty = some(t);
+                literal-type(c, t, "a const");
+                check(c, x.value, t, "the const's value");
+            }
+            none => { check(c, x.value, fresh(c), "the const's value"); }
+        }
+    }
+}

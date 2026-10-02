@@ -1,0 +1,18 @@
+// one long call that makes far more garbage than it keeps: the collector runs inside it (the case
+// a collector that waits for the stack to empty cannot handle)
+
+record Item { id: s32, label: string, parts: list<s32>, }
+
+main: func(argv: list<string>) -> s32 {
+    let kept: list<Item> = [];
+    let total = 0;
+    for i in 0..300000 {
+        let item: Item = { id: i, label: "item {i}", parts: [i, i + 1, i + 2,], };
+        total += item.parts.len();
+        if i % 50000 == 0 { kept.push(item); }
+    }
+    let labels: list<string> = [];
+    for k in kept { labels.push(k.label); }
+    print("{total} {kept.len()} {labels.join(", ")}\n");
+    0
+}

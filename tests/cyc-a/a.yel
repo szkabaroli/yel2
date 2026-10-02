@@ -1,0 +1,3 @@
+package test:cyc-a;
+from "../cyc-b" include b;
+module a { f: func() -> s32 { 1 } }

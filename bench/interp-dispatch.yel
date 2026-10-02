@@ -1,0 +1,26 @@
+// Porffor's bench/interp-dispatch.js (from Hermes): a float factorial, 4 million times
+
+from "wasi:clocks" include monotonic-clock;
+
+bench: func(lc: s64, fc: f64) -> f64 {
+    let res = 0.0;
+    for k in 0..lc {
+        let n = fc;
+        let fact = n;
+        // while (--n > 1) fact *= n;
+        for step in 0..1000000 {
+            n -= 1.0;
+            if n <= 1.0 { break; }
+            fact *= n;
+        }
+        res += fact;
+    }
+    res
+}
+
+main: func() {
+    let t1 = monotonic-clock.now();
+    let res = bench(4000000, 100.0);
+    let time = (monotonic-clock.now() - t1) as f64 / 1000000.0;
+    print("{res}\n{time}ms\n");
+}

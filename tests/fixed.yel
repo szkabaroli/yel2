@@ -1,0 +1,41 @@
+// Fixed-length lists: list<T, N> holds N items by value (WIT's fixed-length list), list<T, ?> takes
+// its length from the let's value.
+
+record Particle { name: string, pos: list<f64, 3>, }
+
+// passed and returned by value: the caller's copy is its own
+scaled: func(v: list<s32, 3>, k: s32) -> list<s32, 3> {
+    let out = v;
+    for i in 0..3 { out[i] = v[i] * k; }
+    out
+}
+
+total: func(v: list<s32, 3>) -> s32 {
+    let sum = 0;
+    for x in v { sum += x; }
+    sum
+}
+
+main: func() {
+    let v: list<s32, 3> = [1, 2, 3];
+    let w = scaled(v, 10);
+    print("{v} {w} {total(w)} {v.len()}\n");
+    // ? takes the length from the value
+    let names: list<string, ?> = ["ada", "grace", "barbara", "frances",];
+    print("{names.len()} {names[3]}\n");
+    // set in place in a local, and each item made while the list holds pointers (a collection may
+    // run at each: the list's items stay rooted)
+    for i in 0..4 { names[i] = "{names[i]}-{i}"; }
+    print("{names}\n");
+    // in a record's field, set in place there
+    let p: Particle = { name: "dust", pos: [0.5, 1.5, 2.5], };
+    p.pos[1] = 9.0;
+    print("{p}\n");
+    // compared by their items
+    let a: list<s32, 3> = [1, 2, 3];
+    print("{a == v} {a == w}\n");
+    // nested, and in a tuple
+    let grid: list<list<u8, 2>, ?> = [[1, 2], [3, 4], [5, 6]];
+    let pair = (grid[2], names[0]);
+    print("{grid} {pair.0[1]} {pair.1}\n");
+}

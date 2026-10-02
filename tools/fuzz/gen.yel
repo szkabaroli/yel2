@@ -1,0 +1,142 @@
+// The generator's state while it writes a program, and what every part of it shares: fresh names,
+// the locals in scope, and the lets made ahead of the statement being written (a value whose type
+// it cannot say on its own, where no type is wanted: [], none, a record's literal, is made in a
+// typed let first and named).
+
+record Gen {
+    dice: Dice,
+    decls: list<TypeDecl>,
+    funcs: list<FuncInfo>,
+    consts: list<ConstInfo>,
+    // the locals in scope, a list for each block (innermost last)
+    scopes: list<list<Local>>,
+    // the lets made ahead of the statement being written, a list for each place they can go
+    // (innermost last)
+    pending: list<list<string>>,
+    counter: s64,
+    // how deep an expression goes, and how many statements a body has at most
+    depth: s64,
+    width: s64,
+    // the statements left to write in this func (a bound on its size)
+    budget: s64,
+    // for each func or closure being written (innermost last): its result's type, how many loops
+    // are around (a break needs one), and the item it yields (a generator's)
+    results: list<Ty>,
+    loops: list<s64>,
+    yields: list<option<Ty>>,
+    // the generic func being written: its type params
+    type-params: list<string>,
+    // the lists a for is reading (not pushed to in its body: it would never end)
+    frozen: list<string>,
+}
+
+module gen {
+    // a new name, prefix and a number
+    fresh: func(g: Gen, prefix: string) -> string {
+        g.counter += 1;
+        "{prefix}{g.counter}"
+    }
+
+    // the { and } a program's text holds (in yel's strings, a { starts an interpolation)
+    lb: func() -> string { from-byte(123) }
+
+    rb: func() -> string { from-byte(125) }
+
+    // ---- scopes
+
+    push-scope: func(g: Gen) { g.scopes.push([]); }
+
+    pop-scope: func(g: Gen) { g.scopes.pop(); }
+
+    bind: func(g: Gen, name: string, t: Ty, mutable: bool) {
+        g.scopes[g.scopes.len() - 1].push({ name: name, ty: t, mutable: mutable, readonly: false, });
+    }
+
+    bind-readonly: func(g: Gen, name: string, t: Ty) {
+        g.scopes[g.scopes.len() - 1].push({ name: name, ty: t, mutable: false, readonly: true, });
+    }
+
+    // the locals of type t in scope (readonly ones only where asked)
+    locals: func(g: Gen, t: Ty, readonly: bool) -> list<Local> {
+        let out: list<Local> = [];
+        for scope in g.scopes {
+            for l in scope {
+                if (readonly || !l.readonly) && types.same(l.ty, t) { out.push(l); }
+            }
+        }
+        out
+    }
+
+    // every local in scope (not readonly)
+    all-locals: func(g: Gen) -> list<Local> {
+        let out: list<Local> = [];
+        for scope in g.scopes {
+            for l in scope {
+                if !l.readonly { out.push(l); }
+            }
+        }
+        out
+    }
+
+    // the locals that may be assigned, of type t
+    mutables: func(g: Gen, t: Ty) -> list<Local> { locals(g, t, false).filter({ l -> l.mutable }) }
+
+    // ---- lets made ahead
+
+    push-pending: func(g: Gen) { g.pending.push([]); }
+
+    pop-pending: func(g: Gen) -> list<string> { g.pending.pop() }
+
+    // a let of t made ahead of the statement being written, its value made where t is wanted; its name
+    hoist: func(g: Gen, t: Ty, depth: s64) -> string {
+        let value = exprs.expr(g, t, depth, true);
+        let name = fresh(g, "h");
+        g.pending[g.pending.len() - 1].push("let {name}: {types.show(t)} = {value};");
+        bind(g, name, t, false);
+        name
+    }
+
+    // a let of t made ahead, its name not in scope: a match's value (its arms narrow the name, which
+    // the generator does not follow: matched again inside, a case left would be no case)
+    hoist-hidden: func(g: Gen, t: Ty, depth: s64) -> string {
+        let value = exprs.expr(g, t, depth, true);
+        let name = fresh(g, "h");
+        g.pending[g.pending.len() - 1].push("let {name}: {types.show(t)} = {value};");
+        name
+    }
+
+    // e, with the lets made while it was written before it, as a block where there are any
+    with-pending: func(lets: list<string>, e: string) -> string {
+        if lets.len() == 0 { return e; }
+        lb() + " " + lets.join(" ") + " " + e + " " + rb()
+    }
+
+    // an expression written in a place of its own (a match's arm, a closure's body): its lets are
+    // its own
+    scoped: func(g: Gen, t: Ty, depth: s64, wanted: bool) -> string {
+        push-scope(g);
+        push-pending(g);
+        let e = exprs.expr(g, t, depth, wanted);
+        let lets = pop-pending(g);
+        pop-scope(g);
+        with-pending(lets, e)
+    }
+
+    // ---- declared types
+
+    decl: func(g: Gen, name: string) -> TypeDecl {
+        for d in g.decls {
+            if d.name == name { return d; }
+        }
+        panic("fuzz: no type {name}")
+    }
+
+    kind: func(g: Gen, t: Ty) -> string {
+        match t {
+            named-t(n) => decl(g, n).kind,
+            _ => "",
+        }
+    }
+
+    decls-of: func(g: Gen, kind: string) -> list<TypeDecl> { g.decls.filter({ d -> d.kind == kind }) }
+}

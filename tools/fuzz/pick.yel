@@ -1,0 +1,88 @@
+// Types to write: a random one, as deep as asked, of the built-in and the declared ones.
+
+module pick {
+    // a type, its parts at most depth deep
+    any-type: func(g: Gen, depth: s64) -> Ty {
+        let names = ["int", "int", "int", "float", "bool", "char", "string", "string", "list", "fixed", "option", "result", "tuple", "anon", "named", "named", "map", "func", "unit",];
+        let k = if depth <= 0 { dice.pick(g.dice, ["int", "int", "bool", "char", "string", "float", "named",]) } else { dice.pick(g.dice, names) };
+        if k == "int" { return int-type(g); }
+        if k == "float" { return Ty.float-t(dice.pick(g.dice, ["f64", "f64", "f32",])); }
+        if k == "bool" { return Ty.bool-t; }
+        if k == "char" { return Ty.char-t; }
+        if k == "string" { return Ty.string-t; }
+        if k == "unit" { return Ty.unit-t; }
+        if k == "list" { return Ty.list-t(any-type(g, depth - 1)); }
+        if k == "fixed" { return Ty.fixed-t({ item: any-type(g, depth - 1), len: dice.between(g.dice, 1, 4), }); }
+        if k == "option" { return Ty.option-t(any-type(g, depth - 1)); }
+        if k == "result" { return Ty.result-t({ ok: any-type(g, depth - 1), err: any-type(g, depth - 1), }); }
+        if k == "tuple" {
+            let items: list<Ty> = [];
+            for i in 0..dice.between(g.dice, 1, 3) { items.push(any-type(g, depth - 1)); }
+            return Ty.tuple-t(items);
+        }
+        if k == "anon" { return anon-type(g, depth - 1); }
+        if k == "map" { return Ty.map-t({ key: key-type(g), value: any-type(g, depth - 1), }); }
+        if k == "func" {
+            let params: list<Ty> = [];
+            for i in 0..dice.between(g.dice, 0, 2) { params.push(any-type(g, depth - 1)); }
+            return Ty.func-t({ params: params, result: any-type(g, depth - 1), });
+        }
+        // a declared type, where there is one
+        if g.decls.len() > 0 { return Ty.named-t(dice.pick(g.dice, g.decls).name); }
+        int-type(g)
+    }
+
+    int-type: func(g: Gen) -> Ty {
+        // s32 and s64 most, as programs have them
+        Ty.int-t(dice.pick(g.dice, ["s32", "s32", "s32", "s64", "s64", "u8", "u16", "u32", "u64", "s8", "s16",]))
+    }
+
+    // a map's key: a value compared and hashed by its parts
+    key-type: func(g: Gen) -> Ty {
+        match dice.below(g.dice, 5) {
+            0 => Ty.int-t("s32"),
+            1 => Ty.char-t,
+            2 => Ty.tuple-t([Ty.int-t("s32"), Ty.string-t,]),
+            3 => Ty.int-t("u64"),
+            _ => Ty.string-t,
+        }
+    }
+
+    // an anonymous record of one to three fields (in order of their names, as yel keeps them)
+    anon-type: func(g: Gen, depth: s64) -> Ty {
+        let names = ["a", "b", "c", "d", "e",];
+        let count = dice.between(g.dice, 1, 3);
+        let start = dice.below(g.dice, names.len() - count + 1);
+        let fields: list<string> = [];
+        let ts: list<Ty> = [];
+        for i in 0..count {
+            fields.push(names[start + i]);
+            ts.push(any-type(g, depth));
+        }
+        Ty.anon-t({ names: fields, types: ts, })
+    }
+
+    // a type a value of is printed, compared and kept without a func in it (a func value has no
+    // text and no order)
+    plain-type: func(g: Gen, depth: s64) -> Ty {
+        let t = any-type(g, depth);
+        if holds-func(g, t, 0) { int-type(g) } else { t }
+    }
+
+    // whether a func value is anywhere in t (declared types looked into, not past a few levels)
+    holds-func: func(g: Gen, t: Ty, level: s64) -> bool {
+        if level > 4 { return false; }
+        match t {
+            func-t(f) => true,
+            list-t(x) => holds-func(g, x, level + 1),
+            fixed-t(x) => holds-func(g, x.item, level + 1),
+            option-t(x) => holds-func(g, x, level + 1),
+            result-t(r) => holds-func(g, r.ok, level + 1) || holds-func(g, r.err, level + 1),
+            tuple-t(xs) => xs.any({ x -> holds-func(g, x, level + 1) }),
+            anon-t(f) => f.types.any({ x -> holds-func(g, x, level + 1) }),
+            map-t(m) => holds-func(g, m.value, level + 1),
+            named-t(n) => gen.decl(g, n).types.any({ x -> holds-func(g, x, level + 1) }),
+            _ => false,
+        }
+    }
+}

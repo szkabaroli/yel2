@@ -1,0 +1,4 @@
+// error: 4:53: the value of l: expected local, found binding
+type binding = distinct u32;
+type local = distinct u32;
+main: func() { let a = 3 as binding; let l: local = a; }

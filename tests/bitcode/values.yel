@@ -1,0 +1,52 @@
+// floats, closures, maps and sets, and a func that never returns, built both ways
+
+record Counter { count: s64, }
+
+fail: func(message: string) -> never {
+    panic(message)
+}
+
+apply: func(f: func(s64) -> s64, x: s64) -> s64 { f(x) }
+
+twice: func(x: s64) -> s64 { x * 2 }
+
+main: func() -> s32 {
+    // floats: arithmetic, comparisons, conversions (a float to an integer saturates)
+    let a = 1.5;
+    let b: f64 = 2.25;
+    let c = a * b + 0.5 - b / 3.0;
+    print("float {c} {c > 2.0} {c == 2.375} {-a}\n");
+    let small: f32 = 0.1;
+    print("f32 {small} {(small as f64) > 0.1} {small * 3.0}\n");
+    print("as {(c * 100.0) as s32} {(1.0e30) as s32} {(-1.0e30) as s32} {(0.0 / 0.0) as s64} {(7 as f64) / 2.0}\n");
+    print("mod {7.5 % 2.0}\n");
+
+    // closures: capturing, passed, stored
+    let base = 10;
+    let add = { x: s64 -> x + base };
+    let counter: Counter = { count: 0, };
+    let bump = { by: s64 -> counter.count += by; };
+    bump(3);
+    bump(4);
+    print("closures {add(5)} {apply(add, 1)} {apply(twice, 21)} {counter.count}\n");
+    let fs = [add, twice,];
+    let total = 0;
+    for f in fs { total += f(1); }
+    print("stored {total}\n");
+
+    // maps and sets (a tuple key: hashed and compared by its parts)
+    let ages: map<string, s64> = map.new();
+    ages.set("ada", 36);
+    ages.set("grace", 85);
+    ages.set("ada", 37);
+    print("map {ages.len()} {ages["ada"]} {ages.has("grace")} {ages.has("alan")}\n");
+    let points: map<tuple<s64, s64>, string> = map.new();
+    for i in 0..50 { points.set((i, i * i), "p{i}"); }
+    print("points {points.len()} {points[(7, 49)]} {points.has((7, 48))}\n");
+    let seen: set<string> = set.new();
+    for word in ["a", "b", "a", "c", "b",] { seen.add(word); }
+    print("set {seen.len()} {seen.has("c")}\n");
+
+    if total < 0 { fail("never"); }
+    0
+}

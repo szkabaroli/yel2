@@ -1,0 +1,7 @@
+// error: 5:5: resource tcp-socket has no func open
+// note: a WIT func that needs a WIT type that is not known is left out
+from "wasi:sockets" include types;
+main: func() -> s32 {
+    types.tcp-socket.open(types.ip-address-family.ipv4);
+    0
+}

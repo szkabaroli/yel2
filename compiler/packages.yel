@@ -1,0 +1,446 @@
+// Packages: a package's files read, its includes loaded, and every declaration keyed.
+
+// the program being loaded: its declarations, its packages (by directory), where included
+// packages are looked for (-I), and the prelude's names (reached from every package)
+// wit: the WIT packages in the WIT directories (wit-dirs), by id, once read; wit-types: each WIT
+// interface's type names (ns:name/iface.name) as yel types; wit-done: the interfaces made modules
+record Program {
+    // the compile's context: its sources, the errors found so far, what was asked for
+    context: Context,
+    decls: list<Decl>,
+    packages: map<string, Package>,
+    search: list<string>,
+    prelude: map<string, bool>,
+    wit-dirs: list<string>,
+    wit: map<string, WitPackage>,
+    wit-read: bool,
+    wit-types: map<string, Type>,
+    wit-done: map<string, bool>,
+    root: Package,
+}
+
+module packages {
+    // the directory a path is in ("." for none)
+    dir-name: func(path: string) -> string {
+        let n = path.len();
+        for k in 0..n {
+            if path.byte-at(n - 1 - k) == 47 {
+                if k == n - 1 { return "/"; }
+                return path.substring(0, n - 1 - k);
+            }
+        }
+        "."
+    }
+
+    // a path with its . and x/.. steps taken out (so one package is one path, however it is
+    // reached)
+    clean-path: func(path: string) -> string {
+        let parts: list<string> = [];
+        let start = 0;
+        let n = path.len();
+        for i in 0..n + 1 {
+            if i == n || path.byte-at(i) == 47 {
+                let part = path.substring(start, i);
+                if part == ".." && parts.len() > 0 && parts[parts.len() - 1] != ".." {
+                    parts.pop();
+                }
+                else if part != "." && part != "" { parts.push(part); }
+                else if part == "" && i == 0 { parts.push(""); }
+                start = i + 1;
+            }
+        }
+        if parts.len() == 0 { return "."; }
+        parts.join("/")
+    }
+
+    // a package (the files of a directory, or one file) and, before its own, those it includes (at:
+    // where it is included, for an error; "" for the program's own)
+    load-package: async func(prog: Program, path: string, at: string) -> Package {
+        let root = at == "";
+        let dir = clean-path(path);
+        let pkg: Package = {
+            id: "",
+            version: "",
+            prefix: "",
+            dir: dir,
+            modules: map.new(),
+            state: 0,
+        };
+        prog.packages.set(dir, pkg);
+        let files: list<string> = [];
+        if wait diagnostics.is-dir(dir) {
+            for f in wait diagnostics.entries(dir) {
+                if ends-with(f, ".yel") { files.push(dir + "/" + f); }
+            }
+            if files.len() == 0 { diagnostics.report(prog.context, diagnostics.error-at(dir, "no .yel files in the package")); }
+        } else {
+            files.push(dir);
+        }
+        let scopes: list<Scope> = [];
+        for f in files {
+            let source = wait diagnostics.read-source(prog.context, f);
+            let p = parser.parser(prog.context, source, prog.context.sources[source].text, 1, 1);
+            p.scope = { pkg: pkg, module: "", file: f, build: p.scope.build, includes: map.new(), requests: [], };
+            parser.declarations(p, prog.decls);
+            scopes.push(p.scope);
+        }
+        // an included package's items are keyed by its id
+        if !root {
+            if pkg.id == "" {
+                diagnostics.report(prog.context, diagnostics.error-at(at, "{dir} is included, so it names itself (package ns:name;)"));
+            }
+            pkg.prefix = pkg.id + "/";
+        }
+        for sc in scopes {
+            for r in sc.requests { wait include(prog, pkg, sc, r); }
+        }
+        pkg.state = 1;
+        pkg
+    }
+
+    // an include: its package loaded (once), and each module it names bound in the file's scope
+    include: async func(prog: Program, pkg: Package, sc: Scope, r: Include) {
+        let at = "{sc.file}:{r.span.line}:{r.span.col}";
+        let spec = r.spec;
+        let dir = "";
+        let id = "";
+        if starts-at(spec, 0, "./") || starts-at(spec, 0, "../") {
+            dir = dir-name(sc.file) + "/" + spec;
+        } else if find-byte(spec, 58).unwrap-or(-1) > 0 {
+            // ns:name, or ns:name/module: looked for as a directory `name` beside this package,
+            // then in each -I directory
+            id = without-version(spec);
+            // std:<name> is WASI's wasi:<name>: yel's name for the system's interfaces (an
+            // interface std gives itself, its module <name>-<interface>, is std's: below)
+            let from-std = starts-with(id, "std:");
+            if from-std { id = "wasi:" + id.substring(4, id.len()); }
+            let slash = find-byte(id, 47).unwrap-or(-1);
+            if slash > 0 {
+                let m = id.substring(slash + 1, id.len());
+                id = id.substring(0, slash);
+                if r.names.len() != 1 || r.names[0] != m {
+                    diagnostics.report(prog.context, diagnostics.error-at(at, "{spec} is module {m}: include {m} (or {m} as another name)"));
+                }
+            }
+            let name = id.substring(find-byte(id, 58).unwrap-or(-1) + 1, id.len());
+            let dirs: list<string> = [dir-name(pkg.dir),];
+            for d in prog.search { dirs.push(d); }
+            for d in dirs {
+                if dir == "" && wait diagnostics.is-dir(d + "/" + name) { dir = d + "/" + name; }
+            }
+            // not a yel package: a WIT one, its interfaces made modules
+            if dir == "" {
+                wait wit-index(prog);
+                if prog.wit.has(id) {
+                    let wp = prog.wit[id];
+                    for i in 0..r.names.len() {
+                        if sc.includes.has(r.aliases[i]) {
+                            diagnostics.report(prog.context, diagnostics.error-at(at, "{r.aliases[i]} is included twice"));
+                        }
+                        let own = if from-std { std-module(prog, "{name}-{r.names[i]}") } else { "" };
+                        sc.includes.set(r.aliases[i], if own != "" { own } else { wait wit-interface(prog, wp, r.names[i], at) });
+                    }
+                    return;
+                }
+                let d = diagnostics.error-at(at, "no package {id}");
+                diagnostics.note(d, "looked for {name}/ in {dirs.join(", ")}, and for a WIT package in {prog.wit-dirs.join(", ")}");
+                diagnostics.report(prog.context, d);
+                return;
+            }
+        } else {
+            diagnostics.report(prog.context, diagnostics.error-at(at, "an include names a package: \"./dir\" or \"ns:name\""));
+            return;
+        }
+        dir = clean-path(dir);
+        let target = if prog.packages.has(dir) {
+            prog.packages[dir]
+        } else {
+            wait load-package(prog, dir, at)
+        };
+        if target.state == 0 {
+            diagnostics.report(prog.context, diagnostics.error-at(at, "{dir} includes this package back: packages cannot include each other"));
+        }
+        if id != "" && target.id != id { diagnostics.report(prog.context, diagnostics.error-at(at, "{dir} is package {target.id}, not {id}")); }
+        for i in 0..r.names.len() {
+            let m = r.names[i];
+            if !target.modules.has(m) { diagnostics.report(prog.context, diagnostics.error-at(at, "package {target.id} has no module {m}")); }
+            if sc.includes.has(r.aliases[i]) {
+                diagnostics.report(prog.context, diagnostics.error-at(at, "{r.aliases[i]} is included twice"));
+            }
+            sc.includes.set(r.aliases[i], target.prefix + m);
+        }
+    }
+
+    // std's module of that name, by its key ("" for none): one std gives in place of WASI's
+    // interface (cli-exit: wasi:cli's exit, its funcs' result never)
+    std-module: func(prog: Program, module: string) -> string {
+        for pkg in prog.packages.values() {
+            if pkg.id == "yel:std" && pkg.modules.has(module) { return pkg.prefix + module; }
+        }
+        ""
+    }
+
+    // a declaration's key: its package's prefix, its module's name and a dot, its name
+    item-key: func(sc: Scope, n: string) -> string {
+        if sc.module == "" { return sc.pkg.prefix + n; }
+        sc.pkg.prefix + sc.module + "." + n
+    }
+
+    // every declaration named by its key
+    key-decls: func(decls: list<Decl>) {
+        for d in decls {
+            match d {
+                func-decl(f) => { f.name = item-key(f.scope, f.name); }
+                extern-decl(x) => { x.name = item-key(x.scope, x.name); }
+                record-decl(r) => { r.name = item-key(r.scope, r.name); }
+                variant-decl(v) => { v.name = item-key(v.scope, v.name); }
+                flags-decl(fl) => { fl.name = item-key(fl.scope, fl.name); }
+                resource-decl(r) => { r.name = item-key(r.scope, r.name); }
+                const-decl(x) => { x.name = item-key(x.scope, x.name); }
+                global-decl(x) => { x.name = item-key(x.scope, x.name); }
+                type-decl(x) => { x.name = item-key(x.scope, x.name); }
+            }
+        }
+    }
+}
+
+// ================================================================ WIT packages
+
+module packages {
+    // the WIT packages in the WIT directories, by id: read once, when first included
+    wit-index: async func(prog: Program) {
+        if prog.wit-read { return; }
+        prog.wit-read = true;
+        for d in prog.wit-dirs {
+            if wait diagnostics.is-dir(d) {
+                for f in wait diagnostics.entries(d) {
+                    if ends-with(f, ".wit") {
+                        let wp = parser.wit-file(prog.context, wait diagnostics.read-source(prog.context, d + "/" + f));
+                        if wp.id != "" && !prog.wit.has(wp.id) { prog.wit.set(wp.id, wp); }
+                    }
+                }
+            }
+        }
+    }
+
+    // a WIT interface as a yel module (once; the interfaces it uses first): its types as records,
+    // variants, flags and resources, its funcs as externs a component imports (a resource's as
+    // <resource>.<func>, its constructor <resource>.new, its drop <resource>.drop); its key back.
+    // What needs streams or async (not yet) is left out
+    wit-interface: async func(prog: Program, wp: WitPackage, iface: string, at: string) -> string {
+        let mkey = wp.id + "/" + iface;
+        if prog.wit-done.has(mkey) { return mkey; }
+        if !wp.interfaces.has(iface) {
+            diagnostics.report(prog.context, diagnostics.error-at(at, "WIT package {wp.id} has no interface {iface}"));
+            return mkey;
+        }
+        prog.wit-done.set(mkey, true);
+        let face = wp.interfaces[iface];
+        let pkg: Package = {
+            id: wp.id,
+            version: wp.version,
+            prefix: wp.id + "/",
+            dir: wp.file,
+            modules: map.new(),
+            state: 1,
+        };
+        for n in wp.interfaces.keys() { pkg.modules.set(n, "extern"); }
+        let sc: Scope = {
+            pkg: pkg,
+            module: iface,
+            file: wp.file,
+            build: "",
+            includes: map.new(),
+            requests: [],
+        };
+        let span: Span = { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, };
+        // each name the interface can write: its uses', then its own types
+        let names: map<string, Type> = map.new();
+        for u in face.uses {
+            let src = if u.pkg == "" { wp } else { wait wit-package(prog, u.pkg, at) };
+            let skey = wait wit-interface(prog, src, u.iface, at);
+            for i in 0..u.names.len() {
+                let k = skey + "." + u.names[i];
+                if !prog.wit-types.has(k) { diagnostics.fatal(prog.context, diagnostics.error-at(at, "{skey} has no type {u.names[i]}")); }
+                names.set(u.aliases[i], prog.wit-types[k]);
+            }
+        }
+        for t in face.types {
+            if t.kind != "alias" { names.set(t.name, Type.named(intern(mkey + "." + t.name))); }
+        }
+        for t in face.types {
+            if t.kind == "alias" { names.set(t.name, wit-resolve(names, t.target)); }
+        }
+        // the types that need what is not there yet are left out, and so is what needs them
+        let out: list<Decl> = [];
+        for t in face.types {
+            if t.kind == "record" {
+                let types = wit-resolve-all(names, t.types);
+                if wit-missing-all(types) { names.set(t.name, Type.named(intern("!" + t.name))); }
+                else {
+                    out.push(Decl.record-decl({
+                        span: span,
+                        scope: sc,
+                        name: t.name,
+                        fields: t.fields,
+                        field-types: types,
+                    }));
+                }
+            } else if t.kind == "variant" || t.kind == "enum" {
+                let cases: list<CaseDecl> = [];
+                let missing = false;
+                for k in t.cases {
+                    let pt = wit-resolve(names, k.payload);
+                    if wit-missing(pt) { missing = true; }
+                    cases.push({ name: k.name, has-payload: k.has-payload, payload: pt, });
+                }
+                if missing { names.set(t.name, Type.named(intern("!" + t.name))); }
+                else {
+                    out.push(Decl.variant-decl({
+                        span: span,
+                        scope: sc,
+                        name: t.name,
+                        cases: cases,
+                    }));
+                }
+            } else if t.kind == "flags" {
+                out.push(Decl.flags-decl({
+                    span: span,
+                    scope: sc,
+                    name: t.name,
+                    flags: t.fields,
+                }));
+            } else if t.kind == "resource" {
+                out.push(Decl.resource-decl({ span: span, scope: sc, name: t.name, }));
+            }
+        }
+        for t in face.types { prog.wit-types.set(mkey + "." + t.name, names[t.name]); }
+        let module = mkey + (if wp.version == "" { "" } else { "@" + wp.version });
+        for f in face.funcs { wit-extern(names, sc, span, module, f.name, f, [], [], out); }
+        for t in face.types {
+            if t.kind == "resource" {
+                let self = Type.named(intern(mkey + "." + t.name));
+                for f in t.funcs {
+                    let wit-name = if f.kind == "constructor" {
+                        "[constructor]{t.name}"
+                    } else {
+                        "[{f.kind}]{t.name}.{f.name}"
+                    };
+                    let params: list<string> = if f.kind == "method" { ["self",] } else { [] };
+                    let types: list<Type> = if f.kind == "method" { [self,] } else { [] };
+                    wit-extern(names, sc, span, module, wit-name, {
+                        name: "{t.name}.{f.name}",
+                        kind: f.kind,
+                        params: f.params,
+                        types: f.types,
+                        result: f.result,
+                        is-async: f.is-async,
+                    }, params, types, out,);
+                }
+                let drop: WitFunc = {
+                    name: "{t.name}.drop",
+                    kind: "method",
+                    params: [],
+                    types: [],
+                    result: Type.unit-type,
+                    is-async: false,
+                };
+                wit-extern(
+                    names,
+                    sc,
+                    span,
+                    module,
+                    "[resource-drop]{t.name}",
+                    drop,
+                    ["self",],
+                    [self,],
+                    out,
+                );
+            }
+        }
+        for d in out { prog.decls.push(d); }
+        mkey
+    }
+
+    // a WIT func as an extern (its params after first and its types after first-types), unless it
+    // needs what is not there yet
+    wit-extern: func(
+        names: map<string, Type>,
+        sc: Scope,
+        span: Span,
+        module: string,
+        wit-name: string,
+        f: WitFunc,
+        first: list<string>,
+        first-types: list<Type>,
+        out: list<Decl>,
+    ) {
+        let params: list<string> = [];
+        let types: list<Type> = [];
+        for p in first { params.push(p); }
+        for t in first-types { types.push(t); }
+        for p in f.params { params.push(p); }
+        for t in wit-resolve-all(names, f.types) { types.push(t); }
+        let result = wit-resolve(names, f.result);
+        if wit-missing-all(types) || wit-missing(result) { return; }
+        out.push(Decl.extern-decl({
+            span: span,
+            scope: sc,
+            name: f.name,
+            type-params: [],
+            params: params,
+            param-types: types,
+            result: result,
+            c-name: "",
+            keeps: [],
+            gives: [],
+            wit-module: module,
+            wit-name: wit-name,
+            is-async: f.is-async,
+        }));
+    }
+
+    wit-package: async func(prog: Program, id: string, at: string) -> WitPackage {
+        if !prog.wit.has(id) { diagnostics.fatal(prog.context, diagnostics.error-at(at, "no WIT package {id} (for a use)")); }
+        prog.wit[id]
+    }
+
+    // a WIT type with its names as the interface's types
+    wit-resolve: func(names: map<string, Type>, t: Type) -> Type {
+        match t {
+            named(n) => if names.has(name-text(n)) {
+                names[name-text(n)]
+            } else if starts-at(name-text(n), 0, "!") || starts-at(name-text(n), 0, "~") {
+                t
+            } else {
+                Type.named(intern("!" + name-text(n)))
+            },
+            // WIT's stream: its reading end
+            stream-type(x) => Type.stream-type({ item: wit-resolve(names, x.item), writer: false, }),
+            _ => map-children(t, { x -> wit-resolve(names, x) }),
+        }
+    }
+
+    wit-resolve-all: func(names: map<string, Type>, ts: list<Type>) -> list<Type> {
+        let out: list<Type> = [];
+        for t in ts { out.push(wit-resolve(names, t)); }
+        out
+    }
+
+    // whether a param's or result's type needs what is not there yet: a name not known
+    wit-missing: func(t: Type) -> bool { wit-missing-inside(t) }
+
+    wit-missing-inside: func(t: Type) -> bool {
+        match t {
+            named(n) => starts-at(name-text(n), 0, "!") || starts-at(name-text(n), 0, "~"),
+            _ => any-child(t, wit-missing-inside),
+        }
+    }
+
+    wit-missing-all: func(ts: list<Type>) -> bool {
+        for t in ts {
+            if wit-missing(t) { return true; }
+        }
+        false
+    }
+}

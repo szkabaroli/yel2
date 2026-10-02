@@ -1,0 +1,5 @@
+// error: 3:18: the value of x: expected s32, found a float
+main: func() -> s32 {
+    let x: s32 = 1.5;
+    x
+}

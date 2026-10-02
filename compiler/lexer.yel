@@ -1,0 +1,328 @@
+// The lexer: a source's bytes to tokens, with their spans.
+
+// a multiline string: its text (dedented, its first and last line breaks gone), its indent, and
+// where it ends (just past its closing """)
+record Multiline { text: string, indent: s64, end: s64, }
+
+module lexer {
+    // an error at line:col (a character's width), kept: the lexer goes on past it (an unterminated
+    // literal taken to the end of the file, an unexpected character passed over)
+    lex-error: func(context: Context, source: s64, line: s64, col: s64, message: string) {
+        let at: Span = { source: source, line: line, col: col, end-line: line, end-col: col + 1, };
+        diagnostics.report(context, diagnostics.error(at, message, ""));
+    }
+
+    operators: func() -> list<string> {
+        // << and >> are two tokens, so list<list<T>> closes twice; the parser joins adjacent ones
+        [
+            "...", "..=", "->", "=>", "..", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=",
+            "/=",
+            "%=",
+            "+", "-", "*", "/", "%", "<", ">", "=", "!", "|", "&", "^", "(", ")", "\{", "\}", "[",
+            "]",
+            ",", ";", ":", ".", "@", "?",
+        ]
+    }
+
+    operator-at: func(src: string, i: s64, ops: list<string>) -> string {
+        for op in ops {
+            if starts-at(src, i, op) { return op; }
+        }
+        ""
+    }
+
+    token: func(kind: TokenKind, text: string, span: Span) -> Token {
+        { kind: kind, text: text, span: span, indent: -1, template: false, start: 0, end: 0, }
+    }
+
+    // src's tokens, src being (part of) the text of sources[source], from its line first-line,
+    // column first-col
+    lex: func(src: string, context: Context, source: s64, first-line: s64, first-col: s64) -> list<Token> {
+        scan(src, context, source, first-line, first-col, false)
+    }
+
+    // src's tokens, comments too (the formatter's)
+    lex-all: func(src: string, context: Context, source: s64) -> list<Token> { scan(src, context, source, 1, 1, true) }
+
+    scan: func(
+        src: string,
+        context: Context,
+        source: s64,
+        first-line: s64,
+        first-col: s64,
+        comments: bool,
+    ) -> list<Token> {
+        let toks = [];
+        let ops = operators();
+        let n = src.len();
+        let i = 0;
+        let line = first-line;
+        // where line starts, so that byte i is at column i - line-start + 1
+        let line-start = 1 - first-col;
+        for step in 0..n + 1 {
+            if i >= n {
+                let col = i - line-start + 1;
+                toks.push(token(TokenKind.eof, "", {
+                    source: source,
+                    line: line,
+                    col: col,
+                    end-line: line,
+                    end-col: col,
+                }));
+                return toks;
+            }
+            let c = src.byte-at(i);
+            let col = i - line-start + 1;
+            let at = i;
+            let count = toks.len();
+            if c == 10 {
+                line += 1;
+                i += 1;
+                line-start = i;
+            } else if c == 32 || c == 9 || c == 13 {
+                i += 1;
+            } else if c == 47 && src.byte-at(i + 1) == 47 {
+                i = line-end(src, i);
+                if comments {
+                    let span: Span = {
+                        source: source,
+                        line: line,
+                        col: col,
+                        end-line: line,
+                        end-col: i - line-start + 1,
+                    };
+                    toks.push(token(TokenKind.comment, src.substring(at, i), span));
+                }
+            } else if c == 99 && src.byte-at(i + 1) == 34 && !is-name-char(src.byte-at(i - 1)) {
+                // c"...": a C template
+                let end = template-end(src, i + 2);
+                if end >= n {
+                    lex-error(context, source, line, col, "unterminated C template");
+                    end = n;
+                }
+                let span: Span = {
+                    source: source,
+                    line: line,
+                    col: col,
+                    end-line: line,
+                    end-col: end + 1 - line-start + 1,
+                };
+                toks.push({
+                    kind: TokenKind.str,
+                    text: src.substring(i + 2, end),
+                    span: span,
+                    indent: -1,
+                    template: true,
+                    start: 0,
+                    end: 0,
+                });
+                i = end + 1;
+            } else if is-alpha(c) {
+                let end = name-end(src, i);
+                toks.push(token(TokenKind.id, src.substring(i, end), {
+                    source: source,
+                    line: line,
+                    col: col,
+                    end-line: line,
+                    end-col: end - line-start + 1,
+                }));
+                i = end;
+            } else if is-digit(c) {
+                // after a `.` a number takes no fraction: t.0.1 is two tuple fields
+                let after-dot = toks.len() > 0 && toks[toks.len() - 1].text == "." && toks[
+                    toks.len() - 1
+                ].kind == TokenKind.op;
+                let num = number-end(src, i, !after-dot);
+                let kind = if num.is-float { TokenKind.float } else { TokenKind.int };
+                toks.push(token(kind, src.substring(i, num.end), {
+                    source: source,
+                    line: line,
+                    col: col,
+                    end-line: line,
+                    end-col: num.end - line-start + 1,
+                }));
+                i = num.end;
+            } else if c == 39 {
+                let end = char-end(src, i + 1);
+                if end >= n {
+                    lex-error(context, source, line, col, "unterminated character");
+                    end = n;
+                }
+                toks.push(token(TokenKind.char, src.substring(i + 1, end), {
+                    source: source,
+                    line: line,
+                    col: col,
+                    end-line: line,
+                    end-col: end + 1 - line-start + 1,
+                }));
+                i = end + 1;
+            } else if c == 34 && src.byte-at(i + 1) == 34 && src.byte-at(i + 2) == 34 {
+                // the formatter needs only where it ends (a malformed one is the compiler's to
+                // report)
+                let m: Multiline = if comments {
+                    { text: "", indent: 0, end: triple-end(src, i + 3) + 3, }
+                } else {
+                    multiline(src, context, source, i, line, col)
+                };
+                let start-line = line;
+                line += newlines(src, i, m.end);
+                line-start = last-newline(src, i, m.end) + 1;
+                let span: Span = {
+                    source: source,
+                    line: start-line,
+                    col: col,
+                    end-line: line,
+                    end-col: m.end - line-start + 1,
+                };
+                toks.push({
+                    kind: TokenKind.str,
+                    text: m.text,
+                    span: span,
+                    indent: m.indent,
+                    template: false,
+                    start: 0,
+                    end: 0,
+                });
+                i = m.end;
+            } else if c == 34 {
+                let end = string-end(src, i + 1);
+                if end >= n {
+                    lex-error(context, source, line, col, "unterminated string");
+                    end = n;
+                }
+                let start-line = line;
+                line += newlines(src, i, end);
+                let nl = last-newline(src, i, end);
+                if nl >= 0 { line-start = nl + 1; }
+                toks.push(token(TokenKind.str, src.substring(i + 1, end), {
+                    source: source,
+                    line: start-line,
+                    col: col,
+                    end-line: line,
+                    end-col: end + 1 - line-start + 1,
+                }));
+                i = end + 1;
+            } else {
+                let op = operator-at(src, i, ops);
+                if op == "" {
+                    // passed over whole (a UTF-8 sequence's continuation bytes too), and shown so
+                    let first = i;
+                    i += 1;
+                    loop {
+                        if i >= n || src.byte-at(i) < 128 || src.byte-at(i) >= 192 { break; }
+                        i += 1;
+                    }
+                    lex-error(context, source, line, col, "unexpected character '{src.substring(first, i)}'");
+                } else {
+                    toks.push(token(TokenKind.op, op, {
+                        source: source,
+                        line: line,
+                        col: col,
+                        end-line: line,
+                        end-col: col + op.len(),
+                    }));
+                    i += op.len();
+                }
+            }
+            // the token just made: its bytes
+            if toks.len() > count {
+                toks[toks.len() - 1].start = at;
+                toks[toks.len() - 1].end = i;
+            }
+        }
+        panic("{context.sources[source].path}: the lexer did not finish")
+    }
+
+    // the multiline string (WAVE's) whose opening """ is at i, on line (at col): """ and a line
+    // break open it, a line break, spaces and """ close it, and each line gives up as many spaces
+    // as the closing """ has before it. One error in it is the one told: past it, the string is
+    // taken to its closing """ where that is plain, else to the end of the file
+    multiline: func(src: string, context: Context, source: s64, i: s64, line: s64, col: s64) -> Multiline {
+        let first = i + 3;
+        if src.byte-at(first) == 13 && src.byte-at(first + 1) == 10 { first += 2; }
+        else if src.byte-at(first) == 10 { first += 1; }
+        else {
+            lex-error(context, source, line, col, "a \"\"\" string's text starts on the next line");
+            return { text: "", indent: 0, end: triple-end(src, first) + 3, };
+        }
+        let close = triple-end(src, first);
+        if close >= src.len() {
+            lex-error(context, source, line, col, "unterminated multiline string");
+            return { text: "", indent: 0, end: src.len(), };
+        }
+        let indent = spaces-before(src, first, close);
+        // the line break before the closing line's spaces (the opening's own, for an empty string)
+        let brk = close - indent - 1;
+        if src.byte-at(brk) != 10 {
+            let at-line = line + newlines(src, i, close);
+            lex-error(context, source, at-line, close - last-newline(src, i, close), "a multiline string's closing \"\"\" goes on a line of its own (in its text, break up \"\"\" by escaping a quote after the first)");
+            // where the string ends is not plain: the rest of the file with it
+            return { text: "", indent: 0, end: src.len(), };
+        }
+        if brk < first { return { text: "", indent: indent, end: close + 3, }; }
+        let stop = brk;
+        if stop > first && src.byte-at(stop - 1) == 13 { stop -= 1; }
+        // each line, its indent taken off (an empty line has none to give)
+        let lines: list<string> = [];
+        let start = first;
+        let number = line + 1;
+        for step in 0..stop - first + 2 {
+            let e = line-end(src, start);
+            if e > stop { e = stop; }
+            let text = src.substring(start, e);
+            if text.len() > 0 && src.byte-at(e - 1) == 13 {
+                text = text.substring(0, text.len() - 1);
+            }
+            if text.len() > 0 {
+                if spaces-before(text, 0, indent) < indent || text.len() < indent {
+                    lex-error(context, source, number, 1, "this line of a multiline string is indented less than its closing \"\"\" ({indent} spaces)");
+                }
+                text = text.substring(indent, text.len());
+            }
+            lines.push(text);
+            if e >= stop {
+                return { text: lines.join(from-byte(10)), indent: indent, end: close + 3, };
+            }
+            start = e + 1;
+            number += 1;
+        }
+        { text: lines.join(from-byte(10)), indent: indent, end: close + 3, }
+    }
+
+    // where a multiline string's closing """ is: the first """ in its text outside an
+    // interpolation, even one after a backslash (WAVE prohibits \""", as its readers see """ first)
+    triple-end: func(src: string, from: s64) -> s64 {
+        let n = src.len();
+        let i = from;
+        let depth = 0;
+        for step in 0..n + 1 {
+            if i >= n { return n; }
+            let c = src.byte-at(i);
+            if c == 92 {
+                if depth == 0 && src.byte-at(i + 1) == 34 && src.byte-at(i + 2) == 34
+                    && src.byte-at(i + 3) == 34 {
+                    return i + 1;
+                }
+                i += 2;
+            } else if c == 34 && depth == 0 {
+                if src.byte-at(i + 1) == 34 && src.byte-at(i + 2) == 34 { return i; }
+                i += 1;
+            } else if c == 34 {
+                i = string-end(src, i + 1) + 1;
+            } else {
+                if c == 123 { depth += 1; }
+                if c == 125 { depth -= 1; }
+                i += 1;
+            }
+        }
+        n
+    }
+
+    // how many spaces come just before to (none before from)
+    spaces-before: func(s: string, from: s64, to: s64) -> s64 {
+        for k in 0..to - from {
+            if s.byte-at(to - 1 - k) != 32 { return k; }
+        }
+        to - from
+    }
+}

@@ -1,0 +1,75 @@
+// loop { … }: its body again and again until a break (or a return) leaves it. One no break leaves
+// never gets to its end, so a func may end with it (and a block that ends in a return, a break or
+// a continue has no value of its own)
+
+// the first power of two at or past n: the loop is the func's end
+power-past: func(n: s32) -> s32 {
+    let p = 1;
+    loop {
+        if p >= n { return p; }
+        p *= 2;
+    }
+}
+
+// a block ending in a return is any value
+sign: func(x: s32) -> string {
+    if x < 0 { return "negative"; }
+    if x == 0 { return "zero"; }
+    return "positive";
+}
+
+// a break where a value is wanted: the match's other arm gives it
+firsts: func(xs: list<option<s32>>) -> list<s32> {
+    let out: list<s32> = [];
+    let i = 0;
+    loop {
+        if i == xs.len() { break; }
+        let x = match xs[i] {
+            some(v) => v,
+            none => { break; }
+        };
+        out.push(x);
+        i += 1;
+    }
+    out
+}
+
+counter: async func(n: s32) -> s32 {
+    let total = 0;
+    let i = 0;
+    loop {
+        i += 1;
+        if i % 2 == 0 { continue; }
+        wait yield-turn();
+        total += i;
+        if i >= n { break; }
+    }
+    total
+}
+
+main: async func() {
+    print("{power-past(5)} {power-past(64)} {power-past(1000)}\n");
+    print("{sign(-3)} {sign(0)} {sign(8)}\n");
+    print("{firsts([some(1), some(2), none, some(4),])}\n");
+    // each turn's binding, captured as it was that turn
+    let fs: list<func() -> s32> = [];
+    let k = 0;
+    loop {
+        let seen = k * 10;
+        fs.push({ seen });
+        k += 1;
+        if k == 3 { break; }
+    }
+    let got: list<s32> = [];
+    for f in fs { got.push(f()); }
+    print("{got}\n");
+    print("{wait counter(9)}\n");
+    // nested: the inner break leaves the inner loop only
+    let rows = 0;
+    loop {
+        loop { break; }
+        rows += 1;
+        if rows == 2 { break; }
+    }
+    print("{rows}\n");
+}

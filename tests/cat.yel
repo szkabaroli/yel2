@@ -1,0 +1,37 @@
+// stdin to stdout, a stream each way: stdin's read-via-stream gives a stream and a future in a
+// tuple (a value holding both crosses as one), stdout's write-via-stream takes a stream. The first
+// line is upper-cased here (a yel stream given the host), the rest given back as it comes (part of
+// it read here already: the rest read from the host as the host reads it)
+from "wasi:cli" include stdin, stdout;
+
+first-line: async func(input: stream<u8>) {
+    let (out, w) = stream-pair(16);
+    let written = stdout.write-via-stream(out);
+    loop {
+        match wait read(input) {
+            some(b) => {
+                wait w.write(if b >= 97 && b <= 122 { b - 32 } else { b });
+                if b == 10 { break; }
+            }
+            none => { break; }
+        }
+    }
+    w.close();
+    match wait written {
+        ok(_) => {}
+        err(e) => panic("stdout: {e}"),
+    }
+}
+
+main: async func() {
+    let (input, done) = stdin.read-via-stream();
+    wait first-line(input);
+    match wait stdout.write-via-stream(input) {
+        ok(_) => {}
+        err(e) => panic("stdout: {e}"),
+    }
+    match wait done {
+        ok(_) => {}
+        err(e) => panic("stdin: {e}"),
+    }
+}

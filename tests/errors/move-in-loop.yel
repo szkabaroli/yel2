@@ -1,0 +1,11 @@
+// error: 8:47: out is moved in a loop it is made outside of
+// note: the next turn would move it again
+from "wasi:cli" include stdout;
+
+main: async func() {
+    let (out, w) = stream-pair(4);
+    for i in 0..2 {
+        let written = stdout.write-via-stream(out);
+    }
+    w.close();
+}

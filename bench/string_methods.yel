@@ -1,0 +1,17 @@
+// Porffor's bench/string_methods.js: toUpperCase and toLowerCase (the ones it runs), 8000 times
+// each
+
+from "wasi:clocks" include monotonic-clock;
+
+main: func() {
+    let str = "The quick brown fox jumps over the lazy dog";
+    let iterations = 8000;
+
+    let t1 = monotonic-clock.now();
+    for i in 0..iterations { let up = str.to-upper(); }
+    print("String.prototype.toUpperCase: {(monotonic-clock.now() - t1) as f64 / 1000000.0}ms\n");
+
+    let t2 = monotonic-clock.now();
+    for i in 0..iterations { let low = str.to-lower(); }
+    print("String.prototype.toLowerCase: {(monotonic-clock.now() - t2) as f64 / 1000000.0}ms\n");
+}

@@ -1,0 +1,279 @@
+// Host ends let go, on the IR. A stream or a future a func has from the host (a WIT func's result,
+// or part of one) holds an end of the host's: read to its end, or waited for, the runtime lets it go
+// itself, but one a func stops using before then would hold it for good (the host's writer waiting
+// for a reader that is gone). So after the statement that last uses a local holding one, and before
+// each way out until then (return, break, continue), its end is let go (yel_stream_release,
+// yel_future_release: nothing for a stream or a future of yel's own); a writer is closed there (no
+// one can write to it after: its reader, the host's or a task's, is told the stream is done).
+//
+// Only a binding's local (not one codegen made, nor a parameter, nor one a closure captures) that
+// no one else has, as escape.yel's flow says of its group: not let escape (stored, kept by a func it
+// is given, moved to a WIT func, given a started call), not given back, not holding a value made
+// elsewhere (a parameter's, a field's, a result that is not new), no other binding in it holding
+// the same end, and assigned once. Everything else is whoever has it's to let go (or the host's,
+// once the component is done).
+
+module gen {
+    // every func's such locals, let go where they are last used
+    // the program's flow (escape.yel), what both the releases and the readonly and move checks
+    // read
+    flow-facts: func(
+        g: Gen,
+        funcs: list<IrFunc>,
+        pointer-types: map<Name, bool>,
+        func-holders: map<Name, bool>,
+        externs: map<string, RuntimeEffect>,
+    ) -> Facts {
+        let p: Facts = {
+            funcs: map.new(),
+            param-escapes: map.new(),
+            param-kept-in: map.new(),
+            param-gives: map.new(),
+            param-writes: map.new(),
+            fresh-result: map.new(),
+            wit: wit-wrappers(g),
+            externs: externs,
+            pointer-types: pointer-types,
+            func-holders: func-holders,
+            groups: map.new(),
+            callees: map.new(),
+            flows: map.new(),
+            mutable-locals: map.new(),
+        };
+        for f in funcs { p.funcs.set(f.name, f); }
+        opt.param-escapes(p, funcs);
+        p
+    }
+
+    release-ends: func(g: Gen, funcs: list<IrFunc>, p: Facts) {
+        for f in funcs {
+            if p.groups.has(f.name) {
+                let gr = p.groups[f.name];
+                for i in 0..f.locals.len() {
+                    if owned-end(f, gr, i) { release-local(g, f, gr, i); }
+                }
+            }
+        }
+    }
+
+    // the WIT funcs' wrappers by C name, and an async one's start
+    wit-wrappers: func(g: Gen) -> set<Name> {
+        let out: set<Name> = set.new();
+        for k in g.wit-externs.keys() {
+            let c = g.funcs[k].c-name;
+            out.add(intern(c));
+            out.add(intern("s" + c.substring(1, c.len())));
+        }
+        out
+    }
+
+    // whether a local is a binding's (not one codegen made)
+    is-binding: func(f: IrFunc, i: s64) -> bool {
+        match f.locals[i].binding {
+            some(m) => true,
+            none => false,
+        }
+    }
+
+    // what end a type holds: "stream", "writer", "future", or "" (none of its own)
+    end-kind: func(t: Type) -> string {
+        match resolve(t) {
+            stream-type(x) => if x.writer { "writer" } else { "stream" },
+            future-type(x) => "future",
+            _ => "",
+        }
+    }
+
+    // whether a local is a binding's end that no one else has (see the top)
+    owned-end: func(f: IrFunc, gr: Groups, i: s64) -> bool {
+        let kind = end-kind(f.locals[i].ty);
+        if kind == "" || contains(f.params, i) { return false; }
+        let m = match f.locals[i].binding {
+            some(x) => x,
+            none => { return false; }
+        };
+        if m.captured { return false; }
+        let root = opt.find(gr, i);
+        // nor one another value holds (a list it is pushed to may read it after)
+        if gr.escapes[root] || gr.returned[root] || gr.stale[root] || gr.moved[root] || gr.holding-params[root].len() > 0
+            || opt.holder-roots(gr, root).len() > 1 {
+            return false;
+        }
+        for j in 0..f.locals.len() {
+            if j != i && opt.find(gr, j) == root && is-binding(f, j)
+                && end-kind(f.locals[j].ty) == kind {
+                return false;
+            }
+        }
+        let assigned = 0;
+        for n in flatten(f.body) {
+            match n.kind {
+                assign(x) => { if x.dest == i { assigned += 1; } }
+                _ => {}
+            }
+        }
+        assigned == 1
+    }
+
+    // the locals whose reading is a use of it: itself, and codegen's made from it (a block's value,
+    // a call's frame that holds it: a read begun, waited for later), through any chain of them
+    users: func(f: IrFunc, gr: Groups, i: s64) -> list<s64> {
+        let out = [i,];
+        let assigns: list<AssignNode> = [];
+        for n in flatten(f.body) {
+            match n.kind {
+                assign(x) => { if !is-binding(f, x.dest) { assigns.push(x); } }
+                _ => {}
+            }
+        }
+        loop {
+            let grew = false;
+            for x in assigns {
+                if !contains(out, x.dest) && uses(x.value, out) {
+                    out.push(x.dest);
+                    grew = true;
+                }
+            }
+            if !grew { return out; }
+        }
+    }
+
+    // whether a statement (and what it holds) reads any of the locals
+    uses: func(n: Node, locals: list<s64>) -> bool {
+        for x in flatten([n,]) {
+            let read: list<s64> = [];
+            reads(x, read);
+            for r in read {
+                if contains(locals, r) { return true; }
+            }
+        }
+        false
+    }
+
+    // the release after the local's last use, and before each way out until then
+    release-local: func(g: Gen, f: IrFunc, gr: Groups, i: s64) {
+        let body = match defining-list(f.body, i) {
+            some(b) => b,
+            none => { return; }
+        };
+        let def = -1;
+        for k in 0..body.len() {
+            match body[k].kind {
+                assign(x) => { if x.dest == i && def < 0 { def = k; } }
+                _ => {}
+            }
+        }
+        let locals = users(f, gr, i);
+        let last = def;
+        for k in def + 1..body.len() {
+            if uses(body[k], locals) { last = k; }
+        }
+        // the labels inside what follows (a break to one stays in it)
+        let inner: list<s64> = [];
+        for k in def + 1..last + 1 {
+            for x in flatten([body[k],]) {
+                match x.kind {
+                    loop(l) => { if l.label >= 0 { inner.push(l.label); } }
+                    block(b) => { if b.label >= 0 { inner.push(b.label); } }
+                    _ => {}
+                }
+            }
+        }
+        let out: list<Node> = [];
+        for k in 0..body.len() {
+            let n = body[k];
+            if k > def && k <= last {
+                if leaves(n, false, inner) { out.push(release-node(g, f, i)); }
+                else { before-exits(g, f, i, n, false, inner); }
+            }
+            out.push(n);
+            if k == last && !is-release(n, i) { out.push(release-node(g, f, i)); }
+        }
+        replace-body(body, out);
+    }
+
+    // the statement list the local is first assigned in
+    defining-list: func(body: list<Node>, i: s64) -> option<list<Node>> {
+        for n in body {
+            match n.kind {
+                assign(x) => { if x.dest == i { return some(body); } }
+                _ => {}
+            }
+            for index in 0..nested-count(n) {
+                match defining-list(nested-body(n, index), i) {
+                    some(found) => { return some(found); }
+                    none => {}
+                }
+            }
+        }
+        none
+    }
+
+    // whether a statement leaves the list it is in (in-loop: inside a loop of that list, where a
+    // break or a continue of its own stays)
+    leaves: func(n: Node, in-loop: bool, inner: list<s64>) -> bool {
+        match n.kind {
+            return(v) => true,
+            break(l) => if l < 0 { !in-loop } else { !contains(inner, l) },
+            continue(l) => if l < 0 { !in-loop } else { !contains(inner, l) },
+            _ => false,
+        }
+    }
+
+    // the release before each way out inside a statement
+    before-exits: func(g: Gen, f: IrFunc, i: s64, n: Node, in-loop: bool, inner: list<s64>) {
+        let deeper = match n.kind {
+            loop(l) => true,
+            _ => in-loop,
+        };
+        for index in 0..nested-count(n) {
+            let b = nested-body(n, index);
+            let out: list<Node> = [];
+            for x in b {
+                if leaves(x, deeper, inner) { out.push(release-node(g, f, i)); }
+                else { before-exits(g, f, i, x, deeper, inner); }
+                out.push(x);
+            }
+            replace-body(b, out);
+        }
+    }
+
+    // whether a statement is the local's release already (a writer's close, written)
+    is-release: func(n: Node, i: s64) -> bool {
+        match n.kind {
+            call(c) => {
+                if c.c-name != "yel_writer_close" && c.c-name != "yel_stream_release"
+                    && c.c-name != "yel_future_release" {
+                    return false;
+                }
+                for a in c.args {
+                    match a.kind {
+                        local(r) => { if r == i { return true; } }
+                        _ => {}
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    // the runtime's release of the local's end (a generic extern's: its item's type first)
+    release-node: func(g: Gen, f: IrFunc, i: s64) -> Node {
+        let t = resolve(f.locals[i].ty);
+        let item = match t {
+            stream-type(x) => x.item,
+            future-type(x) => x,
+            _ => Type.unit-type,
+        };
+        let c-name = match end-kind(t) {
+            "writer" => "yel_writer_close",
+            "stream" => "yel_stream_release",
+            _ => "yel_future_release",
+        };
+        let arg: TypeArg = { ty: item, key: false, };
+        type-arg-c(g, c-name, 0, arg);
+        let args = [type-arg(item, false), local(i, t),];
+        call("", c-name, args, Type.unit-type, fx().call)
+    }
+}

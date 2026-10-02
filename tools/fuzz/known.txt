@@ -1,0 +1,3 @@
+# Known issues: a case whose log matches one is kept apart (build/fuzz/known-<name>/), not counted as
+# found. One a line: name, then an extended regular expression for its log, then what it is.
+#

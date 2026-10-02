@@ -1,0 +1,14 @@
+// error: 7:43: out is moved, and another name may hold it
+from "wasi:cli" include stdout;
+
+main: async func() {
+    let pair = stream-pair(8);
+    let (out, w) = pair;
+    let written = stdout.write-via-stream(out);
+    let (again, w2) = pair;
+    for b in [104, 105, 33, 10,] { wait w2.write(b as u8); }
+    w2.close();
+    let stolen = wait again.read();
+    print("[stolen after move: {stolen}]\n");
+    wait written;
+}

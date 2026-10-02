@@ -1,0 +1,158 @@
+// The collector's roots: which funcs can collect, and which locals the collector must see (a slot
+// in the func's frame). Porffor has no counterpart (its collector runs between turns); yel may
+// collect in any call that allocates.
+
+// what the walk over a func learns: the positions (two for each statement: its uses, then what it
+// allocates) of each local's first def and last use, where allocations happen, and, for each loop
+// being walked, the locals used in it
+record Ranges {
+    first-def: list<s64>,
+    last-use: list<s64>,
+    allocs: list<s64>,
+    pos: s64,
+    loop-uses: list<list<s64>>,
+}
+
+module opt {
+    // whether a statement's value can collect: 0 no; 1 yes, after its arguments are handed over (a
+    // yel func's call: the callee keeps what it needs); 2 yes, while it still reads its arguments
+    // (the runtime's call, an alloc, a string made of pieces)
+    collects: func(n: Node, allocating: map<Name, bool>) -> s64 {
+        if (n.fx & fx().call) == 0 { return 0; }
+        match n.kind {
+            call(c) => {
+                if c.key == "" { 2 }
+                else if allocating.get-or(c.name, false) { 1 }
+                else { 0 }
+            }
+            alloc(a) => if a.stack { 0 } else { 2 },
+            interp(x) => 2,
+            // a func value's: which is not known, so any may collect
+            call-ref(x) => 1,
+            _ => 0,
+        }
+    }
+
+    // a statement's value: itself, or what it assigns
+    value: func(n: Node) -> Node {
+        match n.kind {
+            assign(x) => x.value,
+            _ => n,
+        }
+    }
+
+    // which funcs can collect (by C name): a fixed point, from none
+    allocating-funcs: func(funcs: list<IrFunc>) -> map<Name, bool> {
+        let allocating: map<Name, bool> = map.new();
+        for f in funcs { allocating.set(f.name, false); }
+        for round in 0..1000 {
+            let changed = false;
+            for f in funcs {
+                if !allocating[f.name] && body-collects(f.body, allocating) {
+                    allocating.set(f.name, true);
+                    changed = true;
+                }
+            }
+            if !changed { return allocating; }
+        }
+        allocating
+    }
+
+    body-collects: func(body: list<Node>, allocating: map<Name, bool>) -> bool {
+        for n in flatten(body) {
+            if collects(value(n), allocating) > 0 { return true; }
+        }
+        false
+    }
+
+    // which of a func's locals the collector must see: those holding a value (pointers or not: the
+    // renderer asks only for those with pointers) live across a point where it may collect
+    rooted: func(f: IrFunc, allocating: map<Name, bool>) -> list<bool> {
+        let n = f.locals.len();
+        let r: Ranges = { first-def: [], last-use: [], allocs: [], pos: 0, loop-uses: [], };
+        for i in 0..n {
+            r.first-def.push(-1);
+            r.last-use.push(-1);
+        }
+        // a parameter is defined on entry, and so is a closure's environment
+        for p in f.params { r.first-def[p] = 0; }
+        if f.env-param >= 0 { r.first-def[f.env-param] = 0; }
+        walk(r, f.body, allocating);
+        // how many allocations happen before each position
+        let before: list<s64> = [];
+        let k = 0;
+        for p in 0..r.pos + 5 {
+            before.push(k);
+            if k < r.allocs.len() && r.allocs[k] == p { k += 1; }
+        }
+        let out: list<bool> = [];
+        for i in 0..n {
+            let d = r.first-def[i];
+            let u = r.last-use[i];
+            // an allocation strictly between its def and its last use
+            let across = d >= 0 && u > d + 1 && before[u] - before[d + 1] > 0;
+            out.push(across);
+        }
+        out
+    }
+
+    use: func(r: Ranges, i: s64, at: s64) {
+        if at > r.last-use[i] { r.last-use[i] = at; }
+        for l in r.loop-uses { l.push(i); }
+    }
+
+    def: func(r: Ranges, i: s64, at: s64) {
+        if r.first-def[i] < 0 { r.first-def[i] = at; }
+    }
+
+    // a statement at the next position: its uses (at 2k, or, while its value still reads them,
+    // after its allocation), its allocation (2k + 1), what it assigns (2k + 2)
+    step: func(r: Ranges, n: Node, allocating: map<Name, bool>) {
+        r.pos += 2;
+        let at = r.pos;
+        let kind = collects(value(n), allocating);
+        let read: list<s64> = [];
+        reads(n, read);
+        for i in read { use(r, i, if kind == 2 { at + 2 } else { at }); }
+        if kind > 0 { r.allocs.push(at + 1); }
+        match n.kind {
+            assign(x) => def(r, x.dest, at + 2),
+            _ => {}
+        }
+    }
+
+    walk: func(r: Ranges, body: list<Node>, allocating: map<Name, bool>) {
+        for n in body {
+            match n.kind {
+                loop(x) => loop-range(r, x, allocating),
+                _ => {
+                    step(r, n, allocating);
+                    for index in 0..nested-count(n) { walk(r, nested-body(n, index), allocating); }
+                }
+            }
+        }
+    }
+
+    // a loop: its test before each turn, its body, its step after; what is used in it and was
+    // defined before it is live to its end (it runs again)
+    loop-range: func(r: Ranges, x: LoopNode, allocating: map<Name, bool>) {
+        r.pos += 2;
+        let start = r.pos;
+        r.loop-uses.push([]);
+        match x.test {
+            some(t) => step(r, t, allocating),
+            none => {}
+        }
+        walk(r, x.body, allocating);
+        match x.step {
+            some(s) => step(r, s, allocating),
+            none => {}
+        }
+        r.pos += 2;
+        let end = r.pos;
+        let used = r.loop-uses.pop();
+        for i in used {
+            if r.first-def[i] < start && r.last-use[i] < end { r.last-use[i] = end; }
+        }
+    }
+}

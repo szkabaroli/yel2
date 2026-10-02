@@ -1,0 +1,61 @@
+//+build native
+
+// wasi:clocks natively, as host-filesystem.yel is wasi:filesystem: the system's clocks
+// (clock_gettime, clock_getres), and a wait as the executor's timer. A program's calls of
+// wasi:clocks bind to these natively and to the host itself in a component.
+
+from "wasi:clocks" include system-clock;
+
+module wasi-clocks-system-clock {
+    now: func() -> system-clock.instant {
+        let time = clock.read(clock.realtime());
+        { seconds: time[0], nanoseconds: time[1] as u32, }
+    }
+
+    get-resolution: func() -> u64 { clock.resolution(clock.realtime()) }
+}
+
+module wasi-clocks-monotonic-clock {
+    // nanoseconds on a clock that only goes on
+    now: func() -> u64 {
+        let time = clock.read(clock.monotonic());
+        (time[0] * 1000000000 + time[1]) as u64
+    }
+
+    get-resolution: func() -> u64 { clock.resolution(clock.monotonic()) }
+
+    // done once the monotonic clock is past when: the task parked, the executor's timer (on the
+    // same clock, in milliseconds) waking it
+    wait-until: async func(when: u64) {
+        let at = ((when + 999999) / 1000000) as s64;
+        loop {
+            if async.now-ms() >= at { break; }
+            async.wake-at(at);
+            wait async.park();
+        }
+    }
+
+    wait-for: async func(how-long: u64) { wait wait-until(now() + how-long); }
+}
+
+module clock {
+    // a clock's time as seconds and nanoseconds (a timespec: two 64-bit numbers on the native
+    // targets, written over the list's items)
+    read: func(id: s64) -> list<s64> {
+        let time: list<s64> = [0, 0,];
+        get-time(id, memory.items-address(time));
+        time
+    }
+
+    // the clock's resolution in nanoseconds
+    resolution: func(id: s64) -> u64 {
+        let time: list<s64> = [0, 0,];
+        get-resolution(id, memory.items-address(time));
+        (time[0] * 1000000000 + time[1]) as u64
+    }
+
+    @c(name = "yel_host_clocks_realtime") realtime: extern func() -> s64;
+    @c(name = "yel_host_clocks_monotonic") monotonic: extern func() -> s64;
+    @c(name = "yel_host_clocks_get_time") get-time: extern func(id: s64, at: s64);
+    @c(name = "yel_host_clocks_get_resolution") get-resolution: extern func(id: s64, at: s64);
+}

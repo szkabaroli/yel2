@@ -1,0 +1,764 @@
+// Expressions: one of a type, written by what makes a value of that type. Deeper ones are simpler,
+// and at the bottom a literal or a local. wanted: the type is wanted where it goes (a typed let,
+// an argument, a result), so a literal there is that type's; else the expression says its type on
+// its own, and a value that cannot ([], none, a record's literal) is made in a typed let first.
+
+module exprs {
+    expr: func(g: Gen, t: Ty, depth: s64, wanted: bool) -> string {
+        // a func of no params: a closure, or a local (a block where one is wanted is its body, so
+        // nothing written in { } can give one: an if's, a match's, the lets made ahead of it)
+        match t {
+            func-t(f) => {
+                if f.params.len() == 0 {
+                    let ls = gen.locals(g, t, false);
+                    if ls.len() > 0 && dice.chance(g.dice, 40) { return dice.pick(g.dice, ls).name; }
+                    return closure(g, t, depth + 1, wanted);
+                }
+            }
+            _ => {}
+        }
+        if depth >= g.depth || dice.chance(g.dice, 12) { return leaf(g, t, depth, wanted); }
+        let names: list<string> = [];
+        let weights: list<s64> = [];
+        let add = { name: string, weight: s64 ->
+            names.push(name);
+            weights.push(weight);
+        };
+        add("leaf", 4);
+        add("if", 3);
+        add("match-int", 2);
+        add("block", 2);
+        add("call", 4);
+        add("closure-call", 1);
+        add("field", 2);
+        add("tuple-item", 1);
+        add("option-or", 2);
+        add("list-get", 2);
+        add("map-get", 1);
+        add("match-option", 1);
+        add("func-local", 1);
+        match t {
+            int-t(n) => {
+                add("arith", 8);
+                add("bits", 3);
+                add("shift", 2);
+                add("divide", 2);
+                add("cast", 3);
+                add("len", 2);
+                if types.is-signed(n) { add("negate", 1); }
+            }
+            float-t(n) => {
+                add("arith", 6);
+                add("divide", 1);
+                add("cast", 2);
+                add("negate", 1);
+            }
+            bool-t => {
+                add("compare", 6);
+                add("logic", 4);
+                add("not", 2);
+                add("is", 2);
+                add("test", 3);
+                add("flag", 1);
+            }
+            char-t => { add("cast", 2); }
+            string-t => {
+                add("concat", 4);
+                add("interp", 5);
+                add("text-op", 4);
+                add("join", 1);
+            }
+            list-t(x) => {
+                add("list-op", 4);
+                add("list-make", 2);
+            }
+            option-t(x) => {
+                add("option-make", 3);
+                add("as-check", 1);
+            }
+            map-t(m) => { add("map-make", 4); }
+            func-t(f) => { add("closure", 6); }
+            named-t(n) => { add("named-make", 4); }
+            _ => {}
+        }
+        let k = names[dice.weighted(g.dice, weights)];
+        let d = depth + 1;
+        if k == "if" { return "if {parens(expr(g, Ty.bool-t, d, true))} {gen.lb()} {gen.scoped(g, t, d, wanted)} {gen.rb()} else {gen.lb()} {gen.scoped(g, t, d, wanted)} {gen.rb()}"; }
+        if k == "match-int" { return match-int(g, t, d, wanted); }
+        if k == "block" { return block-expr(g, t, d, wanted); }
+        if k == "call" { return call(g, t, d, wanted); }
+        if k == "closure-call" { return closure-call(g, t, d, wanted); }
+        if k == "field" { return field(g, t, d, wanted); }
+        if k == "tuple-item" { return tuple-item(g, t, d, wanted); }
+        if k == "option-or" { return "{obj(g, Ty.option-t(t), d)}.unwrap-or({expr(g, t, d, true)})"; }
+        if k == "list-get" { return list-get(g, t, d, wanted); }
+        if k == "map-get" { return "{obj(g, Ty.map-t({ key: Ty.string-t, value: t, }), d)}.get-or({text-literal(g)}, {expr(g, t, d, true)})"; }
+        if k == "match-option" { return match-option(g, t, d, wanted); }
+        if k == "func-local" { return func-local(g, t, d, wanted); }
+        if k == "arith" { return arith(g, t, d); }
+        if k == "bits" { return "({expr(g, t, d, false)} {dice.pick(g.dice, ["&", "|", "^",])} {expr(g, t, d, true)})"; }
+        if k == "shift" { return "({expr(g, t, d, false)} {dice.pick(g.dice, ["<<", ">>",])} {expr(g, pick.int-type(g), d, false)})"; }
+        if k == "divide" { return divide(g, t, d); }
+        if k == "negate" { return "(-{expr(g, t, d, false)})"; }
+        if k == "cast" { return cast(g, t, d); }
+        if k == "len" { return len(g, t, d, wanted); }
+        if k == "compare" { return compare(g, d); }
+        if k == "logic" { return "({expr(g, Ty.bool-t, d, true)} {dice.pick(g.dice, ["&&", "||",])} {expr(g, Ty.bool-t, d, true)})"; }
+        if k == "not" { return "!{expr(g, Ty.bool-t, d, true)}"; }
+        if k == "is" { return is-test(g, d); }
+        if k == "test" { return test(g, d); }
+        if k == "flag" { return flag(g, d); }
+        if k == "concat" { return "({expr(g, Ty.string-t, d, true)} + {expr(g, Ty.string-t, d, true)})"; }
+        if k == "interp" { return interp(g, d); }
+        if k == "text-op" { return text-op(g, d); }
+        if k == "join" { return "{obj(g, Ty.list-t(Ty.string-t), d)}.join({text-literal(g)})"; }
+        if k == "list-op" { return list-op(g, t, d, wanted); }
+        if k == "list-make" { return literal(g, t, d, wanted); }
+        if k == "option-make" { return literal(g, t, d, wanted); }
+        if k == "as-check" { return as-check(g, t, d, wanted); }
+        if k == "map-make" { return map-make(g, t, d, wanted); }
+        if k == "closure" { return closure(g, t, d, wanted); }
+        if k == "named-make" { return literal(g, t, d, wanted); }
+        leaf(g, t, depth, wanted)
+    }
+
+    // an expression of t where what follows it would be read as its own (a .method, a { after a
+    // condition): one that ends at a brace (an if, a match, a block, a literal in { }) in parens
+    obj: func(g: Gen, t: Ty, d: s64) -> string { parens(expr(g, t, d, false)) }
+
+    parens: func(e: string) -> string {
+        // and one that starts with a prefix operator (!x.f() is !(x.f()))
+        if e.starts-with("if ") || e.starts-with("match ") || e.starts-with(gen.lb()) || e.starts-with("!") || e.starts-with("-") {
+            "(" + e + ")"
+        } else {
+            e
+        }
+    }
+
+    // a local of t, or a literal
+    leaf: func(g: Gen, t: Ty, depth: s64, wanted: bool) -> string {
+        let ls = gen.locals(g, t, false);
+        if ls.len() > 0 && dice.chance(g.dice, 60) { return dice.pick(g.dice, ls).name; }
+        match t {
+            param-t(n) => {
+                // a type param's value: only what was given (a param of it is always there)
+                if ls.len() > 0 { return dice.pick(g.dice, ls).name; }
+                panic("fuzz: no value of {n}")
+            }
+            _ => {}
+        }
+        literal(g, t, depth, wanted)
+    }
+
+    // ---- literals
+
+    literal: func(g: Gen, t: Ty, depth: s64, wanted: bool) -> string {
+        let d = depth + 1;
+        match t {
+            int-t(n) => {
+                let v = int-literal(g, n);
+                if wanted { v } else { "({v} as {n})" }
+            }
+            float-t(n) => {
+                let v = dice.pick(g.dice, ["0.0", "1.0", "0.5", "-2.25", "3.75", "100.125", "1e10", "-1e-3", "2.5e3", "0.1",]);
+                if wanted && n == "f64" { v } else { "({v} as {n})" }
+            }
+            bool-t => dice.pick(g.dice, ["true", "false",]),
+            char-t => dice.pick(g.dice, ["'a'", "'z'", "'0'", "' '", "'\\n'", "'\\t'", "'\\\\'", "'\\''", "'é'", "'\\u\{1F600\}'", "'Ω'",]),
+            string-t => text-literal(g),
+            unit-t => "()",
+            list-t(x) => {
+                if !wanted { return gen.hoist(g, t, depth); }
+                let items: list<string> = [];
+                for i in 0..dice.between(g.dice, 0, 3) { items.push(expr(g, x, d, true)); }
+                "[" + items.join(", ") + (if items.len() > 0 { ",]" } else { "]" })
+            }
+            fixed-t(x) => {
+                if !wanted { return gen.hoist(g, t, depth); }
+                let items: list<string> = [];
+                for i in 0..x.len { items.push(expr(g, x.item, d, true)); }
+                "[" + items.join(", ") + ",]"
+            }
+            option-t(x) => {
+                if !wanted { return gen.hoist(g, t, depth); }
+                if dice.chance(g.dice, 30) { "none" } else { "some({payload(g, x, d)})" }
+            }
+            result-t(r) => {
+                if !wanted { return gen.hoist(g, t, depth); }
+                if dice.chance(g.dice, 50) { "ok({payload(g, r.ok, d)})" } else { "err({payload(g, r.err, d)})" }
+            }
+            tuple-t(xs) => {
+                let items: list<string> = [];
+                for x in xs { items.push(expr(g, x, d, wanted)); }
+                if !wanted && xs.any({ x -> needs-want(g, x) }) { return gen.hoist(g, t, depth); }
+                "(" + items.join(", ") + (if items.len() == 1 { ",)" } else { ")" })
+            }
+            anon-t(f) => {
+                if !wanted && f.types.any({ x -> needs-want(g, x) }) { return gen.hoist(g, t, depth); }
+                let parts: list<string> = [];
+                for i in 0..f.names.len() { parts.push("{f.names[i]}: {expr(g, f.types[i], d, wanted)}"); }
+                gen.lb() + " " + parts.join(", ") + ", " + gen.rb()
+            }
+            named-t(n) => named-literal(g, gen.decl(g, n), depth, wanted),
+            map-t(m) => map-make(g, t, depth, wanted),
+            func-t(f) => closure(g, t, d, wanted),
+            param-t(n) => leaf(g, t, depth, wanted),
+        }
+    }
+
+    // a case's payload: a () one as the literal (a case carrying nothing holds ())
+    payload: func(g: Gen, t: Ty, d: s64) -> string {
+        match t {
+            unit-t => "()",
+            _ => expr(g, t, d, true),
+        }
+    }
+
+    // whether a value of t needs its type wanted to be one (else it must be made in a typed let)
+    needs-want: func(g: Gen, t: Ty) -> bool {
+        match t {
+            list-t(x) => true,
+            fixed-t(x) => true,
+            option-t(x) => true,
+            result-t(r) => true,
+            map-t(m) => true,
+            int-t(n) => true,
+            float-t(n) => true,
+            tuple-t(xs) => xs.any({ x -> needs-want(g, x) }),
+            anon-t(f) => f.types.any({ x -> needs-want(g, x) }),
+            named-t(n) => {
+                let k = gen.decl(g, n).kind;
+                k == "record" || k == "strings" || k == "range" || k == "union"
+            }
+            _ => false,
+        }
+    }
+
+    // an integer of type n, in its range (its ends, zero and small ones more than the rest)
+    int-literal: func(g: Gen, n: string) -> string {
+        let signed = types.is-signed(n);
+        let bits = types.bits(n);
+        let roll = dice.below(g.dice, 10);
+        if roll < 4 { return "{dice.between(g.dice, 0, 9)}"; }
+        if roll < 6 { return "{dice.between(g.dice, 10, 120)}"; }
+        if roll == 6 {
+            // the largest
+            if bits == 64 { return if signed { "9223372036854775807" } else { "18446744073709551615" }; }
+            let top: s64 = (1 << (if signed { bits - 1 } else { bits })) - 1;
+            return "{top}";
+        }
+        if roll == 7 && signed {
+            if bits == 64 { return "-9223372036854775807"; }
+            let bottom: s64 = 1 << (bits - 1);
+            return "-{bottom - 1}";
+        }
+        if signed { return "-{dice.between(g.dice, 1, 100)}"; }
+        "{dice.between(g.dice, 0, 200)}"
+    }
+
+    // a string literal: plain, empty, escaped, multibyte
+    text-literal: func(g: Gen) -> string {
+        dice.pick(g.dice, [
+            "\"\"", "\"a\"", "\"hello\"", "\"get\"", "\"x y z\"", "\"tab\\there\"", "\"line\\n\"", "\"quote\\\"d\"",
+            "\"back\\\\slash\"", "\"héllo\"", "\"日本\"", "\"\\u\{1F600\}\"", "\",\"", "\"a,b,,c\"", "\"  padded  \"", "\"brace \\\{ \\\}\"",
+        ])
+    }
+
+    named-literal: func(g: Gen, decl: TypeDecl, depth: s64, wanted: bool) -> string {
+        let d = depth + 1;
+        let k = decl.kind;
+        if k == "record" {
+            if !wanted { return gen.hoist(g, Ty.named-t(decl.name), depth); }
+            let parts: list<string> = [];
+            for i in 0..decl.names.len() { parts.push("{decl.names[i]}: {expr(g, decl.types[i], d, true)}"); }
+            return gen.lb() + " " + parts.join(", ") + ", " + gen.rb();
+        }
+        if k == "variant" {
+            let i = dice.below(g.dice, decl.names.len());
+            return match decl.types[i] {
+                unit-t => "{decl.name}.{decl.names[i]}",
+                _ => "{decl.name}.{decl.names[i]}({payload(g, decl.types[i], d)})",
+            };
+        }
+        if k == "enum" { return "{decl.name}.{dice.pick(g.dice, decl.names)}"; }
+        if k == "flags" {
+            let parts: list<string> = [];
+            for i in 0..dice.between(g.dice, 1, 3) { parts.push("{decl.name}.{dice.pick(g.dice, decl.names)}"); }
+            return "(" + parts.join(" | ") + ")";
+        }
+        if k == "distinct" { return "({expr(g, decl.base, d, true)} as {decl.name})"; }
+        if k == "strings" {
+            if !wanted { return gen.hoist(g, Ty.named-t(decl.name), depth); }
+            return "\"{dice.pick(g.dice, decl.names)}\"";
+        }
+        if k == "range" {
+            if !wanted { return gen.hoist(g, Ty.named-t(decl.name), depth); }
+            return "{dice.between(g.dice, decl.low, decl.high)}";
+        }
+        // a union: a value of one of its kinds
+        if !wanted { return gen.hoist(g, Ty.named-t(decl.name), depth); }
+        expr(g, dice.pick(g.dice, decl.types), d, true)
+    }
+
+    // ---- numbers
+
+    arith: func(g: Gen, t: Ty, d: s64) -> string {
+        "({expr(g, t, d, false)} {dice.pick(g.dice, ["+", "-", "*", "+", "-",])} {expr(g, t, d, true)})"
+    }
+
+    // a / or a %: mostly by a divisor never zero (| 1), at times by any (a division by zero stops
+    // the program, the same in each build)
+    divide: func(g: Gen, t: Ty, d: s64) -> string {
+        let op = dice.pick(g.dice, ["/", "%",]);
+        let right = expr(g, t, d, true);
+        match t {
+            int-t(n) => {
+                if dice.chance(g.dice, 85) { return "({expr(g, t, d, false)} {op} ({right} | 1))"; }
+            }
+            _ => {}
+        }
+        "({expr(g, t, d, false)} {op} {right})"
+    }
+
+    // x as T: from another number, a char or a bool (to an integer), from an integer (to a char)
+    cast: func(g: Gen, t: Ty, d: s64) -> string {
+        let from = match t {
+            char-t => pick.int-type(g),
+            float-t(n) => if dice.chance(g.dice, 50) { pick.int-type(g) } else { Ty.float-t(if n == "f32" { "f64" } else { "f32" }) },
+            _ => match dice.below(g.dice, 6) {
+                0 => Ty.bool-t,
+                1 => Ty.char-t,
+                2 => Ty.float-t("f64"),
+                _ => pick.int-type(g),
+            },
+        };
+        "({expr(g, from, d, false)} as {types.show(t)})"
+    }
+
+    // a length (an s64), as t
+    len: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let of = match dice.below(g.dice, 3) {
+            0 => obj(g, Ty.string-t, d),
+            1 => obj(g, Ty.list-t(pick.plain-type(g, 1)), d),
+            _ => readonly-or(g, d),
+        };
+        let n = "{of}.len()";
+        match t {
+            int-t(name) => if name == "s64" { n } else { "({n} as {name})" },
+            _ => n,
+        }
+    }
+
+    // a readonly param's length where there is one, else a string's
+    readonly-or: func(g: Gen, d: s64) -> string {
+        let ro: list<Local> = [];
+        for scope in g.scopes {
+            for l in scope {
+                if l.readonly { ro.push(l); }
+            }
+        }
+        if ro.len() > 0 { dice.pick(g.dice, ro).name } else { obj(g, Ty.string-t, d) }
+    }
+
+    // ---- bools
+
+    compare: func(g: Gen, d: s64) -> string {
+        let ordered = dice.chance(g.dice, 50);
+        let t = if ordered {
+            dice.pick(g.dice, [pick.int-type(g), Ty.char-t, Ty.float-t("f64"), Ty.string-t,])
+        } else {
+            pick.plain-type(g, 2)
+        };
+        let op = if ordered { dice.pick(g.dice, ["<", "<=", ">", ">=", "==", "!=",]) } else { dice.pick(g.dice, ["==", "!=",]) };
+        match t {
+            // strings order by compare
+            string-t => if ordered && op != "==" && op != "!=" {
+                return "({obj(g, t, d)}.compare({expr(g, t, d, true)}) {op} 0)";
+            },
+            _ => {}
+        }
+        "({expr(g, t, d, false)} {op} {expr(g, t, d, true)})"
+    }
+
+    // x is T: a union's local against one of its kinds, an option's against none
+    is-test: func(g: Gen, d: s64) -> string {
+        let unions = gen.decls-of(g, "union");
+        if unions.len() > 0 && dice.chance(g.dice, 70) {
+            let u = dice.pick(g.dice, unions);
+            return "({gen.hoist-hidden(g, Ty.named-t(u.name), d)} is {types.show(dice.pick(g.dice, u.types))})";
+        }
+        let ranges = gen.decls-of(g, "range");
+        if ranges.len() > 0 {
+            let r = dice.pick(g.dice, ranges);
+            return "({expr(g, r.base, d, false)} is {r.name})";
+        }
+        "{obj(g, Ty.option-t(Ty.int-t("s32")), d)}.is-some()"
+    }
+
+    // a std test: contains, starts-with, a list's any, a string's is-utf8
+    test: func(g: Gen, d: s64) -> string {
+        match dice.below(g.dice, 6) {
+            0 => "{obj(g, Ty.string-t, d)}.contains({expr(g, Ty.string-t, d, true)})",
+            1 => "{obj(g, Ty.string-t, d)}.starts-with({expr(g, Ty.string-t, d, true)})",
+            2 => {
+                let x = Ty.int-t("s32");
+                let v = gen.fresh(g, "v");
+                "{obj(g, Ty.list-t(x), d)}.any({gen.lb()} {v}: s32 -> {within(g, v, x, Ty.bool-t, d)} {gen.rb()})"
+            }
+            3 => "{obj(g, Ty.list-t(Ty.int-t("s32")), d)}.contains({expr(g, Ty.int-t("s32"), d, true)})",
+            4 => "{obj(g, Ty.map-t({ key: Ty.string-t, value: Ty.int-t("s32"), }), d)}.has({expr(g, Ty.string-t, d, true)})",
+            _ => "{obj(g, Ty.string-t, d)}.ends-with({expr(g, Ty.string-t, d, true)})",
+        }
+    }
+
+    // a flags value's flag, read as a bool
+    flag: func(g: Gen, d: s64) -> string {
+        let fs = gen.decls-of(g, "flags");
+        if fs.len() == 0 { return expr(g, Ty.bool-t, d, true); }
+        let f = dice.pick(g.dice, fs);
+        "{obj(g, Ty.named-t(f.name), d)}.{dice.pick(g.dice, f.names)}"
+    }
+
+    // ---- strings
+
+    // an interpolated string: values shown as they are, debug (?), padded, in a base
+    interp: func(g: Gen, d: s64) -> string {
+        let parts: list<string> = [];
+        for i in 0..dice.between(g.dice, 1, 3) {
+            parts.push(dice.pick(g.dice, ["", "x=", " ", "[", "] ",]));
+            let t = pick.plain-type(g, 2);
+            let name = gen.hoist(g, t, d);
+            let spec = match t {
+                int-t(n) => dice.pick(g.dice, ["", "", ":?", ":5", ":<6", ":^7", ":*>8", ":05", ":x", ":X", ":b", ":o", ":08x",]),
+                float-t(n) => dice.pick(g.dice, ["", ":?", ":.2", ":8.3", ":<10", ":010.1",]),
+                string-t => dice.pick(g.dice, ["", ":?", ":10", ":>10", ":-^9",]),
+                _ => dice.pick(g.dice, ["", ":?", ":?",]),
+            };
+            parts.push(gen.lb() + name + spec + gen.rb());
+        }
+        "\"" + parts.join("") + "\""
+    }
+
+    text-op: func(g: Gen, d: s64) -> string {
+        let s = obj(g, Ty.string-t, d);
+        match dice.below(g.dice, 12) {
+            0 => "{s}.to-upper()",
+            1 => "{s}.to-lower()",
+            2 => "{s}.trim()",
+            3 => "{s}.reverse()",
+            4 => "{s}.repeat({dice.between(g.dice, 0, 3)})",
+            5 => "{s}.replace({expr(g, Ty.string-t, d, true)}, {expr(g, Ty.string-t, d, true)})",
+            6 => "{s}.slice({expr(g, Ty.int-t("s64"), d, true)}, {expr(g, Ty.int-t("s64"), d, true)})",
+            7 => "{s}.pad-start({dice.between(g.dice, 0, 12)}, {text-literal(g)})",
+            8 => "{s}.pad-end({dice.between(g.dice, 0, 12)}, {text-literal(g)})",
+            9 => "{s}.trim-start()",
+            10 => "{s}.substring({expr(g, Ty.int-t("s64"), d, true)}, {expr(g, Ty.int-t("s64"), d, true)})",
+            _ => "{s}.trim-end()",
+        }
+    }
+
+    // ---- lists, options, maps
+
+    list-op: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let x = match t {
+            list-t(item) => item,
+            _ => t,
+        };
+        match dice.below(g.dice, 7) {
+            0 => "{obj(g, t, d)}.reverse()",
+            // each closure's param a name of its own (a nested one's would hide the one outside)
+            1 => {
+                let v = gen.fresh(g, "v");
+                "{obj(g, t, d)}.filter({gen.lb()} {v}: {types.show(x)} -> {within(g, v, x, Ty.bool-t, d)} {gen.rb()})"
+            }
+            // map's U is found from its closure: the body says its own type
+            2 => {
+                let from = pick.plain-type(g, 1);
+                let v = gen.fresh(g, "v");
+                "{obj(g, Ty.list-t(from), d)}.map({gen.lb()} {v}: {types.show(from)} -> {within-unwanted(g, v, from, x, d)} {gen.rb()})"
+            }
+            3 => "{obj(g, t, d)}.slice({dice.between(g.dice, 0, 2)}, {dice.between(g.dice, 0, 3)})",
+            4 => match x {
+                string-t => "{obj(g, Ty.string-t, d)}.split({text-literal(g)})",
+                char-t => "{obj(g, Ty.string-t, d)}.chars()",
+                _ => "{obj(g, t, d)}.reverse()",
+            },
+            5 => match x {
+                int-t(n) => if n == "u8" { "{obj(g, Ty.string-t, d)}.bytes()" } else { literal(g, t, d, wanted) },
+                _ => literal(g, t, d, wanted),
+            },
+            _ => "{obj(g, Ty.map-t({ key: x, value: Ty.int-t("s32"), }), d)}.keys()",
+        }
+    }
+
+    // x as? R: an integer's value as a range type, where it is in it
+    as-check: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        match t {
+            option-t(x) => match x {
+                named-t(n) => {
+                    let decl = gen.decl(g, n);
+                    if decl.kind == "range" { return "({expr(g, decl.base, d, false)} as? {n})"; }
+                }
+                int-t(n) => {
+                    if n == "s64" { return "{obj(g, Ty.string-t, d)}.find({expr(g, Ty.string-t, d, true)})"; }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        literal(g, t, d, wanted)
+    }
+
+    // a map made in a block: its entries set, then the map
+    map-make: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let name = gen.fresh(g, "m");
+        let parts: list<string> = ["let {name}: {types.show(t)} = map.new();",];
+        match t {
+            map-t(m) => {
+                for i in 0..dice.between(g.dice, 0, 3) {
+                    parts.push("{name}.set({expr(g, m.key, d, true)}, {expr(g, m.value, d, true)});");
+                }
+            }
+            _ => {}
+        }
+        gen.lb() + " " + parts.join(" ") + " " + name + " " + gen.rb()
+    }
+
+    // ---- control
+
+    // a match on an integer: literals, a range, alternatives, a guard, then _
+    match-int: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        // a value of its own: its arms narrow what is matched (a local matched again inside, a
+        // literal left would be no case)
+        let on = gen.hoist-hidden(g, Ty.int-t("s32"), d);
+        let arms: list<string> = [];
+        arms.push("0 => {gen.scoped(g, t, d, wanted)},");
+        arms.push("1 | 2 | 3 => {gen.scoped(g, t, d, wanted)},");
+        if dice.chance(g.dice, 50) { arms.push("10..=20 => {gen.scoped(g, t, d, wanted)},"); }
+        if dice.chance(g.dice, 40) {
+            let n = gen.fresh(g, "n");
+            gen.push-scope(g);
+            gen.bind(g, n, Ty.int-t("s32"), false);
+            arms.push("let {n} if {n} > 100 => {gen.scoped(g, t, d, wanted)},");
+            gen.pop-scope(g);
+        }
+        arms.push("_ => {gen.scoped(g, t, d, wanted)},");
+        "match {on} {gen.lb()} {arms.join(" ")} {gen.rb()}"
+    }
+
+    // a match on an option: some binding its value, and none
+    match-option: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let x = pick.plain-type(g, 1);
+        let on = obj(g, Ty.option-t(x), d);
+        let v = gen.fresh(g, "v");
+        gen.push-scope(g);
+        gen.bind(g, v, x, false);
+        let some-arm = gen.scoped(g, t, d, wanted);
+        gen.pop-scope(g);
+        "match {on} {gen.lb()} some({v}) => {some-arm}, none => {gen.scoped(g, t, d, wanted)}, {gen.rb()}"
+    }
+
+    // a block: a let or two, then the value
+    block-expr: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        gen.push-scope(g);
+        gen.push-pending(g);
+        let lines: list<string> = [];
+        for i in 0..dice.between(g.dice, 1, 2) {
+            let lt = pick.any-type(g, 1);
+            let name = gen.fresh(g, "b");
+            let value = expr(g, lt, d, true);
+            for p in gen.pop-pending(g) { lines.push(p); }
+            gen.push-pending(g);
+            lines.push("let {name}: {types.show(lt)} = {value};");
+            gen.bind(g, name, lt, true);
+        }
+        let value = expr(g, t, d, wanted);
+        for p in gen.pop-pending(g) { lines.push(p); }
+        gen.pop-scope(g);
+        gen.lb() + " " + lines.join(" ") + " " + value + " " + gen.rb()
+    }
+
+    // an expression of out, where name is a value of t (a closure's param)
+    within: func(g: Gen, name: string, t: Ty, out: Ty, d: s64) -> string {
+        gen.push-scope(g);
+        gen.bind(g, name, t, false);
+        g.results.push(out);
+        g.loops.push(0);
+        g.yields.push(none);
+        let e = gen.scoped(g, out, d, true);
+        g.results.pop();
+        g.loops.pop();
+        g.yields.pop();
+        gen.pop-scope(g);
+        e
+    }
+
+    // as within, its value saying its own type (where none is wanted: a generic's T found from it)
+    within-unwanted: func(g: Gen, name: string, t: Ty, out: Ty, d: s64) -> string {
+        gen.push-scope(g);
+        gen.bind(g, name, t, false);
+        g.results.push(out);
+        g.loops.push(0);
+        g.yields.push(none);
+        let e = gen.scoped(g, out, d, false);
+        g.results.pop();
+        g.loops.pop();
+        g.yields.pop();
+        gen.pop-scope(g);
+        e
+    }
+
+    // a closure of a func type: its params named and typed, its body an expression or a block.
+    // wanted: its type is wanted where it goes (a closure called where it is made takes the call's
+    // wanted result as its body's; where none is wanted, its body says its own type)
+    closure: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let f = match t {
+            func-t(x) => x,
+            _ => panic("fuzz: a closure of {types.show(t)}"),
+        };
+        // a top-level func of that type, by its name
+        let same = if !wanted { [] } else { g.funcs.filter({ fi -> fi.type-params.len() == 0 && !fi.yields && !fi.readonly.any({ r -> r }) && types.same(Ty.func-t({ params: fi.params, result: fi.result, }), t) && !fi.name.contains(".") }) };
+        if same.len() > 0 && dice.chance(g.dice, 30) { return dice.pick(g.dice, same).name; }
+        gen.push-scope(g);
+        let params: list<string> = [];
+        for p in f.params {
+            let name = gen.fresh(g, "p");
+            gen.bind(g, name, p, false);
+            params.push("{name}: {types.show(p)}");
+        }
+        g.results.push(f.result);
+        g.loops.push(0);
+        g.yields.push(none);
+        let body = if !wanted {
+            gen.scoped(g, f.result, d, false)
+        } else if dice.chance(g.dice, 50) {
+            gen.scoped(g, f.result, d, true)
+        } else {
+            stmts.body(g, f.result, d, "")
+        };
+        g.results.pop();
+        g.loops.pop();
+        g.yields.pop();
+        gen.pop-scope(g);
+        // { -> e } for none (a bare { e } is a block)
+        let head = if params.len() > 0 { params.join(", ") + " -> " } else { "-> " };
+        gen.lb() + " " + head + body + " " + gen.rb()
+    }
+
+    // a closure made and called at once
+    closure-call: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let params: list<Ty> = [];
+        for i in 0..dice.between(g.dice, 0, 2) { params.push(pick.plain-type(g, 1)); }
+        let f = Ty.func-t({ params: params, result: t, });
+        let args: list<string> = [];
+        for p in params { args.push(expr(g, p, d, true)); }
+        "({closure(g, f, d, wanted)})({args.join(", ")})"
+    }
+
+    // a call through a local holding a func
+    func-local: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        for l in gen.all-locals(g) {
+            match l.ty {
+                func-t(f) => {
+                    if types.same(f.result, t) && dice.chance(g.dice, 60) {
+                        let args: list<string> = [];
+                        for p in f.params { args.push(expr(g, p, d, true)); }
+                        return "{l.name}({args.join(", ")})";
+                    }
+                }
+                _ => {}
+            }
+        }
+        leaf(g, t, d, wanted)
+    }
+
+    // a call of a func whose result is t: one of the program's (a generic one given type arguments
+    // that make it t), or a std func
+    call: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let fits: list<FuncInfo> = [];
+        let args-of: list<list<Ty>> = [];
+        for f in g.funcs {
+            if f.yields { continue; }
+            if f.type-params.len() == 0 {
+                if types.same(f.result, t) {
+                    fits.push(f);
+                    args-of.push(f.params);
+                }
+            } else {
+                // a generic func: its result's type param made t (T alone as the result)
+                match f.result {
+                    param-t(n) => {
+                        if f.type-params.len() == 1 && !types.has-param(t) {
+                            let ps: list<Ty> = [];
+                            for p in f.params { ps.push(types.substitute(p, f.type-params, [t,])); }
+                            fits.push(f);
+                            args-of.push(ps);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if fits.len() == 0 { return leaf(g, t, d, wanted); }
+        let i = dice.below(g.dice, fits.len());
+        let f = fits[i];
+        let ps = args-of[i];
+        let generic = f.type-params.len() > 0;
+        let args: list<string> = [];
+        for k in 0..ps.len() {
+            if f.readonly[k] {
+                // a list made here: new, so readonly at once
+                args.push(literal(g, ps[k], d, true));
+            } else {
+                // a generic func's arguments say their types (its T is found from them)
+                args.push(expr(g, ps[k], d, !generic));
+            }
+        }
+        // x.f(a): the first argument first, at times (not a module's func)
+        if args.len() > 0 && !f.name.contains(".") && dice.chance(g.dice, 25) {
+            let first = if generic || f.readonly[0] { args[0] } else { expr(g, ps[0], d, false) };
+            return "{parens(first)}.{f.name}({args.slice(1, args.len()).join(", ")})";
+        }
+        "{f.name}({args.join(", ")})"
+    }
+
+    // a record's field of type t: from a record (declared or anonymous) that has one
+    field: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        for decl in gen.decls-of(g, "record") {
+            for i in 0..decl.names.len() {
+                if types.same(decl.types[i], t) && dice.chance(g.dice, 50) {
+                    return "{obj(g, Ty.named-t(decl.name), d)}.{decl.names[i]}";
+                }
+            }
+        }
+        for l in gen.all-locals(g) {
+            match l.ty {
+                anon-t(f) => {
+                    for i in 0..f.names.len() {
+                        if types.same(f.types[i], t) { return "{l.name}.{f.names[i]}"; }
+                    }
+                }
+                _ => {}
+            }
+        }
+        leaf(g, t, d, wanted)
+    }
+
+    // a tuple's item of type t
+    tuple-item: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let other = pick.plain-type(g, 1);
+        let at-first = dice.chance(g.dice, 50);
+        let tt = Ty.tuple-t(if at-first { [t, other,] } else { [other, t,] });
+        "{obj(g, tt, d)}.{if at-first { 0 } else { 1 }}"
+    }
+
+    // a list's item: by get (an option, or the default), or by index (out of range stops the
+    // program, the same in each build)
+    list-get: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
+        let xs = obj(g, Ty.list-t(t), d);
+        if dice.chance(g.dice, 75) {
+            return "{xs}.get({expr(g, Ty.int-t("s64"), d, true)}).unwrap-or({expr(g, t, d, true)})";
+        }
+        "{xs}[{dice.between(g.dice, 0, 3)}]"
+    }
+}

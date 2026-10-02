@@ -1,0 +1,152 @@
+// Format: a value's text shaped as an interpolation's spec asks ("{x:>8}", "{n:08x}", "{f:.2}"):
+// padded to a width, an integer in another base, a float to some digits after the point. The
+// compiler turns a spec into these calls; a program may call them too.
+
+module format {
+    // how many chars (code points) content has
+    char-count: func(content: string) -> s64 {
+        let count = 0;
+        for index in 0..content.len() {
+            // a UTF-8 continuation byte (10xxxxxx) is part of the char before it
+            if content.byte-at(index) / 64 != 2 { count += 1; }
+        }
+        count
+    }
+
+    // content padded to width chars with fill: after it (align "<"), before it (">"), or around
+    // it ("^", the odd one after); content as it is where it is that wide already
+    pad: func(content: string, width: s64, fill: string, align: string) -> string {
+        let missing = width - char-count(content);
+        if missing <= 0 { return content; }
+        if align == ">" { return text.repeat(fill, missing) + content; }
+        if align == "^" {
+            let before = missing / 2;
+            return text.repeat(fill, before) + content + text.repeat(fill, missing - before);
+        }
+        content + text.repeat(fill, missing)
+    }
+
+    // a number's text padded with zeros to width chars, after its sign
+    zero-pad: func(number: string, width: s64) -> string {
+        let missing = width - number.len();
+        if missing <= 0 { return number; }
+        let sign = number.len() > 0 && (number.byte-at(0) == 45 || number.byte-at(0) == 43);
+        if sign {
+            return number.substring(0, 1) + text.repeat("0", missing) + number.substring(1, number.len());
+        }
+        text.repeat("0", missing) + number
+    }
+
+    // an integer in base (2 to 16), its letters upper case where upper; a - before a negative one
+    to-radix: func(value: s64, base: s32, upper: bool) -> string {
+        if value == 0 { return "0"; }
+        let letters = if upper { "0123456789ABCDEF" } else { "0123456789abcdef" };
+        let wide = base as s64;
+        let digits: list<string> = [];
+        // a negative's digits from its negative remainders (s64's least has no positive)
+        let rest = value;
+        for step in 0..64 {
+            if rest != 0 {
+                let digit = rest % wide;
+                if digit < 0 { digit = -digit; }
+                let at = digit;
+                digits.push(letters.substring(at, at + 1));
+                rest = rest / wide;
+            }
+        }
+        let out = if value < 0 { "-" } else { "" };
+        for index in 0..digits.len() { out = out + digits[digits.len() - 1 - index]; }
+        out
+    }
+
+    // a float with digits after the point, rounded
+    to-fixed: func(value: f64, digits: s32) -> string { fixed-text(value, digits) }
+
+    // ---- a value's text written at a buffer's end, as an interpolation writes it ("{x}" and
+    // "{x:?}": debug is WAVE's text). The compiler calls these with the interpolation's buffer
+
+    // an integer in decimal, a - before a negative one
+    write-int: func(out: buffer, value: s64) {
+        if value < 0 { out.push-byte(45); }
+        // from its negative: s64's least has no positive
+        write-digits(out, if value < 0 { value } else { -value });
+    }
+
+    write-uint: func(out: buffer, value: u64) {
+        if value <= 9223372036854775807 {
+            write-digits(out, -(value as s64));
+            return;
+        }
+        // past s64's range: the last digit apart
+        write-digits(out, -((value / 10) as s64));
+        out.push-byte(48 + (value % 10) as s64);
+    }
+
+    // the digits of -negative (negative 0 or less): counted, then written from the last
+    write-digits: func(out: buffer, negative: s64) {
+        let count = 1;
+        let probe = negative / 10;
+        loop {
+            if probe == 0 { break; }
+            count += 1;
+            probe = probe / 10;
+        }
+        buffer.reserve(out, count as s64);
+        let length = memory.buffer-length(out);
+        let at = memory.buffer-data(out) + length;
+        let rest = negative;
+        for place in 0..count {
+            memory.store-byte(at + ((count - 1 - place) as s64), 48 - rest % 10);
+            rest = rest / 10;
+        }
+        memory.set-buffer-length(out, length + (count as s64));
+    }
+
+    // a float, the shortest text that reads back as it (the runtime's: C's printf)
+    @c(name = "yel_f64_text") f64-text: extern func(value: f64) -> string;
+    @c(name = "yel_f32_text") f32-text: extern func(value: f32) -> string;
+    write-f64: func(out: buffer, value: f64) { out.push(f64-text(value)); }
+    write-f32: func(out: buffer, value: f32) { out.push(f32-text(value)); }
+
+    write-bool: func(out: buffer, value: bool) { out.push(if value { "true" } else { "false" }); }
+
+    write-unit: func(out: buffer, value: ()) { out.push("unit"); }
+
+    // a string quoted and escaped: "a\n\"b\""
+    write-quoted: func(out: buffer, value: string) {
+        out.push-byte(34);
+        for index in 0..value.len() { write-escaped(out, value.byte-at(index), 34); }
+        out.push-byte(34);
+    }
+
+    // a char quoted and escaped: 'a', '\''
+    write-char-quoted: func(out: buffer, value: char) {
+        out.push-byte(39);
+        let code = value as s64;
+        if code < 0x80 { write-escaped(out, code, 39); } else { out.push-char(value); }
+        out.push-byte(39);
+    }
+
+    // a byte as WAVE writes it inside quote's quotes: a backslash, the quote, \n \r \t escaped,
+    // another control byte as \u{hex}
+    write-escaped: func(out: buffer, byte: s64, quote: s64) {
+        if byte == 92 { out.push("\\\\"); }
+        else if byte == quote {
+            out.push-byte(92);
+            out.push-byte(quote);
+        }
+        else if byte == 10 { out.push("\\n"); }
+        else if byte == 13 { out.push("\\r"); }
+        else if byte == 9 { out.push("\\t"); }
+        else if byte < 32 || byte == 127 { out.push("\\u\{{to-radix(byte as s64, 16, false)}\}"); }
+        else { out.push-byte(byte); }
+    }
+
+    // a buffer's bytes as they are (display), and quoted (debug)
+    write-buffer: func(out: buffer, value: buffer) { out.push(value.to-string()); }
+    write-buffer-quoted: func(out: buffer, value: buffer) {
+        out.push("buffer(");
+        write-quoted(out, value.to-string());
+        out.push(")");
+    }
+}

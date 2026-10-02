@@ -1,0 +1,330 @@
+// Text: strings as their UTF-8 bytes (a position is a byte's, len their count), found, split,
+// trimmed, replaced; the chars they spell, and bytes made a string (UTF-8 checked). A string that
+// is made is made in a buffer (one allocation). contains, slice, reverse and len are other types'
+// names too: which is meant is the first argument's type. The prelude has byte-at, substring, join
+// and from-byte.
+
+module text {
+    // s's bytes from start to end (each kept inside s), sharing them: a string is never written
+    substring: func(s: string, start: s64, end: s64) -> string {
+        let length = s.len();
+        let from = if start < 0 { 0 } else if start > length { length } else { start };
+        let to = if end > length { length } else if end < from { from } else { end };
+        memory.string-at(memory.string-data(s) + (from as s64), (to - from) as s64)
+    }
+
+    // the two one after the other (a + b)
+    concat: func(a: string, b: string) -> string {
+        let first = a.len() as s64;
+        let second = b.len() as s64;
+        // its bytes held only at their address while they are filled: nothing is made meanwhile
+        let data = memory.new-bytes(first + second + 1);
+        memory.copy-bytes(data, memory.string-data(a), first);
+        memory.copy-bytes(data + first, memory.string-data(b), second);
+        memory.store-byte(data + first + second, 0);
+        memory.string-at(data, first + second)
+    }
+
+    // whether two strings have the same bytes (a == b)
+    equal: func(a: string, b: string) -> bool {
+        let length = a.len();
+        if length != b.len() { return false; }
+        let left = memory.string-data(a);
+        let right = memory.string-data(b);
+        left == right || memory.same-bytes(left, right, length as s64)
+    }
+
+    // two strings in order, byte by byte (a shorter one first where it starts the other): less than
+    // 0, 0 or more than 0
+    compare: func(a: string, b: string) -> s64 {
+        let shorter = if a.len() < b.len() { a.len() } else { b.len() };
+        let order = memory.compare-bytes(memory.string-data(a), memory.string-data(b), shorter);
+        if order != 0 { order } else { a.len() - b.len() }
+    }
+
+    // a string's hash (FNV-1a over its bytes; never 0)
+    hash: func(s: string) -> u64 {
+        let out: u64 = 1469598103934665603;
+        let data = memory.string-data(s);
+        for index in 0..s.len() {
+            out = (out ^ (memory.load-byte(data + (index as s64)) as u64)) * 1099511628211;
+        }
+        out | 1
+    }
+
+    // the strings with sep between each two
+    join: func(xs: list<string> & readonly, sep: string) -> string {
+        let out = buffer.buffer(16);
+        for index in 0..xs.len() {
+            if index > 0 { out.push(sep); }
+            out.push(xs[index]);
+        }
+        out.to-string()
+    }
+
+    // how many bytes s has
+    @c(name = "(($1).len)") len: extern func(s: string) -> s64;
+
+    // s's bytes, as a list (copied: a list's items change)
+    bytes: func(s: string) -> list<u8> {
+        // s held only at its address while the list is made
+        memory.hold-collector();
+        let out = memory.bytes-list(memory.string-data(s), s.len());
+        memory.release-collector();
+        out
+    }
+
+    // whether text is in s at byte i
+    starts-at: func(s: string, i: s64, text: string) -> bool {
+        let n = text.len();
+        if i < 0 || i + n > s.len() { return false; }
+        for k in 0..n {
+            if s.byte-at(i + k) != text.byte-at(k) { return false; }
+        }
+        true
+    }
+
+    starts-with: func(s: string, prefix: string) -> bool { starts-at(s, 0, prefix) }
+
+    ends-with: func(s: string, suffix: string) -> bool {
+        starts-at(s, s.len() - suffix.len(), suffix)
+    }
+
+    // where text is first in s, from byte from on; none for nowhere
+    find-from: func(s: string, text: string, from: s64) -> option<s64> {
+        let last = s.len() - text.len();
+        for i in from..last + 1 {
+            if starts-at(s, i, text) { return some(i); }
+        }
+        none
+    }
+
+    find: func(s: string, text: string) -> option<s64> { find-from(s, text, 0) }
+
+    // where text is last in s; none for nowhere
+    find-last: func(s: string, text: string) -> option<s64> {
+        let last = s.len() - text.len();
+        for k in 0..last + 1 {
+            if starts-at(s, last - k, text) { return some(last - k); }
+        }
+        none
+    }
+
+    // where byte b is first in s; none for nowhere
+    find-byte: func(s: string, b: s64) -> option<s64> {
+        for i in 0..s.len() {
+            if s.byte-at(i) == b { return some(i); }
+        }
+        none
+    }
+
+    contains: func(s: string, text: string) -> bool { find(s, text) != none }
+
+    // the bytes of s from from up to (not with) to: its bytes shared, not copied
+    slice: func(s: string, from: s64, to: s64) -> string { s.substring(from, to) }
+
+    // s's bytes, the last first (UTF-8's multibyte characters too, byte by byte)
+    reverse: func(s: string) -> string {
+        let n = s.len();
+        let b = buffer(n);
+        for k in 0..n { b.push-byte(s.byte-at(n - 1 - k)); }
+        b.to-string()
+    }
+
+    // s with every from replaced by to (from left to right, none overlapping)
+    replace: func(s: string, from: string, to: string) -> string {
+        if from == "" { return s; }
+        let b = buffer(s.len());
+        let start = 0;
+        for step in 0..s.len() + 1 {
+            match find-from(s, from, start) {
+                some(at) => {
+                    b.push(s.substring(start, at));
+                    b.push(to);
+                    start = at + from.len();
+                }
+                none => {
+                    b.push(s.substring(start, s.len()));
+                    return b.to-string();
+                }
+            }
+        }
+        b.to-string()
+    }
+
+    // the pieces of s between each sep (an empty s is one empty piece; sep "" splits into bytes):
+    // each shares s's bytes
+    split: func(s: string, sep: string) -> list<string> {
+        let out: list<string> = [];
+        if sep == "" {
+            for i in 0..s.len() { out.push(s.substring(i, i + 1)); }
+            return out;
+        }
+        let start = 0;
+        for step in 0..s.len() + 1 {
+            match find-from(s, sep, start) {
+                some(at) => {
+                    out.push(s.substring(start, at));
+                    start = at + sep.len();
+                }
+                none => {
+                    out.push(s.substring(start, s.len()));
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
+    // s's lines: split at each line break (a CR before one is taken off)
+    lines: func(s: string) -> list<string> {
+        let out: list<string> = [];
+        for l in split(s, from-byte(10)) {
+            out.push(if ends-with(l, from-byte(13)) { l.substring(0, l.len() - 1) } else { l });
+        }
+        out
+    }
+
+    // s without the spaces (is-space) at its start, its end, or both
+    trim-start: func(s: string) -> string {
+        for i in 0..s.len() {
+            if !is-whitespace(s.byte-at(i)) { return s.substring(i, s.len()); }
+        }
+        ""
+    }
+
+    trim-end: func(s: string) -> string {
+        let n = s.len();
+        for k in 0..n {
+            if !is-whitespace(s.byte-at(n - 1 - k)) { return s.substring(0, n - k); }
+        }
+        ""
+    }
+
+    trim: func(s: string) -> string { trim-start(trim-end(s)) }
+
+    // s n times over
+    repeat: func(s: string, n: s64) -> string {
+        let b = buffer(if n > 0 { s.len() * n } else { 0 });
+        for k in 0..n { b.push(s); }
+        b.to-string()
+    }
+
+    // s with ASCII's letters in upper or lower case
+    to-upper: func(s: string) -> string {
+        let b = buffer(s.len());
+        for i in 0..s.len() {
+            let c = s.byte-at(i);
+            b.push-byte(if is-lower(c) { c - 32 } else { c });
+        }
+        b.to-string()
+    }
+
+    to-lower: func(s: string) -> string {
+        let b = buffer(s.len());
+        for i in 0..s.len() {
+            let c = s.byte-at(i);
+            b.push-byte(if is-upper(c) { c + 32 } else { c });
+        }
+        b.to-string()
+    }
+
+    // s made width bytes wide at least, fill (a byte's string) put before it or after it
+    pad-start: func(s: string, width: s64, fill: string) -> string {
+        let b = buffer(if width > s.len() { width } else { s.len() });
+        for k in s.len()..width { b.push(fill); }
+        b.push(s);
+        b.to-string()
+    }
+
+    pad-end: func(s: string, width: s64, fill: string) -> string {
+        let b = buffer(if width > s.len() { width } else { s.len() });
+        b.push(s);
+        for k in s.len()..width { b.push(fill); }
+        b.to-string()
+    }
+
+    // ================================================================ UTF-8
+
+    // how many continuation bytes a lead byte says follow it; -1 for a byte no char starts with
+    utf8-more: func(c: s64) -> s64 {
+        if c < 128 { return 0; }
+        if c >= 194 && c <= 223 { return 1; }
+        if c >= 224 && c <= 239 { return 2; }
+        if c >= 240 && c <= 244 { 3 } else { -1 }
+    }
+
+    // where s's UTF-8 is first broken: a byte no char starts with, a char cut short, an overlong
+    // form, a surrogate's, or one past U+10FFFF; -1 for nowhere
+    utf8-error: func(s: string) -> s64 {
+        let n = s.len();
+        let i = 0;
+        for step in 0..n + 1 {
+            if i >= n { return -1; }
+            let c = s.byte-at(i);
+            let more = utf8-more(c);
+            // a byte no char starts with, or a char the end cuts short
+            if more < 0 || i + more > n - 1 { return i; }
+            for k in 1..more + 1 {
+                let d = s.byte-at(i + k);
+                if d < 128 || d > 191 { return i; }
+            }
+            if more >= 2 {
+                let d = s.byte-at(i + 1);
+                if c == 224 && d < 160 || c == 237 && d > 159 || c == 240 && d < 144 || c == 244
+                    && d > 143 {
+                    return i;
+                }
+            }
+            i += more + 1;
+        }
+        -1
+    }
+
+    is-utf8: func(s: string) -> bool { utf8-error(s) < 0 }
+
+    // bytes as a string, if they are UTF-8; else the byte where they are first not
+    from-utf8: func(bytes: list<u8>) -> result<string, s64> {
+        // (a list's len: in this module, len is a string's)
+        let b = buffer(0);
+        b.push-bytes(bytes);
+        let s = b.to-string();
+        let at = utf8-error(s);
+        if at < 0 { ok(s) } else { err(at) }
+    }
+
+    // the chars s spells (a byte that is not UTF-8 is U+FFFD, as it is shown)
+    chars: func(s: string) -> list<char> {
+        let out: list<char> = [];
+        let n = s.len();
+        let i = 0;
+        for step in 0..n + 1 {
+            if i >= n { return out; }
+            let c = s.byte-at(i);
+            let more = utf8-more(c);
+            let ok = more >= 0 && i + more < n;
+            for k in 1..(if ok { more + 1 } else { 1 }) {
+                let d = s.byte-at(i + k);
+                if d < 128 || d > 191 { ok = false; }
+            }
+            if !ok {
+                out.push(65533 as char);
+                i += 1;
+            } else {
+                let v = if more == 0 {
+                    c
+                } else if more == 1 {
+                    c & 31
+                } else if more == 2 {
+                    c & 15
+                } else {
+                    c & 7
+                };
+                for k in 1..more + 1 { v = (v << 6) | (s.byte-at(i + k) & 63); }
+                out.push(v as char);
+                i += more + 1;
+            }
+        }
+        out
+    }
+}

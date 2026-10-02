@@ -1,0 +1,240 @@
+// What a call does with what it is given, as both analyses see it: effects.yel (over the syntax
+// tree, by binding: readonly, moves) and escape.yel (over the IR, by local: which records stay on
+// the stack, which host ends are let go). Each is a fixpoint over the program's funcs (fixpoint,
+// below: a func is read again when one it calls changes). What an extern does is derived from its
+// declaration (derive: its parameters' and result's types, and @c(keeps, gives) for what they
+// cannot say), so no list of the runtime's funcs is kept here: the arguments it writes, keeps
+// (past the call: stored, or held by what it starts), and gives back (its result is the argument,
+// or holds it).
+
+// the arguments (by index) a func of the runtime writes, keeps and gives back; all: every one
+// (listed: the table names it)
+record RuntimeEffect {
+    writes: list<s64>,
+    // kept anywhere (it escapes), and (by parameter) the others it is kept in only
+    keeps: list<s64>,
+    kept-in: list<list<s64>>,
+    gives: list<s64>,
+    gives-all: bool,
+    keeps-all: bool,
+    listed: bool,
+}
+
+module flow {
+    // what an extern does, from its declaration: a parameter it may write is a mutable one not
+    // written & readonly; its result may be (or hold) a parameter whose type shares a part its
+    // type has (map-keys(m: map<K, V>) -> list<K>: m's keys); a parameter may be kept in another
+    // it may write that can hold it (push(xs: list<T>, v: T): v in xs); and what the types cannot
+    // say, @c(keeps = "p", gives = "q"). A WIT func's (the host's): what it is given is copied
+    // across, what it gives back is new
+    derive: func(x: Extern) -> RuntimeEffect {
+        let none-of: list<s64> = [];
+        if x.wit-module != "" { return effect(none-of, none-of, none-of); }
+        let writes: list<s64> = [];
+        let keeps: list<s64> = [];
+        let gives: list<s64> = [];
+        let kept-in: list<list<s64>> = [];
+        let tps = x.type-params;
+        let result = type-parts(x.result, tps);
+        for i in 0..x.params.len() {
+            let t = x.param-types[i];
+            let mine = type-parts(t, tps);
+            if may-write(t, tps) { writes.push(i); }
+            if shares(result, mine) || contains(x.gives, x.params[i]) { gives.push(i); }
+            // @c(keeps = …): kept anywhere; else kept only in another parameter it may write that
+            // can hold it (set-value(m, entry, value): value, in m)
+            if contains(x.keeps, x.params[i]) { keeps.push(i); }
+            let holders: list<s64> = [];
+            for j in 0..x.params.len() {
+                if j != i && may-write(x.param-types[j], tps) && shares(type-parts(x.param-types[j], tps), mine) {
+                    holders.push(j);
+                }
+            }
+            kept-in.push(holders);
+        }
+        { writes: writes, keeps: keeps, kept-in: kept-in, gives: gives, gives-all: false, keeps-all: false, listed: true, }
+    }
+
+    // every extern's, by its C name
+    extern-effects: func(decls: list<Decl>) -> map<string, RuntimeEffect> {
+        let out: map<string, RuntimeEffect> = map.new();
+        for d in decls {
+            match d {
+                extern-decl(x) => { if x.c-name != "" { out.set(x.c-name, derive(x)); } }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    // the compiler's own helpers, by C name: a frame's result read (what the frame holds), a value
+    // held another way, a list literal (its items kept), a future or a generator stepped; any
+    // other func not declared: it may give back any argument (and listed false)
+    helper-effect: func(c-name: string) -> RuntimeEffect {
+        let none-of: list<s64> = [];
+        if starts-at(c-name, 0, "y_result_") || starts-at(c-name, 0, "y_conv_") {
+            return effect(none-of, none-of, [0,]);
+        }
+        if c-name == "y_list_of" {
+            return { writes: none-of, keeps: none-of, kept-in: [], gives: none-of, gives-all: false, keeps-all: true, listed: true, };
+        }
+        if c-name == "yel_async_step" || c-name == "yel_async_first" || c-name == "y_seq_next" {
+            return effect(none-of, none-of, none-of);
+        }
+        // a list made empty, a string joined: new
+        if c-name == "y_list_new" { return effect(none-of, none-of, none-of); }
+        { writes: none-of, keeps: none-of, kept-in: [], gives: none-of, gives-all: true, keeps-all: false, listed: false, }
+    }
+
+    // a declared extern's (by C name), else the compiler's own
+    call-effect: func(externs: map<string, RuntimeEffect>, c-name: string) -> RuntimeEffect {
+        if externs.has(c-name) { return externs[c-name]; }
+        helper-effect(c-name)
+    }
+
+    // the parts of a type that are values of their own (a list, a map, a buffer, a stream (either
+    // end), a future, a seq, a declared type, a type parameter: what another value may share), by
+    // how they show
+    type-parts: func(t: Type, tps: list<string>) -> list<string> {
+        let out: list<string> = [];
+        add-parts(t, tps, out);
+        out
+    }
+
+    add-parts: func(t0: Type, tps: list<string>, out: list<string>) {
+        let t = resolve(t0);
+        match t {
+            list-type(x) => out.push(show-type(t)),
+            map-type(x) => out.push(show-type(t)),
+            future-type(x) => out.push(show-type(t)),
+            seq-type(x) => out.push(show-type(t)),
+            stream-type(x) => out.push("stream<{show-type(x.item)}>"),
+            buffer-type => out.push("buffer"),
+            // a type parameter's (the extern's own, named as written)
+            named(n) => out.push(if contains(tps, name-text(n)) { "param " + name-text(n) } else { name-text(n) }),
+            param(n) => out.push("param " + n),
+            _ => {}
+        }
+        for index in 0..child-count(t) { add-parts(child(t, index), tps, out); }
+    }
+
+    shares: func(a: list<string>, b: list<string>) -> bool {
+        for x in a {
+            if contains(b, x) { return true; }
+        }
+        false
+    }
+
+    // whether a value of the type may be written through it: a mutable value's (a list, a map, a
+    // buffer, a stream, a future, a seq, a declared type), not written & readonly
+    may-write: func(t0: Type, tps: list<string>) -> bool {
+        let t = resolve(t0);
+        match t {
+            readonly-type(x) => false,
+            list-type(x) => true,
+            map-type(x) => true,
+            buffer-type => true,
+            stream-type(x) => true,
+            future-type(x) => true,
+            seq-type(x) => true,
+            // a type parameter's: nothing is done to a value of it
+            named(n) => !contains(tps, name-text(n)),
+            option-type(x) => any-child(t, { y -> may-write(y, tps) }),
+            result-type(r) => any-child(t, { y -> may-write(y, tps) }),
+            tuple-type(xs) => any-child(t, { y -> may-write(y, tps) }),
+            anon-record(r) => any-child(t, { y -> may-write(y, tps) }),
+            _ => false,
+        }
+    }
+
+    effect: func(writes: list<s64>, keeps: list<s64>, gives: list<s64>) -> RuntimeEffect {
+        { writes: writes, keeps: keeps, kept-in: [], gives: gives, gives-all: false, keeps-all: false, listed: true, }
+    }
+
+    // whether it writes, keeps or gives back argument i
+    writes: func(e: RuntimeEffect, i: s64) -> bool { contains(e.writes, i) }
+
+    keeps: func(e: RuntimeEffect, i: s64) -> bool { e.keeps-all || contains(e.keeps, i) }
+
+    // the other parameters it keeps argument i in (only: else keeps says it escapes)
+    kept-in: func(e: RuntimeEffect, i: s64) -> list<s64> { if i < e.kept-in.len() { e.kept-in[i] } else { [] } }
+
+    gives: func(e: RuntimeEffect, i: s64) -> bool { e.gives-all || contains(e.gives, i) }
+
+    // whether what it gives back is new (none of its arguments)
+    is-new: func(e: RuntimeEffect) -> bool { !e.gives-all && e.gives.len() == 0 }
+
+    // a fixpoint over funcs (by key): each stepped (step: whether what is known of it changed) until
+    // none changes, one stepped again only when one it calls (callees) did. What a step finds must
+    // only grow (or only shrink), so it ends
+    // keys in a depth-first walk's postorder over what each calls: a func after the funcs it calls
+    // (but where they call each other)
+    callees-first: func(keys: list<Name>, callees: map<Name, list<Name>>) -> list<Name> {
+        let known: set<Name> = set.new();
+        for k in keys { known.add(k); }
+        let seen: set<Name> = set.new();
+        let order: list<Name> = [];
+        // the walk's stack: each func, and how many of its callees are walked
+        let stack: list<Name> = [];
+        let next: list<s64> = [];
+        for root in keys {
+            if seen.has(root) { continue; }
+            seen.add(root);
+            stack.push(root);
+            next.push(0);
+            loop {
+                if stack.len() == 0 { break; }
+                let top = stack.len() - 1;
+                let calls = callees.get-or(stack[top], []);
+                if next[top] < calls.len() {
+                    let c = calls[next[top]];
+                    next[top] = next[top] + 1;
+                    if known.has(c) && !seen.has(c) {
+                        seen.add(c);
+                        stack.push(c);
+                        next.push(0);
+                    }
+                    continue;
+                }
+                order.push(stack.pop());
+                next.pop();
+            }
+        }
+        order
+    }
+
+    fixpoint: func(keys: list<Name>, callees: map<Name, list<Name>>, step: func(Name) -> bool) {
+        let callers: map<Name, list<Name>> = map.new();
+        for k in keys { callers.set(k, []); }
+        for k in keys {
+            if callees.has(k) {
+                for c in callees[k] {
+                    if callers.has(c) { callers[c].push(k); }
+                }
+            }
+        }
+        let todo: list<Name> = [];
+        let queued: set<Name> = set.new();
+        // callees before their callers (pop takes from the end: the order reversed), so most are
+        // read once, what they call already known
+        let order = callees-first(keys, callees);
+        for i in 0..order.len() {
+            let k = order[order.len() - 1 - i];
+            todo.push(k);
+            queued.add(k);
+        }
+        loop {
+            if todo.len() == 0 { return; }
+            let k = todo.pop();
+            queued.remove(k);
+            if step(k) {
+                for c in callers[k] {
+                    if !queued.has(c) {
+                        todo.push(c);
+                        queued.add(c);
+                    }
+                }
+            }
+        }
+    }
+}

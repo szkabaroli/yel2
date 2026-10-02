@@ -1,0 +1,6 @@
+// error: 5:35: readonly is wanted here: b is another name for a (or part of it), and may write it
+main: func() {
+    let a: list<s32> = [];
+    let b = a;
+    let r: list<s32> & readonly = a;
+}

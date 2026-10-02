@@ -1,0 +1,34 @@
+// type name = distinct T: a type of its own, held as T. No value of T is one (a literal neither),
+// nor one of it a T: as converts each way. == and (where T is ordered) < compare, it shows as T
+// does, and it crosses WIT as T. Ids that are not interchangeable cost nothing
+
+type binding = distinct u32;
+type local = distinct u32;
+type name = distinct string;
+
+record Use { at: binding, name: name, }
+
+next: func(b: binding) -> binding { ((b as u32) + 1) as binding }
+
+// a distinct type's display func: how "{t}" shows a tag (and only a tag: a u32 shows as it is)
+type tag = distinct u32;
+
+display: func(t: tag) -> string { "#{t as u32}" }
+
+greet: func(n: name) -> string { "hello {n}" }
+
+main: func() {
+    let a = 3 as binding;
+    let b = next(a);
+    print("{a} {b} {a == b} {a < b} {(b as u32) * 2}\n");
+    let uses: list<Use> = [{ at: a, name: "x" as name, }, { at: b, name: "y" as name, },];
+    print("{uses} {greet(uses[1].name)} {uses[0].name as string}\n");
+    // a local's index and a binding's: the same bits, two types
+    let l = 3 as local;
+    print("{l as u32 == a as u32}\n");
+    print("{7 as tag} {7 as u32} [{[1 as tag, 2 as tag,]:?}]\n");
+    match b as u32 {
+        4 => print("four\n"),
+        _ => print("other\n"),
+    }
+}

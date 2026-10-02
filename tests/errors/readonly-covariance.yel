@@ -1,0 +1,5 @@
+// error: 4:48: the value of mixed: expected list<s32 | string> & readonly, found list<s32> & readonly
+main: func() {
+    let ints: list<s32> & readonly = [1, 2,];
+    let mixed: list<s32 | string> & readonly = ints;
+}

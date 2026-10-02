@@ -1,0 +1,1976 @@
+// Codegen: a checked func to the IR (ir.yel), as Porffor's codegen.js builds its IR from the AST.
+// Part of the generator's module: it reads the types (c-type, and the helpers they make) as the C
+// does. An expression's node is pure (ir.yel): anything that calls or reads what may change is
+// bound to a local where it is met, so what runs runs in order.
+
+// the func being built: its IR, the statements being added (the innermost body's), and each yel
+// name's place, scope by scope; the environments it holds (innermost last); the func a closure is
+// made in (whose captured names it reaches through environments); how many closures it has made
+record Codegen {
+    g: Gen,
+    f: IrFunc,
+    out: list<Node>,
+    scopes: list<map<Name, Var>>,
+    chain: list<EnvRef>,
+    parent: option<Codegen>,
+    closures: s64,
+    // the statement or expression being built: where what is made of it is
+    span: Span,
+}
+
+// a yel name's place: a local (its index), or (env) a field of an environment (a captured binding)
+record Var { local: s64, env: option<Env>, field: string, ty: Type, }
+
+// an environment: the record the closures made in one unit (a func's, a closure's or a for's body;
+// a for's, one each turn) share, holding its captured bindings and (up) the environment around it,
+// as Porffor's EnvAlloc; rec: the record's key, its fields known once the unit is built
+record Env { rec: string, up: option<Env>, fields: list<string>, types: list<Type>, }
+
+// an environment a func holds in a local: one it made (up-value: its up, to store), or (a
+// closure's) the one it was made in, its first param
+// what a match arm's pattern binds: a name, its value
+record PatternBinding { name: string, value: Node, mark: Mark, }
+
+record EnvRef { env: Env, local: s64, up-value: option<Node>, }
+
+module gen {
+    new-local: func(l: Codegen, ty: Type, name: string) -> s64 {
+        l.f.locals.push({ ty: ty, name: name, binding: none, });
+        l.f.locals.len() - 1
+    }
+
+    // n, the next of the statements being made: none past a call that never returns (they never
+    // run); such a call is kept on its own (no value of it to assign), then a halt
+    add: func(l: Codegen, n: Node) {
+        if l.out.len() > 0 {
+            match l.out[l.out.len() - 1].kind {
+                halt => { return; }
+                _ => {}
+            }
+        }
+        stamp(n, l.span);
+        let call = match n.kind {
+            assign(x) => x.value,
+            _ => n,
+        };
+        let never = is-never(call.ty) && match call.kind {
+            call(c) => true,
+            call-ref(c) => true,
+            _ => false,
+        };
+        if never {
+            l.out.push(call);
+            l.out.push(halt-stmt());
+        } else {
+            l.out.push(n);
+        }
+    }
+
+    local-node: func(l: Codegen, i: s64) -> Node { local(i, l.f.locals[i].ty) }
+
+    // a node in a new temporary
+    temp: func(l: Codegen, n: Node) -> Node {
+        let d = new-local(l, n.ty, "");
+        add(l, assign(d, n));
+        local-node(l, d)
+    }
+
+    // a node as an operand: itself when pure, else in a temporary
+    bind: func(l: Codegen, n: Node) -> Node { if pure(n) { n } else { temp(l, n) } }
+
+    // a node read more than once: a local or a constant, else in a temporary
+    pin: func(l: Codegen, n: Node) -> Node {
+        match n.kind {
+            local(i) => n,
+            const(c) => n,
+            _ => temp(l, n),
+        }
+    }
+
+    // the runtime's funcs that never allocate (so never collect): they read and write memory only
+    quiet: func() -> list<string> {
+        ["yel_eprint", "yel_panic", "yel_buffer_string",]
+    }
+
+    // the runtime's funcs an intrinsic may call and stay quiet (they never allocate)
+    quiet-helpers: func() -> list<string> {
+        ["y_hash_bits", "y_hash_mix",]
+    }
+
+    // an intrinsic that calls nothing of the runtime's (y_...) but quiet helpers
+    quiet-template: func(template: string) -> bool {
+        let at = find(template, "y_").unwrap-or(-1);
+        for step in 0..template.len() {
+            if at < 0 { return true; }
+            let end = at;
+            for skip in at..template.len() {
+                if end < template.len() && is-name-char(template.byte-at(end)) { end += 1; }
+            }
+            // a call (y_x(...)); a variable (y_async_now, y_k_) does nothing
+            if template.byte-at(end) == 40 && !contains(quiet-helpers(), template.substring(at, end)) { return false; }
+            at = find-from(template, "y_", end).unwrap-or(-1);
+        }
+        true
+    }
+
+    // a call to the runtime, which may do anything (collect too) but for a quiet one
+    runtime-call: func(c-name: string, args: list<Node>, ty: Type) -> Node {
+        // an intrinsic reads and writes memory, and may collect only where it calls the runtime
+        let effects = if contains(quiet(), c-name) || (is-template(c-name) && quiet-template(c-name)) {
+            fx().read-mem | fx().write-mem
+        } else {
+            fx().call
+        };
+        call("", c-name, args, ty, effects)
+    }
+
+    // an extern's C name that is C written in place (in parentheses), $1, $2, ... its arguments
+    is-template: func(c-name: string) -> bool { find-byte(c-name, 36) != none || c-name.byte-at(0) == 40 }
+
+    // whether a template reads its argument n ($n, not the start of a longer number)
+    mentions: func(template: string, n: s64) -> bool {
+        let mark = "$" + "{n}";
+        let at = find(template, mark).unwrap-or(-1);
+        for step in 0..template.len() {
+            if at < 0 { return false; }
+            if !is-digit(template.byte-at(at + mark.len())) { return true; }
+            at = find-from(template, mark, at + 1).unwrap-or(-1);
+        }
+        false
+    }
+
+    // a call of a std func (by its key) the compiler writes: string + and ==
+    std-call: func(g: Gen, key: string, args: list<Node>, ty: Type) -> Node {
+        call(key, std-func(g, key), args, ty, fx().call)
+    }
+
+    // a C helper that only computes (y_add_s32, an equality)
+    pure-call: func(c-name: string, args: list<Node>, ty: Type) -> Node {
+        call("", c-name, args, ty, 0)
+    }
+
+    // a yel name's binding, declared in the innermost scope: a local, or (captured: a closure reads
+    // it) a field of its unit's environment, the innermost this func holds
+    declare: func(l: Codegen, ty: Type, n: string, mark: Mark) -> Var {
+        let v: Var = { local: -1, env: none, field: "", ty: ty, };
+        if mark.captured {
+            let e = l.chain[l.chain.len() - 1].env;
+            // a name its unit binds twice (in two blocks) is two fields
+            let f = n;
+            for k in 1..e.fields.len() + 2 {
+                if contains(e.fields, f) { f = "{n}-{k}"; }
+            }
+            e.fields.push(f);
+            e.types.push(ty);
+            v.env = some(e);
+            v.field = f;
+        } else {
+            v.local = new-local(l, ty, n);
+            l.f.locals[v.local].binding = some(mark);
+        }
+        l.scopes[l.scopes.len() - 1].set(intern(n), v);
+        v
+    }
+
+    // a param: a local (a C function's param), and (captured) a field of the environment, which the
+    // prologue copies it to (into stores)
+    declare-param: func(l: Codegen, ty: Type, n: string, mark: Mark, stores: list<Node>) -> s64 {
+        let p = new-local(l, ty, n);
+        l.f.locals[p].binding = some(mark);
+        if mark.captured {
+            let v = declare(l, ty, n, mark);
+            stores.push(write-var(l, v, local-node(l, p)));
+        } else {
+            l.scopes[l.scopes.len() - 1].set(intern(n), { local: p, env: none, field: "", ty: ty, });
+        }
+        p
+    }
+
+    // a yel name's binding: this func's, or (a closure's) a captured one of the func it is made in
+    lookup: func(l: Codegen, n: Name) -> option<Var> {
+        let count = l.scopes.len();
+        for k in 0..count {
+            let scope = l.scopes[count - 1 - k];
+            if scope.has(n) { return some(scope[n]); }
+        }
+        match l.parent {
+            some(p) => lookup(p, n),
+            none => none,
+        }
+    }
+
+    is-local: func(l: Codegen, n: string) -> bool {
+        match lookup(l, intern(n)) {
+            some(v) => true,
+            none => false,
+        }
+    }
+
+    // a binding's value
+    read-var: func(l: Codegen, v: Var) -> Node {
+        match v.env {
+            none => local-node(l, v.local),
+            some(e) => bind(l, load(env-node(l, e), ["f_" + mangle(v.field),], true, v.ty, true)),
+        }
+    }
+
+    // where a binding's value is: its local, or its field in the environment that holds it (a
+    // place written in place: a fixed-length list's item)
+    var-place: func(l: Codegen, v: Var) -> Node {
+        match v.env {
+            none => local-node(l, v.local),
+            some(e) => load(env-node(l, e), ["f_" + mangle(v.field),], true, v.ty, true),
+        }
+    }
+
+    // a binding given a value
+    write-var: func(l: Codegen, v: Var, value: Node) -> Node {
+        match v.env {
+            none => assign(v.local, value),
+            some(e) => store(load(env-node(l, e), ["f_" + mangle(v.field),], true, v.ty, true), value),
+        }
+    }
+
+    // an environment, reached from the innermost this func holds by its ups
+    env-node: func(l: Codegen, e: Env) -> Node {
+        let r = l.chain[l.chain.len() - 1];
+        let node = local-node(l, r.local);
+        let at = r.env;
+        loop {
+            if at.rec == e.rec { return node; }
+            match at.up {
+                some(u) => {
+                    node = load(node, ["f_up",], true, Type.named(intern(u.rec)), false);
+                    at = u;
+                }
+                none => {
+                    panic("{l.f.c-name}: the environment {e.rec} is not around it")
+                }
+            }
+        }
+    }
+
+    // a unit's start: its environment (when a closure captures one of its bindings), in a local,
+    // its up the environment around it
+    enter-unit: func(l: Codegen, unit: Unit) -> option<EnvRef> {
+        if !unit.env { return none; }
+        l.g.envs += 1;
+        let key = "yel:env/{l.g.envs}";
+        let up: option<Env> = none;
+        let up-value: option<Node> = none;
+        if l.chain.len() > 0 {
+            let u = l.chain[l.chain.len() - 1].env;
+            up = some(u);
+            up-value = some(env-node(l, u));
+        }
+        let e: Env = { rec: key, up: up, fields: [], types: [], };
+        match up {
+            some(u) => {
+                e.fields.push("up");
+                e.types.push(Type.named(intern(u.rec)));
+            }
+            none => {}
+        }
+        let r: EnvRef = { env: e, local: new-local(l, Type.named(intern(key)), ""), up-value: up-value, };
+        l.chain.push(r);
+        some(r)
+    }
+
+    // a unit's end: its environment's record declared (its fields known now), and its prologue:
+    // the environment made, its up set, then then (a captured param's copy, a for's variable)
+    exit-unit: func(l: Codegen, unit: option<EnvRef>, then: list<Node>) -> list<Node> {
+        match unit {
+            none => then,
+            some(r) => {
+                l.chain.pop();
+                let g = l.g;
+                let e = r.env;
+                let decl: RecordDecl = {
+                    span: { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, },
+                    scope: blank-scope(g.file),
+                    name: e.rec,
+                    fields: e.fields,
+                    field-types: e.types,
+                };
+                g.records.set(intern(e.rec), decl);
+                g.env-decls.push(decl);
+                let ty = Type.named(intern(e.rec));
+                let out = [
+                    assign(
+                        r.local,
+                        alloc("R_" + mangle(e.rec), e.rec, true, trace-fn(g, intern(e.rec)), ty),
+                    ),
+                ];
+                match r.up-value {
+                    some(u) => out.push(
+                        store(load(local-node(l, r.local), ["f_up",], true, u.ty, false), u)
+                    ),
+                    none => {}
+                }
+                for n in then { out.push(n); }
+                out
+            }
+        }
+    }
+
+    concat: func(a: list<Node>, b: list<Node>) -> list<Node> {
+        let out: list<Node> = [];
+        for n in a { out.push(n); }
+        for n in b { out.push(n); }
+        out
+    }
+
+    // whether the expression names a variant, enum or flags type (Type in Type.case), not a local
+    is-type: func(l: Codegen, e: Expr) -> bool {
+        match e.kind {
+            name(n) => (l.g.variants.has(n) || l.g.flags.has(n)) && !is-local(l, name-text(n)),
+            _ => false,
+        }
+    }
+
+    // the func (a func of its own) built: g.subst holds its type arguments, when generic
+    codegen-func: func(g: Gen, f: Func, c-name: string) -> IrFunc {
+        let fn: IrFunc = {
+            key: f.name,
+            c-name: c-name,
+            name: intern(c-name),
+            params: [],
+            locals: [],
+            body: [],
+            // a generator's frame holds the value it yields last
+            result: decl-type(g, f.type-params, if f.is-generator { seq-item(f.result) } else { f.result }),
+            labels: 0,
+            rooted: [],
+            closure: false,
+            env-param: -1,
+            async: f.is-async || f.is-generator,
+            states: 0,
+            generator: f.is-generator,
+            void-result: false,
+            export-name: "",
+            build: "",
+            release: false,
+        };
+        let l: Codegen = {
+            g: g,
+            f: fn,
+            out: [],
+            scopes: [map.new(),],
+            chain: [],
+            parent: none,
+            closures: 0,
+            span: { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, },
+        };
+        let unit = enter-unit(l, f.unit);
+        let stores: list<Node> = [];
+        for i in 0..f.params.len() {
+            let t = decl-type(g, f.type-params, f.param-types[i]);
+            fn.params.push(declare-param(l, t, f.params[i], f.marks[i], stores));
+        }
+        if f.is-generator {
+            gen-block(l, f.body, false);
+            add(l, return-stmt(unit-const()));
+        } else {
+            gen-return(l, f.body, fn.result);
+        }
+        fn.body = concat(exit-unit(l, unit, stores), l.out);
+        fn
+    }
+
+    // a body, its value returned (unit for a func of none)
+    gen-return: func(l: Codegen, body: Block, result: Type) {
+        match result {
+            unit-type => {
+                gen-block(l, body, false);
+                add(l, return-stmt(unit-const()));
+            }
+            _ => {
+                let v = gen-block(l, body, true);
+                // a body that never gets to its end returns from within
+                if !checker.leaves(body) { add(l, return-stmt(v)); }
+            }
+        }
+    }
+
+    // x as T (the checker allowed it): C's conversion where it is defined as the table has it (an
+    // integer wraps; to a float, the nearest), else a helper: a float to an integer saturates (NaN
+    // is 0), f64 to f32 is an infinity past f32's range, an integer to a char is U+FFFD where it
+    // is no Unicode scalar value
+    gen-cast: func(l: Codegen, e: Expr, x: Cast) -> Node {
+        let g = l.g;
+        let v = gen-expr(l, x.value);
+        let from = expr-type(g, x.value);
+        let to = expr-type(g, e);
+        if show-type(from) == show-type(to) { return v; }
+        let float-from = match from {
+            num(n) => !is-int(n),
+            _ => false,
+        };
+        match to {
+            char-type => pure-call("y_to_char", [convert(Type.num("s64"), v),], to),
+            num(n) => {
+                if is-int(n) && float-from { return pure-call("y_sat_{n}", [v,], to); }
+                if n == "f32"
+                    && show-type(from) == "f64" { return pure-call("y_f64_to_f32", [v,], to); }
+                convert(to, v)
+            }
+            _ => convert(to, v),
+        }
+    }
+
+    // a closure literal: its body a func of its own (lifted), which takes the environment it is
+    // made in (the innermost this func holds) first; its value that func and that environment
+    gen-closure: func(l: Codegen, e: Expr, cl: Closure) -> Node {
+        let g = l.g;
+        let t = expr-type(g, e);
+        let ps: list<Type> = [];
+        let rt = Type.unit-type;
+        match t {
+            func-type(f) => {
+                ps = f.params;
+                rt = f.result;
+            }
+            _ => {}
+        }
+        l.closures += 1;
+        let c-name = "{l.f.c-name}__c{l.closures}";
+        let fn: IrFunc = {
+            key: c-name,
+            c-name: c-name,
+            name: intern(c-name),
+            params: [],
+            locals: [],
+            body: [],
+            result: rt,
+            labels: 0,
+            rooted: [],
+            closure: true,
+            env-param: -1,
+            async: false,
+            states: 0,
+            generator: false,
+            void-result: false,
+            export-name: "",
+            build: "",
+            release: false,
+        };
+        let k: Codegen = {
+            g: g,
+            f: fn,
+            out: [],
+            scopes: [map.new(),],
+            chain: [],
+            parent: some(l),
+            closures: 0,
+            span: { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, },
+        };
+        let env = null-const();
+        if l.chain.len() > 0 {
+            let outer = l.chain[l.chain.len() - 1].env;
+            let p = new-local(k, Type.named(intern(outer.rec)), "");
+            fn.env-param = p;
+            k.chain.push({ env: outer, local: p, up-value: none, });
+            env = env-node(l, outer);
+        }
+        let unit = enter-unit(k, cl.unit);
+        let stores: list<Node> = [];
+        for i in 0..cl.params.len() {
+            fn.params.push(declare-param(k, ps[i], cl.params[i], cl.marks[i], stores));
+        }
+        gen-return(k, cl.body, rt);
+        fn.body = concat(exit-unit(k, unit, stores), k.out);
+        g.lifted.push(fn);
+        let ft = func-typedef(g, t);
+        make(ft, ["fn", "env",], [func-ref(c-name, c-name, "(({ft}__fn){c-name})", t), env,], t)
+    }
+
+    // ================================================================ expressions
+
+    // expressions in order, each's node; one read before a later one's statements assign a local
+    // it reads is kept in a temporary from before them
+    gen-operands: func(l: Codegen, es: list<Expr>) -> list<Node> {
+        let nodes: list<Node> = [];
+        // where each node's statements end in l.out
+        let marks: list<s64> = [];
+        for e in es {
+            let before = l.out.len();
+            let n = gen-expr(l, e);
+            if l.out.len() > before && nodes.len() > 0 {
+                let written: list<s64> = [];
+                for k in before..l.out.len() {
+                    for s in flatten([l.out[k],]) {
+                        match s.kind {
+                            assign(a) => written.push(a.dest),
+                            _ => {}
+                        }
+                    }
+                }
+                let moved = 0;
+                for k in 0..nodes.len() {
+                    marks[k] = marks[k] + moved;
+                    let read: list<s64> = [];
+                    reads(nodes[k], read);
+                    let clash = false;
+                    for i in read { if contains-s32(written, i) { clash = true; } }
+                    if clash {
+                        let d = new-local(l, nodes[k].ty, "");
+                        insert(l.out, marks[k], assign(d, nodes[k]));
+                        nodes[k] = local-node(l, d);
+                        moved += 1;
+                    }
+                }
+            }
+            nodes.push(n);
+            marks.push(l.out.len());
+        }
+        nodes
+    }
+
+    contains-s32: func(xs: list<s64>, x: s64) -> bool {
+        for y in xs { if y == x { return true; } }
+        false
+    }
+
+    insert: func(body: list<Node>, at: s64, n: Node) {
+        let by: list<Node> = [];
+        for k in 0..body.len() {
+            if k == at { by.push(n); }
+            by.push(body[k]);
+        }
+        if at >= body.len() { by.push(n); }
+        replace-body(body, by);
+    }
+
+    // an expression's value, each node made of it said to be where it is
+    gen-expr: func(l: Codegen, e: Expr) -> Node {
+        let saved = l.span;
+        if e.span.line != 0 { l.span = e.span; }
+        let n = gen-expr-node(l, e);
+        stamp(n, l.span);
+        // a call that never returns, where its value is wanted: made here, so nothing after it is
+        // (n, given back, is in what is not kept)
+        if is-never(n.ty) { add(l, n); }
+        l.span = saved;
+        n
+    }
+
+    gen-expr-node: func(l: Codegen, e: Expr) -> Node {
+        let g = l.g;
+        match e.kind {
+            int-lit(v) => const(Constant.int(int-value(g, e, v, expr-type(g, e), false)), expr-type(g, e)),
+            float-lit(v) => const(Constant.float(parse-f64(v)), expr-type(g, e)),
+            char-lit(code) => int-const(code, Type.char-type),
+            tuple-lit(items) => {
+                let parts = gen-operands(l, items);
+                let t = expr-type(g, e);
+                let fields: list<string> = [];
+                for p in parts { fields.push(""); }
+                make(c-type(g, t), fields, parts, t)
+            }
+            bool-lit(b) => bool-const(b),
+            unit => unit-const(),
+            str-lit(s) => text-const(s),
+            name(n) => {
+                match lookup(l, n) {
+                    // a binding the checker narrowed (an is test held): its value of that kind
+                    some(v) => { return represent-as(l, read-var(l, v), v.ty, expr-type(g, e)); }
+                    none => {}
+                }
+                let t = expr-type(g, e);
+                // a func as a value (the checker named it by its key): its adapter, no environment
+                // a global (no local hides it: the checker named it by its key)
+                if g.globals.has(name-text(n)) { return bind(l, global-node(name-text(n), t)); }
+                if g.funcs.has(name-text(n)) {
+                    let c-name = g.funcs[name-text(n)].c-name;
+                    let ft = func-typedef(g, t);
+                    let fn = func-ref(name-text(n), c-name, value-adapter(g, name-text(n), c-name, t), t);
+                    return make(ft, ["fn", "env",], [fn, null-const(),], t);
+                }
+                if n == intern("none") { return zero-const(t); }
+                if is-result(g, e, name-text(n)) { return result-val(l, e, name-text(n), none); }
+                if n == intern("inf") || n == intern("nan") { return const(Constant.float(if n == intern("inf") { 1.0 / 0.0 } else { 0.0 / 0.0 }), t); }
+                gen-case(l, e, name-text(n), none)
+            }
+            interp(parts) => {
+                // a value of a type with a display func: that func's text
+                let displayed: list<Expr> = [];
+                for part in parts {
+                    match display-func(l, part.ty) {
+                        some(key) => displayed.push({ kind: ExprKind.call({ name: key, args: [part,], type-args: [], }), span: part.span, ty: Type.string-type, }),
+                        none => displayed.push(part),
+                    }
+                }
+                let nodes = gen-operands(l, displayed);
+                let formatters: list<Formatter> = [];
+                for part in displayed { formatters.push(display-fn(g, expr-type(g, part))); }
+                temp(l, interp(nodes, formatters))
+            }
+            list-lit(items) => {
+                let lt = expr-type(g, e);
+                // a fixed-length list: a value struct of its items
+                match lt {
+                    fixed-list(x) => {
+                        let parts = gen-operands(l, items);
+                        let fields: list<string> = [];
+                        for p in parts { fields.push(""); }
+                        return make(c-type(g, lt), fields, parts, lt);
+                    }
+                    _ => {}
+                }
+                let it = match lt {
+                    list-type(x) => x,
+                    _ => Type.unit-type,
+                };
+                let item = c-type(g, it);
+                let values = gen-operands(l, items);
+                let size = size-of(it);
+                scan-fn(g, it);
+                if values.len() == 0 {
+                    return temp(l, runtime-call("y_list_new", [int-const(0, Type.num("s64")), size, scan(it),], lt));
+                }
+                let fields: list<string> = [];
+                for v in values { fields.push(""); }
+                let items-c = make("{item}[]", fields, values, Type.unit-type);
+                temp(
+                    l,
+                    runtime-call(
+                        "y_list_of",
+                        [int-const(values.len(), Type.num("s64")), size, items-c, scan(it),],
+                        lt,
+                    ),
+                )
+            }
+            binary(b) => gen-binary(l, e, b),
+            unary(u) => {
+                // -128 is an s8: a literal under a - may be a signed type's least value
+                let v = match u.value.kind {
+                    int-lit(text) => if u.op == "-" {
+                        const(
+                            Constant.int(int-value(g, u.value, text, expr-type(g, u.value), true)),
+                            expr-type(g, u.value),
+                        )
+                    } else {
+                        gen-expr(l, u.value)
+                    },
+                    _ => gen-expr(l, u.value),
+                };
+                let t = expr-type(g, e);
+                if u.op == "!" { return un("!", t, v); }
+                match t {
+                    num(n) => if is-int(n) {
+                        pure-call("y_neg_{n}", [v,], t)
+                    } else {
+                        un("-", t, v)
+                    },
+                    _ => un("-", t, v),
+                }
+            }
+            call(c) => {
+                // f(a) with f a local holding a func: called through it (x.f(a) is always a func's)
+                match lookup(l, intern(c.name)) {
+                    some(v) => {
+                        let f = pin(l, read-var(l, v));
+                        let values = gen-operands(l, c.args);
+                        return temp(l, call-ref(f, values, expr-type(g, e)));
+                    }
+                    none => {}
+                }
+                gen-call(l, e, c.name, c.args, c.type-args)
+            }
+            method(m) => {
+                if is-type(l, m.target) {
+                    return gen-case(l, e, m.name, some(gen-expr(l, m.args[0])));
+                }
+                if is-result(g, e, m.name) && !g.funcs.has(m.name) {
+                    return result-val(l, e, m.name, some(gen-expr(l, m.target)));
+                }
+                let args = [m.target,];
+                for a in m.args { args.push(a); }
+                gen-call(l, e, m.name, args, m.type-args)
+            }
+            field(f) => {
+                let t = expr-type(g, e);
+                if is-type(l, f.target) {
+                    let tn = expr-name(f.target);
+                    if g.flags.has(intern(tn)) { return const(Constant.int(flag-bit(g, tn, f.name)), t); }
+                    return gen-case(l, e, f.name, none);
+                }
+                let base = gen-expr(l, f.target);
+                let bt = expr-type(g, f.target);
+                match bt {
+                    tuple-type(xs) => { return load(base, ["f{f.name}",], false, t, false); }
+                    // an anonymous record: a value, its field read where it is
+                    anon-record(r) => { return load(base, ["f_{mangle(f.name)}",], false, t, false); }
+                    named(tn) => {
+                        if g.flags.has(tn) {
+                            let bits = bin("&", bt, base, const(Constant.int(flag-bit(g, name-text(tn), f.name)), bt));
+                            return bin("!=", t, bits, int-const(0, bt));
+                        }
+                    }
+                    _ => {}
+                }
+                bind(l, load(base, ["f_{mangle(f.name)}",], true, t, true))
+            }
+            record-lit(fields) => {
+                let exprs: list<Expr> = [];
+                for f in fields { exprs.push(f.value); }
+                let values = gen-operands(l, exprs);
+                let t = expr-type(g, e);
+                // an anonymous record: a value made of its fields
+                match t {
+                    anon-record(r) => {
+                        let names: list<string> = [];
+                        for f in fields { names.push("f_" + mangle(f.name)); }
+                        return make(c-type(g, t), names, values, t);
+                    }
+                    _ => {}
+                }
+                let rn = match t {
+                    named(r) => r,
+                    _ => intern(""),
+                };
+                let d = temp(l, alloc("R_" + mangle(name-text(rn)), name-text(rn), true, trace-fn(g, rn), t));
+                for k in 0..fields.len() {
+                    add(
+                        l,
+                        store(
+                            load(d, ["f_{mangle(fields[k].name)}",], true, values[k].ty, true),
+                            values[k],
+                        ),
+                    );
+                }
+                d
+            }
+            match-expr(m) => gen-match(l, m, true, expr-type(g, e)),
+            closure(cl) => gen-closure(l, e, cl),
+            cast(x) => gen-cast(l, e, x),
+            start-expr(x) => {
+                // the call begun, and given the executor to run
+                let t = expr-type(g, e);
+                let fut = start-call(l, x, t);
+                temp(l, call("", "yel_async_spawn", [fut,], t, fx().call))
+            }
+            wait-expr(w) => gen-wait(l, e, w),
+            // the value into the frame, then left (that state kept) and come back to after it
+            yield-expr(x) => {
+                let v = gen-expr(l, x);
+                l.f.states += 1;
+                let k = l.f.states;
+                add(l, yield-stmt(v));
+                add(l, suspend-stmt(k));
+                add(l, resume-stmt(k));
+                unit-const()
+            }
+            widen(x) => represent-as(
+                l,
+                gen-expr(l, x.value),
+                expr-type(g, x.value),
+                gen-type(g, x.ty),
+            ),
+            // x as? T: some(x as the narrower type) where its pattern's checks hold, else none
+            try-as(x) => {
+                let (v, test) = tested(l, x);
+                let t = expr-type(g, e);
+                let inner = match t {
+                    option-type(y) => y,
+                    _ => t,
+                };
+                let found = make(c-type(g, t), ["", "",], [
+                    bool-const(true),
+                    represent-as(l, v, expr-type(g, x.value), inner),
+                ], t,);
+                match test {
+                    none => found,
+                    some(test) => {
+                        let r = new-local(l, t, "");
+                        add(
+                            l,
+                            if-stmt(
+                                test,
+                                [assign(r, found),],
+                                [assign(r, zero-const(t)),],
+                            ),
+                        );
+                        local-node(l, r)
+                    }
+                }
+            }
+            // x is T: the checks of its pattern (none: it always is)
+            is-test(x) => {
+                let (v, test) = tested(l, x);
+                match test {
+                    some(t) => t,
+                    none => bool-const(true),
+                }
+            }
+            apply(x) => {
+                let f = pin(l, gen-expr(l, x.callee));
+                let values = gen-operands(l, x.args);
+                temp(l, call-ref(f, values, expr-type(g, e)))
+            }
+            if-else(x) => gen-if(l, x, true, expr-type(g, e)),
+            block(b) => gen-block(l, b, true),
+        }
+    }
+
+    // a case of e's type (a variant or enum), with its payload (or none)
+    gen-case: func(l: Codegen, e: Expr, c: string, payload: option<Node>) -> Node {
+        let g = l.g;
+        let t = expr-type(g, e);
+        let tn = match t {
+            named(n) => n,
+            _ => intern(""),
+        };
+        if !g.variants.has(tn) { panic("{g.file}: {c}: its variant is not known"); }
+        let v = g.variants[tn];
+        let k = case-index(v, c);
+        if is-enum(g, tn) { return int-const(k, t); }
+        match payload {
+            some(p) => {
+                let d = temp(l, alloc("V_" + mangle(name-text(tn)), name-text(tn), false, trace-fn(g, tn), t));
+                add(
+                    l,
+                    store(
+                        load(d, ["tag",], true, Type.num("s32"), false),
+                        int-const(k, Type.num("s32")),
+                    ),
+                );
+                add(l, store(load(d, ["u", "c_{mangle(c)}",], true, p.ty, false), p));
+                d
+            }
+            none => const(Constant.case-value({ owner: name-text(tn), name: c, }), t),
+        }
+    }
+
+    // ok or err (which) of e's result type, with its payload (or none)
+    result-val: func(l: Codegen, e: Expr, which: string, payload: option<Node>) -> Node {
+        let t = expr-type(l.g, e);
+        let ct = c-type(l.g, t);
+        let is-err = bool-const(which == "err");
+        match payload {
+            some(p) => make(ct, ["is_err", which,], [is-err, p,], t),
+            none => make(ct, ["is_err",], [is-err,], t),
+        }
+    }
+
+    // whether two values of type t are equal: an option, result, tuple or case by what it holds,
+    // a list, map or record by identity
+    eq-node: func(g: Gen, t: Type, a: Node, b: Node) -> Node {
+        match t {
+            string-type => std-call(g, "yel:std/text.equal", [a, b,], Type.bool-type),
+            unit-type => bool-const(true),
+            option-type(x) => pure-call(eq-fn(g, t), [a, b,], Type.bool-type),
+            result-type(r) => pure-call(eq-fn(g, t), [a, b,], Type.bool-type),
+            tuple-type(xs) => pure-call(eq-fn(g, t), [a, b,], Type.bool-type),
+            union-type(xs) => pure-call(eq-fn(g, t), [a, b,], Type.bool-type),
+            anon-record(r) => pure-call(eq-fn(g, t), [a, b,], Type.bool-type),
+            fixed-list(x) => pure-call(eq-fn(g, t), [a, b,], Type.bool-type),
+            // the same func, made in the same environment
+            func-type(f) => bin(
+                "&&",
+                Type.bool-type,
+                bin(
+                    "==",
+                    Type.bool-type,
+                    load(a, ["fn",], false, Type.address-type, false),
+                    load(b, ["fn",], false, Type.address-type, false),
+                ),
+                bin(
+                    "==",
+                    Type.bool-type,
+                    load(a, ["env",], false, Type.address-type, false),
+                    load(b, ["env",], false, Type.address-type, false),
+                ),
+            ),
+            named(n) => if named-kind(g, n) == "variant" {
+                pure-call(eq-fn(g, t), [a, b,], Type.bool-type)
+            } else {
+                bin("==", Type.bool-type, a, b)
+            },
+            _ => bin("==", Type.bool-type, a, b),
+        }
+    }
+
+    // a op b on values of type t, of type rt: an integer's + - * / % << >> wrap (y_add_s32 and the
+    // rest); a float's % is fmod
+    arith: func(t: Type, op: string, a: Node, b: Node, rt: Type) -> Node {
+        match t {
+            num(n) => {
+                if !is-int(n) {
+                    if op == "%" {
+                        return pure-call(if n == "f32" { "fmodf" } else { "fmod" }, [a, b,], rt);
+                    }
+                    return bin(op, rt, a, b);
+                }
+                let ops = ["+", "-", "*", "/", "%", "<<", ">>",];
+                let names = ["add", "sub", "mul", "div", "mod", "shl", "shr",];
+                let i = index-of(ops, op);
+                if i >= 0 { return pure-call("y_{names[i]}_{n}", [a, b,], rt); }
+            }
+            _ => {}
+        }
+        bin(op, rt, a, b)
+    }
+
+    gen-binary: func(l: Codegen, e: Expr, b: Binary) -> Node {
+        let g = l.g;
+        // && and ||: the right side only when the left does not decide
+        if b.op == "&&" || b.op == "||" {
+            let t = new-local(l, Type.bool-type, "");
+            add(l, assign(t, gen-expr(l, b.left)));
+            let saved = l.out;
+            l.out = [];
+            add(l, assign(t, gen-expr(l, b.right)));
+            let body = l.out;
+            l.out = saved;
+            if b.op == "&&" { add(l, if-stmt(local-node(l, t), body, [])); }
+            else { add(l, if-stmt(local-node(l, t), [], body)); }
+            return local-node(l, t);
+        }
+        let sides = gen-operands(l, [b.left, b.right,]);
+        let lt = expr-type(g, b.left);
+        let t = expr-type(g, e);
+        if b.op == "==" { return eq-node(g, lt, sides[0], sides[1]); }
+        if b.op == "!=" { return un("!", t, eq-node(g, lt, sides[0], sides[1])); }
+        match lt {
+            string-type => { return temp(l, std-call(l.g, "yel:std/text.concat", sides, t)); }
+            _ => {}
+        }
+        arith(lt, b.op, sides[0], sides[1], t)
+    }
+
+    // a call's value; or some(x), ok(x), err(x), or a case with its payload, by the bare name
+    gen-call: func(
+        l: Codegen,
+        e: Expr,
+        n: string,
+        args: list<Expr>,
+        type-args: list<Type>,
+    ) -> Node {
+        let g = l.g;
+        // a generator's call: its frame made (nothing of it runs until a value is read)
+        if g.generators.has(n) { return start-call(l, e, expr-type(g, e)); }
+        // at, set and len of a fixed-length list (the checker named them ~at, ~set, ~len)
+        if n == "~at" || n == "~set" || n == "~len" { return fixed-call(l, n, args); }
+        // an interpolated value with a spec ("{x:>8}")
+        if n == "~format" {
+            return match args[1].kind {
+                str-lit(spec) => format-value(l, args[0], spec),
+                _ => zero-const(Type.string-type),
+            };
+        }
+        if !g.funcs.has(n) {
+            let payload = gen-expr(l, args[0]);
+            if n == "some" {
+                let t = expr-type(g, e);
+                return make(c-type(g, t), ["", "",], [bool-const(true), payload,], t);
+            }
+            if is-result(g, e, n) { return result-val(l, e, n, some(payload)); }
+            return gen-case(l, e, n, some(payload));
+        }
+        temp(l, call-node(l, n, args, type-args, expr-type(g, e)))
+    }
+
+    // the display func a value of type value-type shows by (not inside it: its own "{value}" is the
+    // value's own text)
+    display-func: func(l: Codegen, value-type: Type) -> option<string> {
+        let g = l.g;
+        if g.displays.len() == 0 { return none; }
+        // (value-type as the checker has it: a distinct type not yet its base)
+        let id = type-id(g, gen-type(g, value-type));
+        for f in g.displays {
+            // a distinct type's: that type's values only (held as its base, which shows as it is)
+            let fits = match resolve(f.shows) {
+                distinct-type(x) => match resolve(value-type) {
+                    distinct-type(y) => y.name == x.name,
+                    _ => false,
+                },
+                _ => type-id(g, gen-type(g, f.shows)) == id,
+            };
+            if f.key != l.f.key && fits { return some(f.key); }
+        }
+        none
+    }
+
+    // an interpolated value's text as its spec shapes it, by std's format funcs
+    format-value: func(l: Codegen, value: Expr, spec: string) -> Node {
+        let g = l.g;
+        let format = match format-spec(spec) {
+            some(format) => format,
+            none => { return zero-const(Type.string-type); }
+        };
+        let value-type = expr-type(g, value);
+        let number = match erase-distinct(value-type) {
+            num(name) => name,
+            _ => "",
+        };
+        let content = if format.kind == "?" {
+            temp(l, interp([gen-expr(l, value),], [debug-fn(g, value-type),]))
+        } else if format.kind != "" {
+            let base = if format.kind == "b" { 2 } else if format.kind == "o" { 8 } else { 16 };
+            format-call(l, "to-radix", [
+                converted(l, value, "s64"),
+                int-const(base, Type.num("s32")),
+                bool-const(format.kind == "X"),
+            ])
+        } else if format.precision >= 0 {
+            format-call(l, "to-fixed", [converted(l, value, "f64"), int-const(format.precision, Type.num("s32")),])
+        } else {
+            match display-func(l, value.ty) {
+                some(key) => temp(l, call-node(l, key, [value,], [], Type.string-type)),
+                none => temp(l, interp([gen-expr(l, value),], [display-fn(g, value-type),])),
+            }
+        };
+        if format.width < 0 { return content; }
+        let width = int-const(format.width, Type.num("s64"));
+        if format.zero && number != "" { return format-call(l, "zero-pad", [content, width,]); }
+        // a number to the right, anything else to the left, unless told
+        let align = if format.align != "" { format.align } else if number != "" { ">" } else { "<" };
+        format-call(l, "pad", [content, width, text-node(l, format.fill), text-node(l, align),])
+    }
+
+    // a call of std's format.name (its arguments built)
+    format-call: func(l: Codegen, name: string, args: list<Node>) -> Node {
+        let key = "yel:std/format." + name;
+        temp(l, call(key, l.g.funcs[key].c-name, args, Type.string-type, fx().call))
+    }
+
+    // value as a number of kind (as value as kind)
+    converted: func(l: Codegen, value: Expr, kind: string) -> Node {
+        let target = Type.num(kind);
+        gen-expr(l, { kind: ExprKind.cast({ value: value, ty: target, }), span: value.span, ty: target, })
+    }
+
+    // a string literal's node
+    text-node: func(l: Codegen, content: string) -> Node {
+        gen-expr(l, { kind: ExprKind.str-lit(content), span: l.span, ty: Type.string-type, })
+    }
+
+    // a call to a func (its arguments built first): an extern's type arguments go first
+    call-node: func(
+        l: Codegen,
+        n: string,
+        args: list<Expr>,
+        type-args: list<Type>,
+        ty: Type,
+    ) -> Node {
+        let g = l.g;
+        let f = g.funcs[n];
+        let prefix: list<Node> = [];
+        if f.is-extern {
+            if g.wit-externs.has(n) { g.wit-used.set(n, true); }
+            for a in type-arg-nodes(g, n, type-args) { prefix.push(a); }
+        }
+        let values = gen-operands(l, args);
+        // an intrinsic may read an argument more than once: each a local or a constant
+        let pinned = f.is-extern && is-template(f.c-name);
+        for v in values { prefix.push(if pinned { pin(l, v) } else { v }); }
+        if f.is-extern { return runtime-call(f.c-name, prefix, ty); }
+        let c-name = if f.type-params.len() > 0 { instance(g, n, type-args) } else { f.c-name };
+        let key = if f.type-params.len() > 0 { c-name } else { n };
+        call(key, c-name, prefix, ty, fx().call)
+    }
+
+    // a call of an extern (by its key) the compiler writes: its type arguments first, then args
+    extern-call: func(g: Gen, key: string, type-args: list<Type>, args: list<Node>, ty: Type) -> Node {
+        let f = g.funcs[key];
+        let out = type-arg-nodes(g, key, type-args);
+        for a in args { out.push(a); }
+        runtime-call(f.c-name, out, ty)
+    }
+
+    // an extern's type arguments, as its call's first arguments (the C each is written as, made
+    // now: the helpers it names)
+    type-arg-nodes: func(g: Gen, key: string, type-args: list<Type>) -> list<Node> {
+        let f = g.funcs[key];
+        let out: list<Node> = [];
+        let slots = 0;
+        for i in 0..type-args.len() {
+            let arg: TypeArg = { ty: gen-type(g, type-args[i]), key: i < f.type-params.len() && f.type-params[i] == "K", };
+            slots += type-arg-c(g, f.c-name, slots, arg).len();
+            out.push(type-arg(arg.ty, arg.key));
+        }
+        out
+    }
+
+    // a fixed-length list's length (a constant), its item (the index checked), or an item set in
+    // place: in the local, or the record's field, that holds the list
+    fixed-call: func(l: Codegen, n: string, args: list<Expr>) -> Node {
+        let g = l.g;
+        let lt = expr-type(g, args[0]);
+        let item = match lt {
+            fixed-list(x) => x.item,
+            _ => Type.unit-type,
+        };
+        let len = match lt {
+            fixed-list(x) => x.len,
+            _ => 0,
+        };
+        let s64 = Type.num("s64");
+        if n == "~len" {
+            gen-expr(l, args[0]);
+            return int-const(len, s64);
+        }
+        // where the list is: a field's place, or a variable's (a captured one's, in its
+        // environment), not a copy of it
+        let base = match args[0].kind {
+            field(f) => {
+                if n == "~set" {
+                    let rec = gen-expr(l, f.target);
+                    load(rec, ["f_{mangle(f.name)}",], true, lt, true)
+                } else {
+                    gen-expr(l, args[0])
+                }
+            }
+            name(x) => {
+                let fv = lookup(l, x);
+                if n == "~set" && found(fv) { var-place(l, binding(fv)) }
+                // a global's: set in it
+                else if n == "~set" && g.globals.has(name-text(x)) { global-node(name-text(x), lt) }
+                else { gen-expr(l, args[0]) }
+            }
+            _ => gen-expr(l, args[0]),
+        };
+        let rest: list<Expr> = [];
+        for k in 1..args.len() { rest.push(args[k]); }
+        let values = gen-operands(l, rest);
+        let index = pure-call("y_bound", [values[0], int-const(len, s64),], s64);
+        let place = list-get(base, index, c-type(g, item), item, true);
+        if n == "~at" { return bind(l, place); }
+        add(l, store(place, values[1]));
+        unit-const()
+    }
+
+    // an expression whose value is not used: an if's or a match's branches need not agree (as
+    // checked)
+    gen-discard: func(l: Codegen, e: Expr) {
+        let g = l.g;
+        match e.kind {
+            if-else(x) => { gen-if(l, x, false, Type.unit-type); }
+            match-expr(m) => { gen-match(l, m, false, Type.unit-type); }
+            block(b) => { gen-block(l, b, false); }
+            call(c) => {
+                let fv = lookup(l, intern(c.name));
+                if found(fv) {
+                    let f = pin(l, read-var(l, binding(fv)));
+                    add(l, call-ref(f, gen-operands(l, c.args), expr-type(g, e)));
+                } else if g.funcs.has(c.name) {
+                    add(l, call-node(l, c.name, c.args, c.type-args, expr-type(g, e)));
+                }
+                else { gen-expr(l, e); }
+            }
+            method(m) => {
+                if !is-type(l, m.target) && g.funcs.has(m.name) {
+                    let args = [m.target,];
+                    for a in m.args { args.push(a); }
+                    add(l, call-node(l, m.name, args, m.type-args, expr-type(g, e)));
+                } else {
+                    gen-expr(l, e);
+                }
+            }
+            _ => { gen-expr(l, e); }
+        }
+    }
+
+    // ================================================================ control
+
+    // a body built on its own: its statements
+    gen-body: func(l: Codegen, b: Block, keep: bool, dest: s64) -> list<Node> {
+        let saved = l.out;
+        l.out = [];
+        let v = gen-block(l, b, keep);
+        // one that never gets to its end has no value to give
+        if keep && !checker.leaves(b) { add(l, assign(dest, v)); }
+        let body = l.out;
+        l.out = saved;
+        body
+    }
+
+    // an if: its value (keep, of type ty), or unit
+    gen-if: func(l: Codegen, x: IfElse, keep: bool, ty: Type) -> Node {
+        let cond = gen-expr(l, x.cond);
+        match x.otherwise {
+            some(other) => {
+                let t = if keep { new-local(l, ty, "") } else { -1 };
+                let yes = gen-body(l, x.then, keep, t);
+                let no = gen-body(l, other, keep, t);
+                add(l, if-stmt(cond, yes, no));
+                if keep { local-node(l, t) } else { unit-const() }
+            }
+            none => {
+                add(l, if-stmt(cond, gen-body(l, x.then, false, -1), []));
+                unit-const()
+            }
+        }
+    }
+
+    // a match: the value's arms in order, the first that fits (its pattern, then its guard); the
+    // checker saw that one does. Its value (keep, of type ty), or unit. Arms without guards chain
+    // as ifs; an arm with one leaves the match by its label once its guard holds
+    gen-match: func(l: Codegen, m: Match, keep: bool, ty: Type) -> Node {
+        let g = l.g;
+        let vt = expr-type(g, m.value);
+        let v = temp(l, gen-expr(l, m.value));
+        let t = if keep { new-local(l, ty, "") } else { -1 };
+        let label = -1;
+        for arm in m.arms {
+            match arm.guard {
+                some(x) => {
+                    if label < 0 {
+                        label = l.f.labels;
+                        l.f.labels += 1;
+                    }
+                }
+                none => {}
+            }
+        }
+        let saved = l.out;
+        // each arm: its test (none: it always fits), and its body
+        let tests: list<option<Node>> = [];
+        let bodies: list<list<Node>> = [];
+        for arm in m.arms {
+            let checks: list<Node> = [];
+            let binds: list<PatternBinding> = [];
+            pattern-test(l, arm.pattern, v, vt, checks, binds);
+            tests.push(all-of(checks));
+            l.out = [];
+            l.scopes.push(map.new());
+            for b in binds {
+                let x = declare(l, b.value.ty, b.name, b.mark);
+                add(l, write-var(l, x, b.value));
+            }
+            let outer = l.out;
+            let guard: option<Node> = none;
+            match arm.guard {
+                some(x) => {
+                    guard = some(gen-expr(l, x));
+                    outer = l.out;
+                    l.out = [];
+                }
+                none => {}
+            }
+            if keep {
+                let a = match arm.body.kind {
+                    block(b) => gen-block(l, b, true),
+                    _ => gen-expr(l, arm.body),
+                };
+                add(l, assign(t, a));
+            } else {
+                match arm.body.kind {
+                    block(b) => { gen-block(l, b, false); }
+                    _ => gen-discard(l, arm.body),
+                }
+            }
+            match guard {
+                some(x) => {
+                    add(l, break-stmt(label));
+                    outer.push(if-stmt(x, l.out, []));
+                    l.out = outer;
+                }
+                none => {}
+            }
+            l.scopes.pop();
+            bodies.push(l.out);
+        }
+        // the arms as a chain, the last first: an arm that always fits (no guard) ends it; one with
+        // a guard runs, then (it did not leave) the rest
+        let chain: list<Node> = [unreachable-stmt(v, debug-fn(g, vt)),];
+        for k in 0..m.arms.len() {
+            let i = m.arms.len() - 1 - k;
+            let guarded = match m.arms[i].guard {
+                some(x) => true,
+                none => false,
+            };
+            if guarded {
+                let next = match tests[i] {
+                    none => bodies[i],
+                    some(c) => [if-stmt(c, bodies[i], []),],
+                };
+                chain = concat(next, chain);
+            } else {
+                match tests[i] {
+                    none => { chain = bodies[i]; }
+                    some(c) => { chain = [if-stmt(c, bodies[i], chain),]; }
+                }
+            }
+        }
+        l.out = saved;
+        if label >= 0 { add(l, block-stmt(chain, label)); }
+        else {
+            for x in chain { add(l, x); }
+        }
+        if keep { local-node(l, t) } else { unit-const() }
+    }
+
+    // a value of type from as type to, where one holds a union of kinds (types as sets): a
+    // conversion; anything else as it is
+    represent-as: func(l: Codegen, n: Node, from: Type, to: Type) -> Node {
+        let g = l.g;
+        if type-id(g, from) == type-id(g, to) || !has-kinds(from) && !has-kinds(to) { return n; }
+        pure-call(conv-fn(g, from, to), [n,], to)
+    }
+
+    // ================================================================ async
+
+    // an async func's call begun: its frame made (its arguments in it), as a future of type t
+    start-call: func(l: Codegen, e: Expr, t: Type) -> Node {
+        let g = l.g;
+        let key = match e.kind {
+            call(x) => x.name,
+            method(m) => m.name,
+            _ => "",
+        };
+        let type-args: list<Type> = match e.kind {
+            call(x) => x.type-args,
+            method(m) => m.type-args,
+            _ => [],
+        };
+        let exprs: list<Expr> = match e.kind {
+            call(x) => x.args,
+            method(m) => {
+                let all: list<Expr> = [m.target,];
+                for a in m.args { all.push(a); }
+                all
+            }
+            _ => [],
+        };
+        let args = gen-operands(l, exprs);
+        // its step's C name (a generic func's: this instance's); its start is s_ for u_, and its
+        // key keeps it reached (s_<name> reaches u_<name>)
+        let step = if g.generic.has(key) {
+            instance(g, key, type-args)
+        } else {
+            g.funcs[key].c-name
+        };
+        // a WIT async func: its wrapper (once the world imports it)
+        if g.wit-externs.has(key) { g.wit-used.set(key, true); }
+        temp(l, call(key, "s" + step.substring(1, step.len()), args, t, fx().call))
+    }
+
+    // what a wait waits for, as a future: an async call begun here (stepped by the waiter, not the
+    // executor), or a future's value
+    waited-future: func(l: Codegen, v: Expr) -> Node {
+        let g = l.g;
+        if async-call(g, v) { return start-call(l, v, Type.future-type(expr-type(g, v))); }
+        temp(l, gen-expr(l, v))
+    }
+
+    // the result a future holds, of type t (its frame's result follows its header)
+    future-result: func(l: Codegen, f: Node, t: Type) -> Node {
+        pure-call(result-fn(l.g, t), [f,], t)
+    }
+
+    // a future stepped: whether it is done
+    step-node: func(f: Node) -> Node { call("", "yel_async_step", [f,], Type.bool-type, fx().call) }
+
+    // wait: each value a future; a state to come back to, each stepped, and the func left (not
+    // done) until it is (one), the first is (any: its result, into the union), or all are (all:
+    // their results, an anonymous record)
+    gen-wait: func(l: Codegen, e: Expr, w: Wait) -> Node {
+        let g = l.g;
+        let t = expr-type(g, e);
+        let futs: list<Node> = [];
+        let types: list<Type> = [];
+        for v in w.values {
+            futs.push(waited-future(l, v));
+            types.push(waited-type(g, v));
+        }
+        l.f.states += 1;
+        let k = l.f.states;
+        add(l, resume-stmt(k));
+        let bool-t = Type.bool-type;
+        if w.mode == "one" {
+            add(l, if-stmt(un("!", bool-t, step-node(futs[0])), [suspend-stmt(k),], []));
+            return temp(l, future-result(l, futs[0], types[0]));
+        }
+        if w.mode == "any" {
+            // which was done first (each stepped or waited for); none yet: wait
+            let s32-t = Type.num("s32");
+            let pick-args: list<Node> = [int-const(futs.len(), s32-t),];
+            for f in futs { pick-args.push(f); }
+            let first = temp(l, call("", "yel_async_first", pick-args, s32-t, fx().call));
+            add(l, if-stmt(bin("<", bool-t, first, int-const(0, s32-t)), [suspend-stmt(k),], []));
+            let r = new-local(l, t, "");
+            let chain: list<Node> = [];
+            for j in 0..futs.len() {
+                let i = futs.len() - 1 - j;
+                let value = represent-as(l, future-result(l, futs[i], types[i]), types[i], t);
+                chain = [
+                    if-stmt(
+                        bin("==", bool-t, first, int-const(i, s32-t)),
+                        [assign(r, value),],
+                        chain,
+                    ),
+                ];
+            }
+            for x in chain { add(l, x); }
+            return local-node(l, r);
+        }
+        // all: each stepped (not one leaving the rest unstepped), then all done
+        let dones: list<Node> = [];
+        for f in futs { dones.push(temp(l, step-node(f))); }
+        let all-done = match all-of(dones) {
+            some(x) => x,
+            none => bool-const(true),
+        };
+        add(l, if-stmt(un("!", bool-t, all-done), [suspend-stmt(k),], []));
+        let parts: list<Node> = [];
+        let names: list<string> = [];
+        match t {
+            anon-record(r) => {
+                for i in 0..r.fields.len() {
+                    let at = index-of(w.fields, r.fields[i]);
+                    parts.push(future-result(l, futs[at], types[at]));
+                    names.push("f_" + mangle(r.fields[i]));
+                }
+            }
+            _ => {}
+        }
+        temp(l, make(c-type(g, t), names, parts, t))
+    }
+
+    // value is a call of an async func
+    async-call: func(g: Gen, value: Expr) -> bool {
+        match value.kind {
+            call(call) => g.async-funcs.has(call.name),
+            method(method) => g.async-funcs.has(method.name),
+            _ => false,
+        }
+    }
+
+    // a waited value's result type: an async call's, a future's
+    waited-type: func(g: Gen, v: Expr) -> Type {
+        if async-call(g, v) { return expr-type(g, v); }
+        match expr-type(g, v) {
+            future-type(x) => x,
+            _ => Type.unit-type,
+        }
+    }
+
+    // the checks, all of them (none: there are none)
+    // the tested value (bound once) and the checks of its pattern (none: it always matches)
+    tested: func(l: Codegen, test: IsTest) -> tuple<Node, option<Node>> {
+        let value = bind(l, gen-expr(l, test.value));
+        let checks: list<Node> = [];
+        let binds: list<PatternBinding> = [];
+        match test.pattern {
+            some(pattern) => pattern-test(l, pattern, value, expr-type(l.g, test.value), checks, binds),
+            none => {}
+        }
+        (value, all-of(checks))
+    }
+
+    all-of: func(checks: list<Node>) -> option<Node> {
+        if checks.len() == 0 { return none; }
+        let out = checks[0];
+        for i in 1..checks.len() { out = bin("&&", Type.bool-type, out, checks[i]); }
+        some(out)
+    }
+
+    // what a pattern checks of v (of type t), pushed to checks (v fits when all hold), and what it
+    // binds, to binds
+    pattern-test: func(
+        l: Codegen,
+        p: Pattern,
+        v: Node,
+        t: Type,
+        checks: list<Node>,
+        binds: list<PatternBinding>,
+    ) {
+        let g = l.g;
+        let s32-t = Type.num("s32");
+        // at a union of kinds, a pattern that looks inside one: its tag, then the pattern on the
+        // value of that kind
+        match t {
+            union-type(ks) => {
+                let i = pattern-kind(l, p, ks);
+                if i >= 0 {
+                    checks.push(
+                        bin(
+                            "==",
+                            Type.bool-type,
+                            load(v, ["tag",], false, s32-t, false),
+                            int-const(i, s32-t),
+                        )
+                    );
+                    pattern-test(l, p, load(v, ["c{i}",], false, ks[i], false), ks[i], checks, binds);
+                    return;
+                }
+            }
+            _ => {}
+        }
+        match p {
+            wild => {}
+            member(x) => {
+                match t {
+                    union-type(ks) => {
+                        let i = kind-index(g, gen-type(g, x.ty), ks);
+                        checks.push(
+                            bin(
+                                "==",
+                                Type.bool-type,
+                                load(v, ["tag",], false, s32-t, false),
+                                int-const(i, s32-t),
+                            )
+                        );
+                        pattern-test(
+                            l,
+                            x.sub,
+                            load(v, ["c{i}",], false, ks[i], false),
+                            ks[i],
+                            checks,
+                            binds,
+                        );
+                    }
+                    _ => pattern-test(l, x.sub, v, t, checks, binds),
+                }
+            }
+            // let n: T: the test of T's values, and n the whole value (narrowed where it is read)
+            typed(x) => {
+                match x.test {
+                    some(tp) => pattern-test(l, tp, v, t, checks, binds),
+                    none => {}
+                }
+                pattern-test(l, x.sub, v, t, checks, binds);
+            }
+            literal(e) => checks.push(eq-node(g, t, v, gen-expr(l, e))),
+            // lo <= v && v <= hi (v < hi: not inclusive)
+            range(x) => {
+                let bool-t = Type.bool-type;
+                checks.push(bin(">=", bool-t, v, gen-expr(l, x.lo)));
+                checks.push(
+                    bin(if x.inclusive { "<=" } else { "<" }, bool-t, v, gen-expr(l, x.hi))
+                );
+            }
+            name(pn) => {
+                if pn.kind == "case" { case-test(l, pn.name, Pattern.wild, v, t, checks, binds); }
+                else if pn.kind == "const" {
+                    match pn.value {
+                        some(e) => checks.push(eq-node(g, t, v, gen-expr(l, e))),
+                        none => {}
+                    }
+                } else {
+                    binds.push({ name: pn.name, value: v, mark: pn.mark, });
+                }
+            }
+            case(pc) => case-test(l, pc.name, pc.sub, v, t, checks, binds),
+            record(pr) => {
+                // a declared record's fields through its pointer, an anonymous one's in it
+                let shape: option<RecordInfo> = match t {
+                    named(rn) => some({
+                        fields: g.records[rn].fields,
+                        types: g.records[rn].field-types,
+                    }),
+                    anon-record(r) => some({ fields: r.fields, types: r.types, }),
+                    _ => none,
+                };
+                let arrow = match t {
+                    named(rn) => true,
+                    _ => false,
+                };
+                match shape {
+                    some(r) => {
+                        for i in 0..pr.fields.len() {
+                            let k = index-of(r.fields, pr.fields[i]);
+                            let ft = gen-type(g, r.types[k]);
+                            let x = load(v, ["f_{mangle(pr.fields[i])}",], arrow, ft, false);
+                            pattern-test(l, pr.patterns[i], x, ft, checks, binds);
+                        }
+                        // ...rest: an anonymous record of the fields not named
+                        if pr.rest != "" {
+                            let names: list<string> = [];
+                            let ts: list<Type> = [];
+                            let parts: list<Node> = [];
+                            for k in 0..r.fields.len() {
+                                if !contains(pr.fields, r.fields[k]) {
+                                    let ft = gen-type(g, r.types[k]);
+                                    names.push("f_" + mangle(r.fields[k]));
+                                    ts.push(ft);
+                                    parts.push(
+                                        load(v, ["f_{mangle(r.fields[k])}",], arrow, ft, false)
+                                    );
+                                }
+                            }
+                            let rest-fields: list<string> = [];
+                            for k in 0..r.fields.len() {
+                                if !contains(pr.fields, r.fields[k]) {
+                                    rest-fields.push(r.fields[k]);
+                                }
+                            }
+                            let rt = Type.anon-record({ fields: rest-fields, types: ts, });
+                            binds.push({
+                                name: pr.rest,
+                                value: make(c-type(g, rt), names, parts, rt),
+                                mark: pr.rest-mark,
+                            });
+                        }
+                    }
+                    none => {}
+                }
+            }
+            tuple(ps) => {
+                match t {
+                    tuple-type(xs) => {
+                        for i in 0..ps.len() {
+                            pattern-test(
+                                l,
+                                ps[i],
+                                load(v, ["f{i}",], false, xs[i], false),
+                                xs[i],
+                                checks,
+                                binds,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            alt(ps) => {
+                // any of them (they bind nothing)
+                let any: option<Node> = none;
+                let always = false;
+                for q in ps {
+                    let sub: list<Node> = [];
+                    pattern-test(l, q, v, t, sub, binds);
+                    match all-of(sub) {
+                        none => { always = true; }
+                        some(x) => {
+                            any = some(match any {
+                                none => x,
+                                some(a) => bin("||", Type.bool-type, a, x),
+                            });
+                        }
+                    }
+                }
+                if !always {
+                    match any {
+                        some(x) => checks.push(x),
+                        none => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // which of a union's kinds a pattern looks inside (-1: none, as _, a binding, | and let n: T,
+    // which test the whole value)
+    pattern-kind: func(l: Codegen, p: Pattern, ks: list<Type>) -> s64 {
+        let g = l.g;
+        let none-found = -1;
+        match p {
+            literal(e) => { return kind-index(g, expr-type(g, e), ks); }
+            range(x) => { return kind-index(g, expr-type(g, x.lo), ks); }
+            name(pn) => {
+                if pn.kind == "case" { return case-kind(pn.name, ks, g); }
+                if pn.kind == "const" {
+                    match pn.value {
+                        some(e) => { return kind-index(g, expr-type(g, e), ks); }
+                        none => {}
+                    }
+                }
+            }
+            case(pc) => { return case-kind(pc.name, ks, g); }
+            // the record kind with every field the pattern names (the checker saw one does)
+            record(pr) => {
+                for i in 0..ks.len() {
+                    let fields: list<string> = match ks[i] {
+                        named(n) => if g.records.has(n) { g.records[n].fields } else { [] },
+                        anon-record(r) => r.fields,
+                        _ => [],
+                    };
+                    let all = fields.len() > 0;
+                    for f in pr.fields {
+                        if !contains(fields, f) { all = false; }
+                    }
+                    if all { return i; }
+                }
+            }
+            tuple(ps) => {
+                for i in 0..ks.len() {
+                    match ks[i] {
+                        tuple-type(xs) => { if ps.len() > 0 && xs.len() == ps.len() { return i; } }
+                        unit-type => { if ps.len() == 0 { return i; } }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        none-found
+    }
+
+    // the kind with a case n
+    case-kind: func(n: string, ks: list<Type>, g: Gen) -> s64 {
+        for i in 0..ks.len() {
+            let has = match ks[i] {
+                option-type(x) => n == "none" || n == "some",
+                result-type(r) => n == "ok" || n == "err",
+                bool-type => n == "true" || n == "false",
+                named(vn) => g.variants.has(vn) && case-index(g.variants[vn], n) >= 0,
+                _ => false,
+            };
+            if has { return i; }
+        }
+        -1
+    }
+
+    // the case n of t: v is it, and its payload fits sub
+    case-test: func(
+        l: Codegen,
+        n: string,
+        sub: Pattern,
+        v: Node,
+        t: Type,
+        checks: list<Node>,
+        binds: list<PatternBinding>,
+    ) {
+        let g = l.g;
+        let bool-t = Type.bool-type;
+        match t {
+            option-type(x) => {
+                let has = load(v, ["has",], false, bool-t, false);
+                checks.push(if n == "none" { un("!", bool-t, has) } else { has });
+                pattern-test(l, sub, load(v, ["value",], false, x, false), x, checks, binds);
+            }
+            result-type(r) => {
+                let is-err = load(v, ["is_err",], false, bool-t, false);
+                checks.push(if n == "ok" { un("!", bool-t, is-err) } else { is-err });
+                let side = if n == "ok" { r.ok } else { r.err };
+                pattern-test(l, sub, load(v, [n,], false, side, false), side, checks, binds);
+            }
+            bool-type => checks.push(if n == "true" { v } else { un("!", bool-t, v) }),
+            named(vn) => {
+                let dv = g.variants[vn];
+                let k = case-index(dv, n);
+                let s32-t = Type.num("s32");
+                if is-enum(g, vn) { checks.push(bin("==", bool-t, v, int-const(k, t))); }
+                else {
+                    checks.push(
+                        bin("==", bool-t, load(v, ["tag",], true, s32-t, false), int-const(k, s32-t))
+                    );
+                    let pt = dv.cases[k].payload;
+                    pattern-test(
+                        l,
+                        sub,
+                        load(v, ["u", "c_{mangle(n)}",], true, pt, false),
+                        pt,
+                        checks,
+                        binds,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ================================================================ statements
+
+    // a block's statements in a scope of their own: its value when keep (as checked), else unit
+    gen-block: func(l: Codegen, b: Block, keep: bool) -> Node {
+        let g = l.g;
+        l.scopes.push(map.new());
+        let value = unit-const();
+        let outer = l.span;
+        for i in 0..b.stmts.len() {
+            let s = b.stmts[i];
+            if i < b.spans.len() && b.spans[i].line != 0 { l.span = b.spans[i]; }
+            value = unit-const();
+            match s {
+                let-stmt(x) => {
+                    let v = gen-expr(l, x.value);
+                    let c = declare(l, expr-type(g, x.value), x.name, x.mark);
+                    add(l, write-var(l, c, v));
+                }
+                let-pattern(x) => {
+                    // every value fits (the checker saw): only what it binds
+                    let v = temp(l, gen-expr(l, x.value));
+                    let checks: list<Node> = [];
+                    let binds: list<PatternBinding> = [];
+                    pattern-test(l, x.pattern, v, expr-type(g, x.value), checks, binds);
+                    for b in binds {
+                        let c = declare(l, b.value.ty, b.name, b.mark);
+                        add(l, write-var(l, c, b.value));
+                    }
+                }
+                return-stmt(e) => { add(l, return-stmt(gen-expr(l, e))); }
+                // x op= v: x read first, then v (left to right, as xs[i] op= v and every call's
+                // arguments)
+                assign(a) => {
+                    let at = expr-type(g, a.value);
+                    let named = lookup(l, a.name);
+                    // a global's (no local hides it: the checker named it by its key)
+                    if !found(named) && g.globals.has(name-text(a.name)) {
+                        let gt = gen-type(g, g.globals[name-text(a.name)].ty);
+                        if a.op == "=" { add(l, store(global-node(name-text(a.name), gt), bind(l, gen-expr(l, a.value)))); }
+                        else {
+                            let now = temp(l, global-node(name-text(a.name), gt));
+                            let v = gen-expr(l, a.value);
+                            add(l, store(global-node(name-text(a.name), gt), bind(l, arith(at, from-byte(a.op.byte-at(0)), now, v, at))));
+                        }
+                    } else {
+                        let c = binding(named);
+                        if a.op == "=" { add(l, write-var(l, c, gen-expr(l, a.value))); }
+                        else {
+                            let now = temp(l, read-var(l, c));
+                            let v = gen-expr(l, a.value);
+                            add(l, write-var(l, c, arith(at, from-byte(a.op.byte-at(0)), now, v, at)));
+                        }
+                    }
+                }
+                assign-field(a) => {
+                    let at = expr-type(g, a.value);
+                    if a.op == "=" {
+                        let sides = gen-operands(l, [a.target, a.value,]);
+                        add(l, store(load(sides[0], ["f_{mangle(a.name)}",], true, at, true), sides[1]));
+                    } else {
+                        let target = temp(l, gen-expr(l, a.target));
+                        let place = load(target, ["f_{mangle(a.name)}",], true, at, true);
+                        let cur = temp(l, place);
+                        let v = gen-expr(l, a.value);
+                        add(l, store(place, arith(at, from-byte(a.op.byte-at(0)), cur, v, at)));
+                    }
+                }
+                for-stmt(f) => gen-for(l, f),
+                loop-stmt(x) => gen-loop(l, x),
+                break-stmt => add(l, break-stmt(-1)),
+                continue-stmt => add(l, continue-stmt(-1)),
+                expr-stmt(x) => {
+                    if x.is-value && keep { value = gen-expr(l, x.value); }
+                    else { gen-discard(l, x.value); }
+                }
+            }
+        }
+        l.span = outer;
+        l.scopes.pop();
+        value
+    }
+
+    // a for: a loop with its counter (s64), counted up by its step; over a list, each item, its
+    // length read each turn (items pushed on are reached)
+    gen-for: func(l: Codegen, f: For) {
+        let g = l.g;
+        let s64 = Type.num("s64");
+        let bool-t = Type.bool-type;
+        let i = new-local(l, s64, "");
+        let counter = local-node(l, i);
+        let step = assign(i, bin("+", s64, counter, int-const(1, s64)));
+        match f.stop {
+            none => {
+                let lt = expr-type(g, f.start);
+                // a generator's values: stepped for each (its frame's result), until it is done
+                match lt {
+                    seq-type(x) => {
+                        let src = temp(l, gen-expr(l, f.start));
+                        l.scopes.push(map.new());
+                        let unit = enter-unit(l, f.unit);
+                        let item = declare(l, x, f.name, f.mark);
+                        let body = gen-body(l, f.body, false, -1);
+                        let first = write-var(l, item, future-result(l, src, x));
+                        let turn = exit-unit(l, unit, [first,]);
+                        l.scopes.pop();
+                        // each turn first: the next value (a call: into a local), or the end
+                        let saved = l.out;
+                        l.out = [];
+                        let more = temp(l, call("", "y_seq_next", [src,], bool-t, fx().call));
+                        add(l, if-stmt(un("!", bool-t, more), [break-stmt(-1),], []));
+                        let head = l.out;
+                        l.out = saved;
+                        add(l, loop-stmt(none, none, concat(head, concat(turn, body)), -1));
+                        return;
+                    }
+                    _ => {}
+                }
+                let it = match lt {
+                    list-type(x) => x,
+                    fixed-list(x) => x.item,
+                    _ => Type.unit-type,
+                };
+                // a fixed-length list's copy, its length a constant
+                let len = match lt {
+                    fixed-list(x) => x.len,
+                    _ => -1,
+                };
+                let xs = temp(l, gen-expr(l, f.start));
+                add(l, assign(i, int-const(0, s64)));
+                l.scopes.push(map.new());
+                // each turn: its environment (when a closure captures a binding of it), then its
+                // item
+                let unit = enter-unit(l, f.unit);
+                let item = declare(l, it, f.name, f.mark);
+                let body = gen-body(l, f.body, false, -1);
+                let first = write-var(l, item, list-get(xs, counter, c-type(g, it), it, len >= 0));
+                let turn = exit-unit(l, unit, [first,]);
+                l.scopes.pop();
+                let end = if len >= 0 {
+                    int-const(len, s64)
+                } else {
+                    load(xs, ["len",], true, s64, true)
+                };
+                let test = bin("<", bool-t, counter, end);
+                add(l, loop-stmt(some(test), some(step), concat(turn, body), -1));
+            }
+            some(stop) => {
+                // the counter of the range's own type (a u64's past s64's); it never steps past
+                // the end: a..b steps while it is before b, a..=b checks it is not b before each
+                // step (b may be the type's greatest)
+                let ends = gen-operands(l, [f.start, stop,]);
+                let vt = expr-type(g, f.start);
+                let at = new-local(l, vt, "");
+                let e = new-local(l, vt, "");
+                add(l, assign(at, ends[0]));
+                add(l, assign(e, ends[1]));
+                let here = local-node(l, at);
+                let last = local-node(l, e);
+                let next = assign(at, bin("+", vt, here, int-const(1, vt)));
+                l.scopes.push(map.new());
+                let unit = enter-unit(l, f.unit);
+                let var = declare(l, vt, f.name, f.mark);
+                let body = gen-body(l, f.body, false, -1);
+                let turn = exit-unit(l, unit, [write-var(l, var, here),]);
+                l.scopes.pop();
+                if f.inclusive {
+                    // the step at the top of each turn but the first (so a continue steps too)
+                    let first = new-local(l, bool-t, "");
+                    add(l, assign(first, bool-const(true)));
+                    let advance = if-stmt(
+                        un("!", bool-t, local-node(l, first)),
+                        [if-stmt(bin("==", bool-t, here, last), [break-stmt(-1),], []), next,],
+                        [],
+                    );
+                    let each = concat([advance, assign(first, bool-const(false)),], concat(turn, body));
+                    add(l, if-stmt(bin("<=", bool-t, here, last), [loop-stmt(none, none, each, -1),], []));
+                } else {
+                    let test = bin("<", bool-t, here, last);
+                    add(l, loop-stmt(some(test), some(next), concat(turn, body), -1));
+                }
+            }
+        }
+    }
+
+    // loop { … }: its body each turn (its environment first, when a closure captures a binding of
+    // it), until a break leaves
+    gen-loop: func(l: Codegen, x: Loop) {
+        l.scopes.push(map.new());
+        let unit = enter-unit(l, x.unit);
+        let body = gen-body(l, x.body, false, -1);
+        let turn = exit-unit(l, unit, []);
+        l.scopes.pop();
+        add(l, loop-stmt(none, none, concat(turn, body), -1));
+    }
+
+    found: func(v: option<Var>) -> bool {
+        match v {
+            some(x) => true,
+            none => false,
+        }
+    }
+
+    // the binding an option holds (the checker saw it bound)
+    binding: func(v: option<Var>) -> Var {
+        match v {
+            some(x) => x,
+            none => panic("codegen: a name the checker bound has no binding"),
+        }
+    }
+
+}

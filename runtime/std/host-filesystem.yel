@@ -1,0 +1,280 @@
+//+build native
+
+// wasi:filesystem natively, as Porffor's host/native: what a component asks its host for, given
+// here over the system's calls (POSIX's *at calls on a descriptor; a descriptor's handle is its fd
+// + 1). WASI's async funcs finish at once here; a file's stream is yel's, a task between the file
+// and the stream. A program's calls of wasi:filesystem bind to these natively (compiler/abi.yel's
+// host-key) and to the host itself in a component.
+
+from "wasi:filesystem" include types;
+
+module wasi-filesystem-preopens {
+    // the working directory, as `wasmtime --dir .` gives it
+    get-directories: func() -> list<tuple<types.descriptor, string>> {
+        let path = memory.c-path(".");
+        let fd = system.openat(system.at-cwd(), path, system.o-read-only() | system.o-directory());
+        memory.free(path);
+        if fd < 0 { [] } else { [(wasi-filesystem-types.descriptor-of(fd), "."),] }
+    }
+}
+
+module wasi-filesystem-types {
+    // ---- a descriptor and its fd
+
+    descriptor-of: func(fd: s64) -> types.descriptor { memory.handle(fd + 1) }
+
+    fd: func(d: types.descriptor & readonly) -> s64 { memory.handle-number(d) - 1 }
+
+    descriptor-drop: func(self: types.descriptor) { system.close(fd(self)); }
+
+    // ---- why a call failed: errno as WASI's error-code
+
+    failure: func(errno: s64) -> types.error-code {
+        if errno == system.e-access() { return types.error-code.access; }
+        if errno == system.e-exists() { return types.error-code.exist; }
+        if errno == system.e-no-entry() { return types.error-code.no-entry; }
+        if errno == system.e-not-directory() { return types.error-code.not-directory; }
+        if errno == system.e-is-directory() { return types.error-code.is-directory; }
+        if errno == system.e-not-empty() { return types.error-code.not-empty; }
+        if errno == system.e-permission() { return types.error-code.not-permitted; }
+        if errno == system.e-invalid() { return types.error-code.invalid; }
+        if errno == system.e-bad-descriptor() { return types.error-code.bad-descriptor; }
+        if errno == system.e-name-too-long() { return types.error-code.name-too-long; }
+        if errno == system.e-loop() { return types.error-code.loop; }
+        if errno == system.e-cross-device() { return types.error-code.cross-device; }
+        if errno == system.e-no-space() { return types.error-code.insufficient-space; }
+        if errno == system.e-read-only() { return types.error-code.read-only; }
+        if errno == system.e-busy() { return types.error-code.busy; }
+        types.error-code.io
+    }
+
+    // a call's number as a result: none failed where it is 0 or more, else errno's error
+    done: func(result: s64) -> result<(), types.error-code> {
+        if result < 0 { err(failure(system.errno())) } else { ok(()) }
+    }
+
+    // a call on a path in self's directory: the path as C wants it, freed after
+    at-path: func(self: types.descriptor & readonly, path: string, call: func(s64, s64) -> s64) -> result<(), types.error-code> {
+        let c-path = memory.c-path(path);
+        let result = call(fd(self), c-path);
+        let errno = system.errno();
+        memory.free(c-path);
+        if result < 0 { err(failure(errno)) } else { ok(()) }
+    }
+
+    // ---- opening, and what a path is
+
+    descriptor-open-at: async func(self: types.descriptor, path-flags: types.path-flags, path: string, open-flags: types.open-flags, flags: types.descriptor-flags) -> result<types.descriptor, types.error-code> {
+        let access = if flags.write && flags.read { system.o-read-write() } else if flags.write { system.o-write-only() } else { system.o-read-only() };
+        let options = access
+            | (if open-flags.create { system.o-create() } else { 0 })
+            | (if open-flags.directory { system.o-directory() } else { 0 })
+            | (if open-flags.exclusive { system.o-exclusive() } else { 0 })
+            | (if open-flags.truncate { system.o-truncate() } else { 0 })
+            | (if path-flags.symlink-follow { 0 } else { system.o-no-follow() });
+        let c-path = memory.c-path(path);
+        let opened = system.openat(fd(self), c-path, options);
+        let errno = system.errno();
+        memory.free(c-path);
+        if opened < 0 { err(failure(errno)) } else { ok(descriptor-of(opened)) }
+    }
+
+    descriptor-stat: async func(self: types.descriptor) -> result<types.descriptor-stat, types.error-code> { stat-path(self, "", true) }
+
+    descriptor-stat-at: async func(self: types.descriptor, path-flags: types.path-flags, path: string) -> result<types.descriptor-stat, types.error-code> {
+        stat-path(self, path, path-flags.symlink-follow)
+    }
+
+    descriptor-get-type: async func(self: types.descriptor) -> result<types.descriptor-type, types.error-code> {
+        match stat-path(self, "", true) {
+            ok(found) => ok(found.type),
+            err(error) => err(error),
+        }
+    }
+
+    stat-path: func(self: types.descriptor & readonly, path: string, follow: bool) -> result<types.descriptor-stat, types.error-code> {
+        let out: list<s64> = [0, 0, 0, 0, 0, 0, 0, 0, 0,];
+        let result = system.stat(fd(self), path, follow, memory.items-address(out));
+        if result < 0 { return err(failure(-result)); }
+        ok({
+            type: kind(out[0]),
+            link-count: out[1] as u64,
+            size: out[2] as u64,
+            data-access-timestamp: some({ seconds: out[3], nanoseconds: out[4] as u32, }),
+            data-modification-timestamp: some({ seconds: out[5], nanoseconds: out[6] as u32, }),
+            status-change-timestamp: some({ seconds: out[7], nanoseconds: out[8] as u32, }),
+        })
+    }
+
+    // a kind of file, as the native helpers number it (runtime/wasi-native.h's yn_fs_kind)
+    kind: func(number: s64) -> types.descriptor-type {
+        if number == 0 { return types.descriptor-type.regular-file; }
+        if number == 1 { return types.descriptor-type.directory; }
+        if number == 2 { return types.descriptor-type.symbolic-link; }
+        if number == 3 { return types.descriptor-type.block-device; }
+        if number == 4 { return types.descriptor-type.character-device; }
+        if number == 5 { return types.descriptor-type.fifo; }
+        if number == 6 { return types.descriptor-type.socket; }
+        types.descriptor-type.other(none)
+    }
+
+    // ---- directories
+
+    descriptor-create-directory-at: async func(self: types.descriptor, path: string) -> result<(), types.error-code> {
+        at-path(self, path, { dir, at -> system.mkdirat(dir, at) })
+    }
+
+    descriptor-remove-directory-at: async func(self: types.descriptor, path: string) -> result<(), types.error-code> {
+        at-path(self, path, { dir, at -> system.unlinkat(dir, at, system.at-remove-dir()) })
+    }
+
+    descriptor-unlink-file-at: async func(self: types.descriptor, path: string) -> result<(), types.error-code> {
+        at-path(self, path, { dir, at -> system.unlinkat(dir, at, 0) })
+    }
+
+    descriptor-rename-at: async func(self: types.descriptor, old-path: string, new-descriptor: types.descriptor, new-path: string) -> result<(), types.error-code> {
+        let from = memory.c-path(old-path);
+        let to = memory.c-path(new-path);
+        let result = system.renameat(fd(self), from, fd(new-descriptor), to);
+        let errno = system.errno();
+        memory.free(from);
+        memory.free(to);
+        if result < 0 { err(failure(errno)) } else { ok(()) }
+    }
+
+    // its entries as a stream (a task reads them in), and a future for how the reading ended
+    descriptor-read-directory: func(self: types.descriptor) -> tuple<stream<types.directory-entry>, future<result<(), types.error-code>>> {
+        let ends: tuple<stream<types.directory-entry>, writer<types.directory-entry>> = streams.stream-pair(64);
+        let (entries, out) = ends;
+        (entries, start entries-out(fd(self), out))
+    }
+
+    entries-out: async func(dir-fd: s64, out: writer<types.directory-entry>) -> result<(), types.error-code> {
+        let dir = system.dir-open(dir-fd);
+        if dir < 0 {
+            streams.close(out);
+            return err(failure(-dir));
+        }
+        let found: list<s64> = [0,];
+        loop {
+            let name = system.dir-next(dir, memory.items-address(found));
+            if name == "" { break; }
+            wait streams.write(out, { type: kind(found[0]), name: name, });
+        }
+        system.dir-close(dir);
+        streams.close(out);
+        ok(())
+    }
+
+    // ---- a file's bytes as streams
+
+    // its bytes from offset on, as a stream (a task reads them in), and a future for how the
+    // reading ended
+    descriptor-read-via-stream: func(self: types.descriptor, offset: u64) -> tuple<stream<u8>, future<result<(), types.error-code>>> {
+        let ends: tuple<stream<u8>, writer<u8>> = streams.stream-pair(65536);
+        let (bytes, out) = ends;
+        (bytes, start bytes-out(fd(self), offset as s64, out))
+    }
+
+    bytes-out: async func(file: s64, offset: s64, out: writer<u8>) -> result<(), types.error-code> {
+        let at = offset;
+        loop {
+            let chunk = buffer.buffer(65536);
+            let got = system.pread(file, memory.buffer-data(chunk), 65536, at);
+            if got < 0 {
+                streams.close(out);
+                return err(failure(system.errno()));
+            }
+            if got == 0 { break; }
+            memory.set-buffer-length(chunk, got);
+            wait streams.write-all(out, chunk.to-bytes());
+            at += got;
+        }
+        streams.close(out);
+        ok(())
+    }
+
+    // data written from offset on as it comes (a task reads it to its end); a future for how the
+    // writing ended
+    descriptor-write-via-stream: func(self: types.descriptor, data: stream<u8>, offset: u64) -> future<result<(), types.error-code>> {
+        start bytes-in(fd(self), data, offset as s64, false)
+    }
+
+    // data written at the file's end as it comes
+    descriptor-append-via-stream: func(self: types.descriptor, data: stream<u8>) -> future<result<(), types.error-code>> {
+        start bytes-in(fd(self), data, 0, true)
+    }
+
+    bytes-in: async func(file: s64, data: stream<u8>, offset: s64, at-end: bool) -> result<(), types.error-code> {
+        let at = if at-end { system.seek-end(file) } else { offset };
+        loop {
+            let bytes = wait streams.read-some(data, 65536);
+            if bytes.len() == 0 { return ok(()); }
+            let chunk = buffer.buffer(bytes.len());
+            chunk.push-bytes(bytes);
+            match write-chunk(file, chunk, at) {
+                ok(wrote) => { at += wrote; }
+                err(error) => { return err(error); }
+            }
+        }
+        ok(())
+    }
+
+    // a buffer's bytes written at a position, all of them; how many
+    write-chunk: func(file: s64, chunk: buffer, at: s64) -> result<s64, types.error-code> {
+        let total = chunk.len();
+        let written = 0;
+        loop {
+            if written >= total { return ok(total); }
+            let wrote = system.pwrite(file, memory.buffer-data(chunk) + written, total - written, at + written);
+            if wrote < 0 { return err(failure(system.errno())); }
+            written += wrote;
+        }
+        ok(total)
+    }
+}
+
+// the system's calls the host makes (POSIX's: the same natively everywhere yel builds), each C
+// written in place, and the constants they take and give
+module system {
+    @c(name = "yel_host_filesystem_openat") openat: extern func(dir: s64, path: s64, options: s64) -> s64;
+    @c(name = "yel_host_filesystem_close") close: extern func(fd: s64) -> s64;
+    @c(name = "yel_host_filesystem_pread") pread: extern func(fd: s64, at: s64, count: s64, offset: s64) -> s64;
+    @c(name = "yel_host_filesystem_pwrite") pwrite: extern func(fd: s64, at: s64, count: s64, offset: s64) -> s64;
+    @c(name = "yel_host_filesystem_seek_end") seek-end: extern func(fd: s64) -> s64;
+    @c(name = "yel_host_filesystem_mkdirat") mkdirat: extern func(dir: s64, path: s64) -> s64;
+    @c(name = "yel_host_filesystem_unlinkat") unlinkat: extern func(dir: s64, path: s64, options: s64) -> s64;
+    @c(name = "yel_host_filesystem_renameat") renameat: extern func(from-dir: s64, from: s64, to-dir: s64, to: s64) -> s64;
+    @c(name = "yn_fs_stat") stat: extern func(fd: s64, path: string, follow: bool, out: s64) -> s64;
+    @c(name = "yn_fs_dir_open") dir-open: extern func(fd: s64) -> s64;
+    @c(name = "yn_fs_dir_next") dir-next: extern func(dir: s64, kind: s64) -> string;
+    @c(name = "yel_host_filesystem_dir_close") dir-close: extern func(dir: s64);
+    @c(name = "yel_host_filesystem_errno") errno: extern func() -> s64;
+
+    @c(name = "yel_host_filesystem_at_cwd") at-cwd: extern func() -> s64;
+    @c(name = "yel_host_filesystem_at_remove_dir") at-remove-dir: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_read_only") o-read-only: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_write_only") o-write-only: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_read_write") o-read-write: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_create") o-create: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_directory") o-directory: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_exclusive") o-exclusive: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_truncate") o-truncate: extern func() -> s64;
+    @c(name = "yel_host_filesystem_o_no_follow") o-no-follow: extern func() -> s64;
+
+    @c(name = "yel_host_filesystem_e_access") e-access: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_exists") e-exists: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_no_entry") e-no-entry: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_not_directory") e-not-directory: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_is_directory") e-is-directory: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_not_empty") e-not-empty: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_permission") e-permission: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_invalid") e-invalid: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_bad_descriptor") e-bad-descriptor: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_name_too_long") e-name-too-long: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_loop") e-loop: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_cross_device") e-cross-device: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_no_space") e-no-space: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_read_only") e-read-only: extern func() -> s64;
+    @c(name = "yel_host_filesystem_e_busy") e-busy: extern func() -> s64;
+}

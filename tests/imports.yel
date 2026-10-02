@@ -1,0 +1,28 @@
+// WASI 0.3 imports: natively through std's host (runtime/std/host-*.yel) or the runtime's C, in a
+// component through the host; the same lifting and lowering either way
+
+from "wasi:cli" include environment, exit;
+from "wasi:random" include random, insecure-seed;
+from "wasi:clocks" include system-clock, monotonic-clock;
+
+main: func(argv: list<string>) -> s32 {
+    print("arguments: {environment.get-arguments().len() >= 1}\n");
+    let pairs = environment.get-environment();
+    let keys = 0;
+    for p in pairs {
+        if p.0.len() > 0 { keys += 1; }
+    }
+    print("environment: {keys == pairs.len()}\n");
+    print("random bytes: {random.get-random-bytes(16).len()}\n");
+    let seed = insecure-seed.get-insecure-seed();
+    print("seeds differ: {seed.0 != seed.1}\n");
+    let now = system-clock.now();
+    print("after 2020: {now.seconds > 1577836800} {now.nanoseconds < 1000000000}\n");
+    let a = monotonic-clock.now();
+    let b = monotonic-clock.now();
+    print("monotonic: {b >= a}\n");
+    // what was printed survives the host's exit (a component's libc buffer flushed first)
+    print("exiting");
+    exit.exit(ok(()));
+    1
+}

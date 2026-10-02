@@ -1,0 +1,8 @@
+// error: 4:5: the match has no arm for '{': add one, or a _ arm
+main: func() {
+    let c = 'x';
+    match c {
+        '\0'..='z' => {}
+        '|'..='~' => {}
+    }
+}

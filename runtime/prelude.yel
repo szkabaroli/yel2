@@ -1,0 +1,39 @@
+// The runtime's C functions (runtime/yel.h), as every program sees them: compiled code calls each C
+// function directly, with its C types. A generic extern (func<T>) is a C macro that takes the C
+// type of each type argument first: len(xs) of a list<string> is yel_list_len(ystr, xs).
+
+// output, files, the process
+@c(name = "yel_print") print: extern func(s: string);
+@c(name = "yel_eprint") eprint: extern func(s: string);
+// the target triple the runtime was built for (yelc's default for --backend bitcode)
+@c(name = "yel_host_triple") host-triple: extern func() -> string;
+// whether stderr may be colored: a terminal, and NO_COLOR not set
+@c(name = "yel_stderr_color") stderr-color: extern func() -> bool;
+@c(name = "yel_panic") panic: extern func(message: string) -> never;
+// a place no run reaches (after a call that does not return, though its type cannot say so): C is
+// told, and does no work for it (in wasm, a trap; natively, nothing defined happens if it is reached)
+@c(name = "(__builtin_unreachable(), (yunit)0)") unreachable: extern func() -> never;
+
+// a decimal float's value (the compiler keys a float literal by it)
+@c(name = "yel_parse_f64") parse-f64: extern func(s: string) -> f64;
+// a float's IEEE bits (the bitcode backend writes a float constant so)
+@c(name = "y_bits_f64") f64-bits: extern func(value: f64) -> u64;
+@c(name = "y_bits_f32") f32-bits: extern func(value: f32) -> u64;
+
+// strings: bytes
+@c(name = "(($2) >= 0 && ($2) < ($1).len ? (int64_t)(unsigned char)($1).data[($2)] : -1)") byte-at: extern func(s: string, i: s64) -> s64;
+@c(name = "(y_str_of((const char[]){ (char)($1) }, 1))") from-byte: extern func(b: s64) -> string;
+// a float with digits after the point, rounded (std's format.fixed, "{x:.2}")
+@c(name = "yel_fixed") fixed-text: extern func(value: f64, digits: s32) -> string;
+// a value as its text, as an interpolation shows it
+to-string: func<T>(v: T) -> string { "{v}" }
+
+// v, which the C compiler must take as unknown (it cannot drop what makes it, nor see through
+// it): a benchmark's barrier, as Rust's std::hint::black_box and Porffor's asm volatile
+@c(name = "yel_black_box") black-box: extern func<T>(v: T) -> T;
+
+// lists
+
+// maps: values by keys of any type (K: equal as == says, hashed to match), in the order they were
+// set (sets, a map<K, ()>: runtime/std/set.yel)
+

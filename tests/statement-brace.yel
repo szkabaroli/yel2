@@ -1,0 +1,16 @@
+// an if, a match or a block that starts a statement is the statement, as Rust's: what follows its
+// } is the next statement (if c { … } -64 is an if, then -64), and in parens it is an operand
+
+value: func(c: bool) -> s32 {
+    if c { print("yes\n"); }
+    -64
+}
+twice: func(n: s32) -> s32 {
+    let v = (if n > 0 { n } else { 0 - n }) - 1;
+    match n { 0 => print("zero\n"), _ => print("some\n"), }
+    -v
+}
+main: func() -> s32 {
+    print("{value(true)} {twice(5)} {twice(0)}\n");
+    0
+}

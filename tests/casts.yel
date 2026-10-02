@@ -1,0 +1,29 @@
+// x as T, as the conversions' table has it: each defined (no C undefined behaviour), a literal
+// taking T's type
+
+main: func() {
+    // integer to integer: wraps (two's complement)
+    let big: s32 = 300;
+    let neg: s32 = -1;
+    let two-hundred: s32 = 200;
+    print("{big as u8} {neg as u32} {neg as u64} {(4294967296 as s64) as s32} {two-hundred as s8}\n");
+    // integer to float: the nearest
+    let n: s64 = 9007199254740993;
+    print("{7 as f64} {n as f64} {neg as f32}\n");
+    // float to integer: saturates, NaN is 0, toward zero
+    let x: f64 = 1e20;
+    let y: f64 = -2.9;
+    print("{x as s32} {-x as s32} {x as u8} {-x as u8} {y as s32} {y as u8} {nan as s64} {inf as s16}\n");
+    // float to float: rounds; past f32's range, an infinity
+    let z: f64 = 1e300;
+    print("{1.1 as f32} {z as f32} {-z as f32} {(2.5 as f32) as f64}\n");
+    // bool to integer, char to integer
+    print("{true as s32} {false as u8} {'A' as s32} {'→' as u32} {'→' as u8}\n");
+    // integer to char: U+FFFD where no Unicode scalar value is
+    let surrogate: s32 = 55296;
+    print("{65 as char} {8594 as char} {surrogate as char} {neg as char} {1114112 as char}\n");
+    // precedence: tighter than * and +, looser than unary minus
+    let a: s32 = 7;
+    let b: s32 = 2;
+    print("{a as f64 / b as f64} {-a as s64} {a + b as s32 * 2}\n");
+}

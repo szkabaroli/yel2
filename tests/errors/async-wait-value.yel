@@ -1,0 +1,5 @@
+// error: 4:13: wait takes an async func's call or a future, found an integer
+main: async func() {
+    let n = 3;
+    let m = wait n;
+}

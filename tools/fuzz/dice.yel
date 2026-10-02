@@ -1,0 +1,42 @@
+// The fuzzer's randomness: splitmix64, from the seed alone (a seed is one program, the same each
+// time it is made, so a failure is made again from its number).
+
+record Dice { state: u64, }
+
+module dice {
+    // the next of the stream's numbers
+    next: func(d: Dice) -> u64 {
+        d.state += 11400714819323198485;
+        let z = d.state;
+        z = (z ^ (z >> 30)) * 13787848793156543929;
+        z = (z ^ (z >> 27)) * 10723151780598845931;
+        z ^ (z >> 31)
+    }
+
+    // a number from 0 to bound, bound left out (0 for a bound of none)
+    below: func(d: Dice, bound: s64) -> s64 {
+        if bound <= 0 { return 0; }
+        (next(d) % (bound as u64)) as s64
+    }
+
+    // a number from low to high, both in
+    between: func(d: Dice, low: s64, high: s64) -> s64 { low + below(d, high - low + 1) }
+
+    // true percent times in a hundred
+    chance: func(d: Dice, percent: s64) -> bool { below(d, 100) < percent }
+
+    // one of xs (xs not empty)
+    pick: func<T>(d: Dice, xs: list<T>) -> T { xs[below(d, xs.len())] }
+
+    // an index from weights: i taken weights[i] times in their sum (0 for none)
+    weighted: func(d: Dice, weights: list<s64>) -> s64 {
+        let total: s64 = 0;
+        for w in weights { total += w; }
+        let roll = below(d, total);
+        for i in 0..weights.len() {
+            if roll < weights[i] { return i; }
+            roll -= weights[i];
+        }
+        0
+    }
+}

@@ -1,0 +1,6 @@
+key=→!! 299 9
+299 key=→!!0,1
+notes: 21 bytes, {title: "notes", body: buffer("line 0\nline 1\nline 2\n")}
+6 5 ['h', 'é', 'l', 'l', 'o'] [104, 195, 169, 108, 108, 111]
+ok("hi") err(1) true
+42 TEA ababab 007 desserts

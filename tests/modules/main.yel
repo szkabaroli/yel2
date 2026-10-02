@@ -1,0 +1,17 @@
+// a program of two files and a module of its own, including two modules of the package beside it
+// (tests/shapes), one of them under another name
+
+from "test:shapes" include geometry, colors as palette;
+
+module text {
+    shout: func(s: string) -> string { "{s}!" }
+}
+
+main: func(argv: list<string>) -> s32 {
+    let moved: geometry.Point = geometry.move(geometry.origin(), 3, 4);
+    print("{moved} {geometry.distance2(moved)} {text.shout(palette.name(palette.Color.red))}\n");
+    let shape = geometry.Shape.circle(2);
+    let shapes: list<geometry.Shape> = [shape, geometry.Shape.dot,];
+    print("{shapes} {geometry.area(shape)} {helper()}\n");
+    0
+}

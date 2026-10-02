@@ -1,0 +1,31 @@
+// a value a call keeps in another of its arguments (map.set's value in the map, push's item in the
+// list) lives as long as that one: where that one is a local here, the value has not escaped (a map
+// made in a block, given readonly at once); where it is the caller's, it is the caller's (on the
+// heap); and a record kept in a list made outside a loop is each turn's own
+
+record Point { x: s32, y: s32, }
+
+// kept in the caller's map: its record outlives this call
+put: func(m: map<string, Point>, k: string, n: s32) {
+    let p: Point = { x: n, y: n * 2, };
+    m.set(k, p);
+}
+
+main: func() -> s32 {
+    let m: map<string, Point> = map.new();
+    for i in 0..20 { put(m, "k{i}", i); }
+    let total = 0;
+    for p in m.values() { total += p.y; }
+    // each turn's record, held by a list made before the loop
+    let points: list<Point> = [];
+    for i in 0..5 {
+        let p: Point = { x: i, y: i * i, };
+        points.push(p);
+    }
+    let squares: list<s32> = [];
+    for p in points { squares.push(p.y); }
+    // a map set in a block, given readonly at once (get-or's)
+    let c = ({ let w: map<string, char> = map.new(); w.set("a", 'x'); w }).get-or("a", '?');
+    print("{total} {squares:?} {c}\n");
+    0
+}

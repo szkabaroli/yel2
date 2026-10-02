@@ -1,0 +1,21 @@
+// Porffor's bench/hash.js: an integer hash, 8 slices of 16 seeds, 2 million steps each
+
+from "wasi:clocks" include monotonic-clock;
+
+hash-slice: func(lo: s64, count: s64) -> s64 {
+    let acc: s64 = 0;
+    for p in lo..lo + count {
+        let h = p;
+        for i in 0..2000000 { h = (h * 31 + 7) % 2147483647; }
+        acc = (acc + h) % 2147483647;
+    }
+    acc
+}
+
+main: func() {
+    let t = monotonic-clock.now();
+    let hash: s64 = 0;
+    for s in 0..8 { hash += hash-slice((s * 16) as s64, 16); }
+    print("hash: {hash}\n");
+    print("time: {(monotonic-clock.now() - t) as s64 / 1000000} ms\n");
+}

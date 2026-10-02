@@ -1,0 +1,38 @@
+// map<K, V>: values by keys of any type, equal as == says (a declared record or a list by
+// itself, a string, a tuple or an option by its parts), in the order they were set; set<T> (a
+// map<T, ()>): each value once
+
+type id = distinct u32;
+record P { name: string, }
+main: func() {
+    let ages: map<string, s32> = map.new();
+    ages.set("ada", 36);
+    ages.set("alan", 41);
+    ages.set("grace", 85);
+    ages.remove("alan");
+    print("{ages.keys()} {ages["grace"]} {ages.has("alan")} {ages.len()}\n");
+    let squares: map<s32, s32> = map.new();
+    for i in 0..50 { squares.set(i, i * i); }
+    for i in 0..40 { squares.remove(i); }
+    print("{squares.keys()} {squares[45]}\n");
+    let pairs: map<tuple<string, s32>, string> = map.new();
+    pairs.set(("f", 1), "one");
+    pairs.set(("f", 2), "two");
+    print("{pairs[("f", 2)]} {pairs.has(("g", 1))}\n");
+    let byid: map<id, string> = map.new();
+    byid.set(7 as id, "seven");
+    let p: P = { name: "x", };
+    let q: P = { name: "x", };
+    let who: map<P, s32> = map.new();
+    who.set(p, 1);
+    print("{byid[7 as id]} {who.has(p)} {who.has(q)}\n");
+    let seen: set<string> = set.new();
+    for w in ["a", "b", "a", "c", "b",] { seen.add(w); }
+    seen.remove("c");
+    print("{seen.values()} {seen.has("a")} {seen.has("c")} {seen.len()}\n");
+    let opts: set<option<s32>> = set.new();
+    opts.add(some(1));
+    opts.add(none);
+    opts.add(some(1));
+    print("{opts.values()}\n");
+}

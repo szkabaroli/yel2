@@ -1,0 +1,5 @@
+// error: 4:13: start begins an async func's call: start f(…), f an async func
+plain: func() -> s32 { 1 }
+main: async func() {
+    let f = start plain();
+}

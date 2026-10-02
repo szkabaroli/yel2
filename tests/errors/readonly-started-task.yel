@@ -1,0 +1,15 @@
+// error: 11:27: argument 1 of watch is wanted readonly, and the started task holds it while it runs: live is used again after (once readonly, use the readonly name)
+watch: async func(xs: list<s32> & readonly) -> string {
+    let first = "{xs}";
+    wait yield-turn();
+    wait yield-turn();
+    "readonly param was {first}, now {xs}"
+}
+
+main: async func() {
+    let live: list<s32> = [1,];
+    let job = start watch(live);
+    wait yield-turn();
+    live.push(2);
+    print("{wait job}\n");
+}

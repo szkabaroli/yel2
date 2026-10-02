@@ -1,0 +1,284 @@
+// Bytes and names: what the lexer, the parser and the generator all read strings with.
+
+// ================================================================ names
+
+// a name, interned: one id for each distinct string (two names are the same name exactly when
+// their ids are equal), so a map keyed by names hashes and compares a number, not the bytes
+type Name = distinct s64;
+
+// every name interned so far: its id by its text, and its text by its id (in the order interned)
+let name-ids: map<string, Name>;
+let name-texts: list<string>;
+
+// text's name (made the first time it is asked for)
+intern: func(text: string) -> Name {
+    match name-ids.get(text) {
+        some(id) => id,
+        none => {
+            let id = name-texts.len() as Name;
+            name-texts.push(text);
+            name-ids.set(text, id);
+            id
+        }
+    }
+}
+
+// a name's text
+name-text: func(name: Name) -> string { name-texts[name as s64] }
+
+// a name as it shows in a string ("record {name} has no field": its text, not its id)
+display: func(name: Name) -> string { name-text(name) }
+
+is-alpha: func(c: s64) -> bool {
+    (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95
+}
+
+is-digit: func(c: s64) -> bool {
+    c >= 48 && c <= 57
+}
+
+is-name-char: func(c: s64) -> bool {
+    is-alpha(c) || is-digit(c)
+}
+
+// where a name that starts at i ends: a hyphen is part of it only when a name character follows
+name-end: func(src: string, i: s64) -> s64 {
+    let n = src.len();
+    for j in i..n {
+        let c = src.byte-at(j);
+        if !is-name-char(c) && !(c == 45 && is-name-char(src.byte-at(j + 1))) { return j; }
+    }
+    n
+}
+
+digits-end: func(src: string, i: s64) -> s64 {
+    let n = src.len();
+    for j in i..n {
+        if !is-digit(src.byte-at(j)) { return j; }
+    }
+    n
+}
+
+// a number that starts at i: where it ends, and whether it is a float. 0x, 0o and 0b take their
+// radix's digits; a fraction (when allowed) needs a digit after the `.`, an exponent one after e
+record NumberEnd { end: s64, is-float: bool, }
+
+number-end: func(src: string, i: s64, fraction: bool) -> NumberEnd {
+    if src.byte-at(i) == 48 {
+        let radix = radix-of(src.byte-at(i + 1));
+        if radix > 0 && radix-digit(src.byte-at(i + 2), radix) {
+            return { end: radix-end(src, i + 2, radix), is-float: false, };
+        }
+    }
+    let end = digits-end(src, i);
+    let is-float = false;
+    if fraction && src.byte-at(end) == 46 && is-digit(src.byte-at(end + 1)) {
+        end = digits-end(src, end + 1);
+        is-float = true;
+    }
+    let e = src.byte-at(end);
+    if e == 101 || e == 69 {
+        let d = end + 1;
+        let sign = src.byte-at(d);
+        if sign == 43 || sign == 45 { d += 1; }
+        if is-digit(src.byte-at(d)) {
+            end = digits-end(src, d);
+            is-float = true;
+        }
+    }
+    { end: end, is-float: is-float, }
+}
+
+// 16, 8 or 2 for the letter after a 0 (x, o, b); 0 for none
+radix-of: func(c: s64) -> s64 {
+    if c == 120 { 16 } else if c == 111 { 8 } else if c == 98 { 2 } else { 0 }
+}
+
+radix-digit: func(c: s64, radix: s64) -> bool {
+    if radix == 16 { is-digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70) }
+    else if radix == 8 { c >= 48 && c <= 55 }
+    else { c == 48 || c == 49 }
+}
+
+radix-end: func(src: string, i: s64, radix: s64) -> s64 {
+    let n = src.len();
+    for j in i..n {
+        if !radix-digit(src.byte-at(j), radix) { return j; }
+    }
+    n
+}
+
+// where a character literal's text ends (its closing '), from just after the opening one
+char-end: func(src: string, from: s64) -> s64 {
+    let n = src.len();
+    let i = from;
+    for step in 0..n + 1 {
+        if i >= n { return n; }
+        let c = src.byte-at(i);
+        if c == 39 { return i; }
+        if c == 10 { return n; }
+        if c == 92 { i += 2; } else { i += 1; }
+    }
+    n
+}
+
+line-end: func(src: string, i: s64) -> s64 {
+    let n = src.len();
+    for j in i..n {
+        if src.byte-at(j) == 10 { return j; }
+    }
+    n
+}
+
+// where a string's text ends (its closing quote), from just after the opening one: a quote inside
+// an interpolation's braces opens a string of that expression's
+// whether the { at raw[i] opens an interpolation in a C template (c"..."): a name or a ( follows
+opens-interp: func(raw: string, i: s64) -> bool {
+    let c = raw.byte-at(i + 1);
+    is-alpha(c) || c == 40
+}
+
+// where a string's text ends (its closing quote), from just after the opening one: its
+// interpolations' braces counted (in a C template, c"...", only those that open one)
+string-end: func(src: string, from: s64) -> s64 { quote-end(src, from, false) }
+
+template-end: func(src: string, from: s64) -> s64 { quote-end(src, from, true) }
+
+quote-end: func(src: string, from: s64, template: bool) -> s64 {
+    let len = src.len();
+    let at = from;
+    let depth = 0;
+    for step in 0..len + 1 {
+        if at >= len { return len; }
+        let byte = src.byte-at(at);
+        if byte == 92 {
+            at += 2;
+        } else if byte == 34 && depth == 0 {
+            return at;
+        } else if byte == 34 {
+            at = string-end(src, at + 1) + 1;
+        } else {
+            if byte == 123 && (!template || depth > 0 || opens-interp(src, at)) { depth += 1; }
+            if byte == 125 && (!template || depth > 0) { depth -= 1; }
+            at += 1;
+        }
+    }
+    len
+}
+
+newlines: func(src: string, from: s64, to: s64) -> s64 {
+    let count = 0;
+    for i in from..to {
+        if src.byte-at(i) == 10 { count += 1; }
+    }
+    count
+}
+
+// the last newline in src[from..to], or -1
+last-newline: func(src: string, from: s64, to: s64) -> s64 {
+    let found = -1;
+    for i in from..to {
+        if src.byte-at(i) == 10 { found = i; }
+    }
+    found
+}
+
+hex-value: func(h: s64) -> s64 {
+    if h <= 57 { h - 48 } else if h >= 97 { h - 87 } else { h - 55 }
+}
+
+// an id without its version: ns:name@1.0.0 is ns:name
+without-version: func(id: string) -> string {
+    for i in 0..id.len() {
+        if id.byte-at(i) == 64 { return id.substring(0, i); }
+    }
+    id
+}
+
+// a number written in decimal digits (a tuple field's name), or -1
+tuple-index: func(f: string) -> s64 {
+    let n = 0;
+    for i in 0..f.len() {
+        let d = f.byte-at(i);
+        if !is-digit(d) || i > 6 { return -1; }
+        n = n * 10 + d - 48;
+    }
+    n
+}
+
+// a key's last part: its name in its module
+base-name: func(key: string) -> string {
+    let n = key.len();
+    for k in 0..n {
+        let c = key.byte-at(n - 1 - k);
+        if c == 46 || c == 47 { return key.substring(n - k, n); }
+    }
+    key
+}
+
+// an interpolation's format spec ("{x:spec}"), as Rust's: [[fill]align][0][width][.precision][kind]
+// align is < (left), > (right) or ^ (centered), "" for the value's own (a number's right, else left);
+// width and precision -1 where not given; kind ? (debug: WAVE), x X (hex), b (binary), o (octal),
+// "" for its display
+record FormatSpec {
+    fill: string,
+    align: string,
+    zero: bool,
+    width: s64,
+    precision: s64,
+    kind: string,
+}
+
+// spec read as a format spec; none where it is not one
+format-spec: func(spec: string) -> option<FormatSpec> {
+    let out: FormatSpec = { fill: " ", align: "", zero: false, width: -1, precision: -1, kind: "", };
+    let len = spec.len();
+    let at = 0;
+    // a fill is any one char before an align
+    let first = char-width(spec.byte-at(0));
+    if len > first && is-align(spec.byte-at(first)) {
+        out.fill = spec.substring(0, first);
+        out.align = from-byte(spec.byte-at(first));
+        at = first + 1;
+    } else if len > 0 && is-align(spec.byte-at(0)) {
+        out.align = from-byte(spec.byte-at(0));
+        at = 1;
+    }
+    if at < len && spec.byte-at(at) == 48 {
+        out.zero = true;
+        at += 1;
+    }
+    let width = digits-end(spec, at);
+    if width > at { out.width = decimal(spec.substring(at, width)); }
+    at = width;
+    if at < len && spec.byte-at(at) == 46 {
+        let precision = digits-end(spec, at + 1);
+        if precision == at + 1 { return none; }
+        out.precision = decimal(spec.substring(at + 1, precision));
+        at = precision;
+    }
+    if at < len {
+        let kind = from-byte(spec.byte-at(at));
+        if kind != "?" && kind != "x" && kind != "X" && kind != "b" && kind != "o" { return none; }
+        out.kind = kind;
+        at += 1;
+    }
+    if at != len || len == 0 { return none; }
+    some(out)
+}
+
+is-align: func(byte: s64) -> bool { byte == 60 || byte == 62 || byte == 94 }
+
+// how many bytes the UTF-8 char that starts with byte takes
+char-width: func(byte: s64) -> s64 {
+    if byte < 128 { 1 } else if byte >= 240 { 4 } else if byte >= 224 { 3 } else { 2 }
+}
+
+// a run of decimal digits' value (capped: a spec's width is small)
+decimal: func(digits: string) -> s64 {
+    let value = 0;
+    for at in 0..digits.len() {
+        if value < 100000 { value = value * 10 + digits.byte-at(at) - 48; }
+    }
+    value
+}

@@ -1,0 +1,16 @@
+// yelfuzz: a valid yel program, from a seed, written to stdout. tools/fuzz/run.sh drives the compiler
+// with them, looking for what goes wrong (the compiler's panics, programs it refuses, C that does not
+// build, and a program that does not do the same in each build).
+//
+//   yelfuzz <seed> [size]    size 1 to 10 (default 3): how many types and funcs, how deep, how long
+
+main: func(args: list<string>) -> s32 {
+    if args.len() < 1 {
+        eprint("usage: yelfuzz <seed> [size]\n");
+        return 2;
+    }
+    let seed = parse-int(args[0]).unwrap-or(0);
+    let size = if args.len() > 1 { parse-int(args[1]).unwrap-or(3) } else { 3 };
+    print(decls.program(seed as u64, size));
+    0
+}

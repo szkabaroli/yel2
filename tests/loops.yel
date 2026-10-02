@@ -1,0 +1,34 @@
+// break and continue in a for, a list's item assigned (xs[i] = v), and C templates (c"...")
+
+first-over: func(xs: list<s32>, limit: s32) -> s32 {
+    let found = -1;
+    for x in xs {
+        if x <= limit { continue; }
+        found = x;
+        break;
+    }
+    found
+}
+
+main: func(argv: list<string>) -> s32 {
+    print("{first-over([1, 5, 9, 12,], 6)} {first-over([1,], 6)}\n");
+    // an outer loop's next turn after an inner break
+    let pairs: list<string> = [];
+    for i in 0..4 {
+        if i == 1 { continue; }
+        for j in 0..10 {
+            if j > i { break; }
+            pairs.push("{i}{j}");
+        }
+    }
+    print("{pairs.join(" ")}\n");
+    let xs = [1, 2, 3,];
+    xs[0] = 10;
+    xs[xs.len() - 1] = xs[1] * 7;
+    print("{xs}\n");
+    // in a C template, a { starts an interpolation only before a name or (
+    let test = "x > 0";
+    print(c"if ({test}) { y = { 0 }; } else {}" + "\n");
+    print(c"{ .tag = {(1 + 2)} } {1, 2} \{literal\}" + "\n");
+    0
+}

@@ -1,0 +1,30 @@
+// Porffor's bench/loops.js: 5000 floats summed three ways (Math.random's numbers made by an LCG)
+
+from "wasi:clocks" include monotonic-clock;
+
+ms: func(t: u64) -> f64 { (monotonic-clock.now() - t) as f64 / 1000000.0 }
+
+main: func() {
+    let data: list<f64> = [];
+    let seed: u64 = 12345;
+    for i in 0..5000 {
+        seed = seed * 6364136223846793005 + 1442695040888963407;
+        data.push((seed >> 11) as f64 / 9007199254740992.0);
+    }
+
+    let t1 = monotonic-clock.now();
+    let sum1 = 0.0;
+    for x in data { sum1 += x; }
+    print("for..of {ms(t1)}\n");
+
+    let t2 = monotonic-clock.now();
+    let sum2 = 0.0;
+    for i in 0..data.len() { sum2 += data[i]; }
+    print("for (let i = 0; i < data.length; i++) {ms(t2)}\n");
+
+    let t3 = monotonic-clock.now();
+    let sum3 = 0.0;
+    let len = data.len();
+    for i in 0..len { sum3 += data[i]; }
+    print("for (let i = 0; i < len; i++) {ms(t3)}\n");
+}

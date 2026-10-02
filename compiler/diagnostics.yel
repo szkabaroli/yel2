@@ -1,0 +1,519 @@
+// Diagnostics: what the compiler tells about a program it does not compile, as rustc does. An error
+// is its message, where it is (its primary span, underlined ^^^, with a label of its own), other
+// places that explain it (secondary labels, underlined ---), and notes and help after:
+//
+//   error: x is moved to write-via-stream (its end leaves the component): it is used again
+//    --> main.yel:7:43
+//     |
+//   7 |     let written = stdout.write-via-stream(out);
+//     |                                           ^^^ moved here
+//   8 |     out;
+//     |     --- used here, after the move
+//     |
+//     = help: …
+//
+// Colored on a terminal (red for the error, blue for the gutter), plain when stderr is not one or
+// NO_COLOR is set.
+//
+// Errors are kept, not shown at once (as rustc's DiagCtxt, clang's): a phase reports each one it
+// finds and goes on (the parser past the statement, the checker with an error type that fits
+// anything), so one run tells them all. Where a phase ends, any found are shown in the order of
+// their places and the compiler stops: a later phase never sees a program with an error. Past
+// ERROR-LIMIT it stops at once (clang's -ferror-limit); what it cannot go on from is fatal.
+
+// where a diagnostic points: its span, what it says there, and whether it is the primary place
+record Label { span: Span, message: string, primary: bool, }
+
+// path: the file of one with no span (a package's directory)
+record Diagnostic {
+    message: string,
+    path: string,
+    labels: list<Label>,
+    notes: list<string>,
+    helps: list<string>,
+}
+
+// one compile's context, threaded through its phases: every file read (a span's source is its
+// index), the errors found so far (report: shown where a phase ends), and what the command line
+// asked for: the input, how it is optimized ("size", "speed", "none"; "check": yelc check), the
+// backend ("c", "bitcode") and the target's triple
+record Context {
+    sources: list<Source>,
+    errors: list<Diagnostic>,
+    input: string,
+    mode: string,
+    backend: string,
+    triple: string,
+}
+
+from "std:filesystem" include types, preopens;
+from "std:cli" include exit;
+
+// the most errors kept: at it, the compiler shows them and stops
+const ERROR-LIMIT: s64 = 20;
+
+module diagnostics {
+    // an error at span (its primary place, label "" for none)
+    error: func(span: Span, message: string, label: string) -> Diagnostic {
+        {
+            message: message,
+            path: "",
+            labels: [{ span: span, message: label, primary: true, },],
+            notes: [],
+            helps: [],
+        }
+    }
+
+    // an error at a place written file:line:col (or only file), as packages give them
+    error-at: func(at: string, message: string) -> Diagnostic {
+        let parts = at.split(":");
+        if parts.len() >= 3 {
+            let line = number(parts[parts.len() - 2]);
+            let col = number(parts[parts.len() - 1]);
+            if line > 0 && col > 0 {
+                // a place in a file by its path: the source that is, where the program read it
+                let file = parts.slice(0, parts.len() - 2).join(":");
+                let sp: Span = { source: -1, line: line, col: col, end-line: line, end-col: col + 1, };
+                let d = error(sp, message, "");
+                d.path = file;
+                return d;
+            }
+        }
+        { message: message, path: at, labels: [], notes: [], helps: [], }
+    }
+
+    // another place that explains it
+    also: func(d: Diagnostic, span: Span, message: string) {
+        d.labels.push({ span: span, message: message, primary: false, });
+    }
+
+    note: func(d: Diagnostic, text: string) { d.notes.push(text); }
+
+    help: func(d: Diagnostic, text: string) { d.helps.push(text); }
+
+    // the diagnostic, written to stderr; the compiler stops
+    // ---- files, through std:filesystem (WASI's: a component's host, natively std's own), each
+    // path in the working directory (the first preopen); where one cannot be read or written, the
+    // compiler stopped saying why
+
+    // the working directory: the first preopen (natively ".", as `wasmtime --dir .` gives it)
+    working-dir: func() -> types.descriptor {
+        let dirs = preopens.get-directories();
+        if dirs.len() == 0 { fail("no working directory: run it with the working directory given (wasmtime --dir .)"); }
+        for index in 1..dirs.len() { dirs[index].0.drop(); }
+        dirs[0].0
+    }
+
+    // no flags of these kinds
+    no-open-flags: func() -> types.open-flags { types.open-flags.create & types.open-flags.directory }
+
+    // a file read into the program's sources: its index there (a span's source)
+    read-source: async func(context: Context, path: string) -> s64 {
+        match wait read-file(path) {
+            ok(text) => {
+                context.sources.push({ path: path, text: text, });
+                context.sources.len() - 1
+            }
+            err(error) => {
+                fail("cannot read {path}: {error}")
+            }
+        }
+    }
+
+    // a file's bytes, as a string
+    read-file: async func(path: string) -> result<string, types.error-code> {
+        let root = working-dir();
+        let opened = wait root.open-at(types.path-flags.symlink-follow, path, no-open-flags(), types.descriptor-flags.read);
+        root.drop();
+        match opened {
+            ok(file) => {
+                let (bytes, reading) = file.read-via-stream(0);
+                let out = buffer.buffer(65536);
+                loop {
+                    let chunk = wait streams.read-some(bytes, 65536);
+                    if chunk.len() == 0 { break; }
+                    out.push-bytes(chunk);
+                }
+                let ended = wait reading;
+                file.drop();
+                match ended {
+                    ok(_) => ok(out.to-string()),
+                    err(error) => err(error),
+                }
+            }
+            err(error) => err(error),
+        }
+    }
+
+    // a file written (made, or emptied first)
+    write-output: async func(path: string, content: string) {
+        let root = working-dir();
+        let opened = wait root.open-at(types.path-flags.symlink-follow, path, types.open-flags.create | types.open-flags.truncate, types.descriptor-flags.write);
+        root.drop();
+        match opened {
+            ok(file) => {
+                let (bytes, out): tuple<stream<u8>, writer<u8>> = streams.stream-pair(65536);
+                let writing = file.write-via-stream(bytes, 0);
+                wait streams.write-all(out, content.bytes());
+                streams.close(out);
+                let ended = wait writing;
+                file.drop();
+                match ended {
+                    ok(_) => {}
+                    err(error) => fail("cannot write {path}: {error}"),
+                }
+            }
+            err(error) => fail("cannot write {path}: {error}"),
+        }
+    }
+
+    // a directory's entries, sorted (so what is made of them does not depend on the system)
+    entries: async func(dir: string) -> list<string> {
+        let root = working-dir();
+        let opened = wait root.open-at(types.path-flags.symlink-follow, dir, types.open-flags.directory, types.descriptor-flags.read);
+        root.drop();
+        match opened {
+            ok(found) => {
+                let (listed, reading) = found.read-directory();
+                let names: list<string> = [];
+                loop {
+                    match wait streams.read(listed) {
+                        some(entry) => names.push(entry.name),
+                        none => { break; }
+                    }
+                }
+                let ended = wait reading;
+                found.drop();
+                match ended {
+                    ok(_) => {}
+                    err(error) => fail("cannot read the directory {dir}: {error}"),
+                }
+                names.sort({ a, b -> text.compare(a, b) < 0 });
+                names
+            }
+            err(error) => {
+                fail("cannot read the directory {dir}: {error}")
+            }
+        }
+    }
+
+    // whether a path names a directory
+    is-dir: async func(path: string) -> bool {
+        let root = working-dir();
+        let found = wait root.stat-at(types.path-flags.symlink-follow, path);
+        root.drop();
+        match found {
+            ok(stat) => stat.type == types.descriptor-type.directory,
+            err(_) => false,
+        }
+    }
+
+    // a directory made, with its parents (nothing where they are there)
+    make-dirs: async func(dir: string) {
+        let root = working-dir();
+        let parts = dir.split("/");
+        let path = "";
+        for index in 0..parts.len() {
+            let part = parts[index];
+            // the first part as it is ("" for an absolute path's leading /)
+            path = if index == 0 { part } else { path + "/" + part };
+            if part != "" && part != "." {
+                match wait root.create-directory-at(path) {
+                    ok(_) => {}
+                    err(exist) => {}
+                    err(error) => fail("cannot make the directory {path}: {error}"),
+                }
+            }
+        }
+        root.drop();
+    }
+
+    // the compiler stopped: a message with no place in a file
+    fail: func(message: string) -> never {
+        eprint("yel: {message}\n");
+        exit.exit(err(()));
+    }
+
+    // ---- errors kept until a phase ends
+
+    // an error found: kept (once: the same message at the same place is one error), and the phase
+    // goes on; at ERROR-LIMIT, those found are shown and the compiler stops
+    report: func(context: Context, d: Diagnostic) {
+        for e in context.errors {
+            if same(e, d) { return; }
+        }
+        context.errors.push(d);
+        if context.errors.len() >= ERROR-LIMIT { stop(context, "stopped after {ERROR-LIMIT} errors"); }
+    }
+
+    // where a phase ends: the errors it found shown, and the compiler stopped (none: it goes on)
+    abort-if-errors: func(context: Context) {
+        if context.errors.len() == 0 { return; }
+        stop(context, "{context.errors.len()} errors");
+    }
+
+    // an error the phase cannot go on from: shown with those found before it, and the compiler
+    // stops
+    fatal: func(context: Context, d: Diagnostic) -> never {
+        context.errors.push(d);
+        stop(context, "{context.errors.len()} errors")
+    }
+
+    // the errors written to stderr in the order of their places (a blank line between), then how
+    // many where there is more than one; the compiler stops
+    stop: func(context: Context, summary: string) -> never {
+        let sources = context.sources;
+        let shown = context.errors.slice(0, context.errors.len());
+        shown.sort({ a, b -> before(sources, a, b) });
+        let color = stderr-color();
+        for index in 0..shown.len() {
+            if index > 0 { eprint("\n"); }
+            eprint(render(sources, shown[index], color));
+        }
+        if shown.len() > 1 {
+            let red = if color { from-byte(27) + "[1;31m" } else { "" };
+            let bold = if color { from-byte(27) + "[1m" } else { "" };
+            let reset = if color { from-byte(27) + "[0m" } else { "" };
+            eprint("\n{red}error{reset}{bold}: {summary}{reset}\n");
+        }
+        exit.exit(err(()))
+    }
+
+    // whether two diagnostics are one error: the same message at the same primary place
+    same: func(a: Diagnostic, b: Diagnostic) -> bool {
+        a.message == b.message && a.path == b.path && place(a) == place(b)
+    }
+
+    // whether a comes before b: by file (in the order the program read them), line, then column
+    before: func(sources: list<Source>, a: Diagnostic, b: Diagnostic) -> bool {
+        let first = source-of(sources, a);
+        let second = source-of(sources, b);
+        if first != second { return first < second; }
+        let left = primary(a);
+        let right = primary(b);
+        if left.line != right.line { return left.line < right.line; }
+        left.col < right.col
+    }
+
+    // a diagnostic's file: its primary span's source, else the one at its path (-1 for none)
+    source-of: func(sources: list<Source>, d: Diagnostic) -> s64 {
+        let span = primary(d);
+        if span.source >= 0 { span.source } else { source-at(sources, d.path) }
+    }
+
+    // its primary span (line 0 for one with no place in a file)
+    primary: func(d: Diagnostic) -> Span {
+        let found: Span = { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, };
+        for l in d.labels {
+            if l.primary { found = l.span; }
+        }
+        found
+    }
+
+    place: func(d: Diagnostic) -> string {
+        let span = primary(d);
+        "{span.source}:{span.line}:{span.col}"
+    }
+
+    // the index of the source read from path (-1 for none)
+    source-at: func(sources: list<Source>, path: string) -> s64 {
+        for index in 0..sources.len() {
+            if sources[index].path == path { return index; }
+        }
+        -1
+    }
+
+    // a name like n among candidates (a likely typo of one: a few edits away), or ""
+    closest: func(n: string, candidates: list<string>) -> string {
+        let best = "";
+        let best-distance = n.len() / 3 + 1;
+        if best-distance > 3 { best-distance = 3; }
+        for c in candidates {
+            if c != n && c.len() > 0 && !starts-at(c, 0, "~") {
+                let d = distance(n, c);
+                if d < best-distance || d == best-distance && best == "" && d <= 1 {
+                    best = c;
+                    best-distance = d;
+                }
+            }
+        }
+        best
+    }
+
+    // ================================================================ rendering
+
+    render: func(sources: list<Source>, d: Diagnostic, color: bool) -> string {
+        let red = if color { from-byte(27) + "[1;31m" } else { "" };
+        let blue = if color { from-byte(27) + "[1;34m" } else { "" };
+        let bold = if color { from-byte(27) + "[1m" } else { "" };
+        let reset = if color { from-byte(27) + "[0m" } else { "" };
+        let out: list<string> = [];
+        out.push("{red}error{reset}{bold}: {d.message}{reset}\n");
+        if d.labels.len() == 0 {
+            out.push("  {blue}-->{reset} {d.path}\n");
+            tail(d, out, "  ", blue, bold, reset);
+            return out.join("");
+        }
+        let first = d.labels[0];
+        for l in d.labels {
+            if l.primary { first = l; }
+        }
+        // the lines labels start on, in order
+        let shown: list<s64> = [];
+        for l in d.labels {
+            if !contains-line(shown, l.span.line) { shown.push(l.span.line); }
+        }
+        sort-lines(shown);
+        let width = "{shown[shown.len() - 1]}".len();
+        let pad = " ".repeat(width);
+        // the file: the primary span's source, else (error-at's) the one at the diagnostic's path
+        let source = if first.span.source >= 0 { first.span.source } else { source-at(sources, d.path) };
+        let path = if source >= 0 { sources[source].path } else { d.path };
+        let src = if source >= 0 { sources[source].text.lines() } else { [] };
+        out.push("{pad}{blue}-->{reset} {path}:{first.span.line}:{first.span.col}\n");
+        out.push("{pad} {blue}|{reset}\n");
+        let previous = -1;
+        for line in shown {
+            if previous >= 0 && line > previous + 1 {
+                // one line between: shown; more: …
+                if line == previous + 2 {
+                    out.push(source-row(src, previous + 1, width, blue, reset));
+                } else {
+                    out.push("{blue}...{reset}\n");
+                }
+            }
+            out.push(source-row(src, line, width, blue, reset));
+            let text = if line >= 1 && line <= src.len() { src[line - 1] } else { "" };
+            // each label on the line, left to right, its underline under it
+            let here: list<Label> = [];
+            for l in d.labels {
+                if l.span.line == line { here.push(l); }
+            }
+            sort-labels(here);
+            for l in here {
+                let start = shown-width(text, l.span.col - 1);
+                let end = if l.span.end-line == line && l.span.end-col > l.span.col {
+                    shown-width(text, l.span.end-col - 1)
+                } else if l.span.end-line > line {
+                    shown-width(text, text.len())
+                } else {
+                    start + 1
+                };
+                if end <= start { end = start + 1; }
+                let mark = if l.primary { "^" } else { "-" };
+                let tone = if l.primary { red } else { blue };
+                let message = if l.message == "" { "" } else { " " + l.message };
+                out.push("{pad} {blue}|{reset} {" ".repeat(start)}{tone}{mark.repeat(end - start)}{message}{reset}\n");
+            }
+            previous = line;
+        }
+        tail(d, out, pad, blue, bold, reset);
+        out.join("")
+    }
+
+    // the notes and the help
+    tail: func(d: Diagnostic, out: list<string>, pad: string, blue: string, bold: string, reset: string) {
+        if d.notes.len() + d.helps.len() == 0 { return; }
+        out.push("{pad} {blue}|{reset}\n");
+        for n in d.notes { out.push("{pad} {blue}={reset} {bold}note{reset}: {n}\n"); }
+        for h in d.helps { out.push("{pad} {blue}={reset} {bold}help{reset}: {h}\n"); }
+    }
+
+    source-row: func(src: list<string>, line: s64, width: s64, blue: string, reset: string) -> string {
+        let text = if line >= 1 && line <= src.len() { src[line - 1] } else { "" };
+        "{blue}{"{line}".pad-start(width, " ")} |{reset} {expand-tabs(text)}\n"
+    }
+
+    // how wide a line's first n bytes show (a tab as 4 columns, a UTF-8 sequence as one)
+    shown-width: func(text: string, n: s64) -> s64 {
+        let w = 0;
+        let end = if n > text.len() { text.len() } else { n };
+        for k in 0..end {
+            let c = text.byte-at(k);
+            if c == 9 { w += 4; }
+            else if c < 128 || c >= 192 { w += 1; }
+        }
+        // past the end of the line (a span at its end): one column each
+        if n > text.len() { w += n - text.len(); }
+        w
+    }
+
+    expand-tabs: func(text: string) -> string {
+        if find-byte(text, 9) == none { return text; }
+        text.split(from-byte(9)).join("    ")
+    }
+
+    contains-line: func(xs: list<s64>, x: s64) -> bool {
+        for y in xs {
+            if y == x { return true; }
+        }
+        false
+    }
+
+    sort-lines: func(xs: list<s64>) {
+        for i in 1..xs.len() {
+            let j = i;
+            loop {
+                if j == 0 || xs[j - 1] <= xs[j] { break; }
+                let t = xs[j];
+                xs[j] = xs[j - 1];
+                xs[j - 1] = t;
+                j -= 1;
+            }
+        }
+    }
+
+    sort-labels: func(xs: list<Label>) {
+        for i in 1..xs.len() {
+            let j = i;
+            loop {
+                if j == 0 || xs[j - 1].span.col <= xs[j].span.col { break; }
+                let t = xs[j];
+                xs[j] = xs[j - 1];
+                xs[j - 1] = t;
+                j -= 1;
+            }
+        }
+    }
+
+    // a decimal's value (0 for one that is not)
+    number: func(s: string) -> s64 {
+        let n = 0;
+        if s.len() == 0 { return 0; }
+        for k in 0..s.len() {
+            let c = s.byte-at(k);
+            if c < 48 || c > 57 { return 0; }
+            n = n * 10 + c - 48;
+        }
+        n
+    }
+
+    // how many single-byte edits (insert, delete, change, or swap two next to each other) make a
+    // into b
+    distance: func(a: string, b: string) -> s64 {
+        let n = a.len();
+        let m = b.len();
+        if n - m > 3 || m - n > 3 { return 4; }
+        let rows: list<list<s64>> = [];
+        for i in 0..n + 1 {
+            let row: list<s64> = [];
+            for j in 0..m + 1 { row.push(if i == 0 { j } else if j == 0 { i } else { 0 }); }
+            rows.push(row);
+        }
+        for i in 1..n + 1 {
+            for j in 1..m + 1 {
+                let cost = if a.byte-at(i - 1) == b.byte-at(j - 1) { 0 } else { 1 };
+                let best = rows[i - 1][j] + 1;
+                if rows[i][j - 1] + 1 < best { best = rows[i][j - 1] + 1; }
+                if rows[i - 1][j - 1] + cost < best { best = rows[i - 1][j - 1] + cost; }
+                if i > 1 && j > 1 && a.byte-at(i - 1) == b.byte-at(j - 2)
+                    && a.byte-at(i - 2) == b.byte-at(j - 1)
+                    && rows[i - 2][j - 2] + 1 < best {
+                    best = rows[i - 2][j - 2] + 1;
+                }
+                rows[i][j] = best;
+            }
+        }
+        rows[n][m]
+    }
+}

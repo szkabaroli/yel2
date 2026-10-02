@@ -1,0 +1,226 @@
+// Declarations: the types first (each from those before it, so none holds itself), the constants,
+// then the funcs (each calls only those before it: no recursion, so every program ends), some in
+// modules, some generic, some generators; main last, calling each and printing what it gives.
+
+module decls {
+    types-part: func(g: Gen, lines: list<string>, count: s64) {
+        for i in 0..count {
+            let kind = dice.pick(g.dice, ["record", "record", "variant", "variant", "enum", "flags", "distinct", "strings", "range", "union",]);
+            let name = gen.fresh(g, if kind == "record" { "Rec" } else if kind == "variant" { "Var" } else if kind == "enum" { "Enu" } else { "Ty" });
+            let decl: TypeDecl = { kind: kind, name: name, names: [], types: [], base: Ty.unit-t, low: 0, high: 0, };
+            if kind == "record" {
+                for k in 0..dice.between(g.dice, 1, 4) {
+                    decl.names.push("f{k}");
+                    decl.types.push(pick.plain-type(g, 2));
+                }
+                let fields: list<string> = [];
+                for k in 0..decl.names.len() { fields.push("{decl.names[k]}: {types.show(decl.types[k])},"); }
+                lines.push("record {name} {gen.lb()} {fields.join(" ")} {gen.rb()}");
+            } else if kind == "variant" {
+                let cases: list<string> = [];
+                for k in 0..dice.between(g.dice, 1, 4) {
+                    let case = "c{k}";
+                    decl.names.push(case);
+                    if dice.chance(g.dice, 60) {
+                        let t = pick.plain-type(g, 1);
+                        decl.types.push(t);
+                        cases.push("{case}({types.show(t)}),");
+                    } else {
+                        decl.types.push(Ty.unit-t);
+                        cases.push("{case},");
+                    }
+                }
+                lines.push("variant {name} {gen.lb()} {cases.join(" ")} {gen.rb()}");
+            } else if kind == "enum" {
+                for k in 0..dice.between(g.dice, 1, 5) { decl.names.push("e{k}"); }
+                lines.push("enum {name} {gen.lb()} {decl.names.join(", ")}, {gen.rb()}");
+            } else if kind == "flags" {
+                for k in 0..dice.between(g.dice, 1, 6) { decl.names.push("g{k}"); }
+                lines.push("flags {name} {gen.lb()} {decl.names.join(", ")}, {gen.rb()}");
+            } else if kind == "distinct" {
+                decl.base = pick.int-type(g);
+                lines.push("type {name} = distinct {types.show(decl.base)};");
+            } else if kind == "strings" {
+                let all = ["get", "post", "put", "head", "red", "blue",];
+                let start = dice.below(g.dice, 3);
+                for k in start..start + dice.between(g.dice, 1, 3) { decl.names.push(all[k]); }
+                let parts: list<string> = [];
+                for n in decl.names { parts.push("\"{n}\""); }
+                lines.push("type {name} = {parts.join(" | ")};");
+            } else if kind == "range" {
+                decl.base = Ty.int-t("s32");
+                decl.low = dice.between(g.dice, -10, 10);
+                decl.high = decl.low + dice.between(g.dice, 0, 50);
+                lines.push("type {name} = {decl.low}..={decl.high};");
+            } else {
+                // a union of kinds: of two that differ (an int and a string, a record and a bool)
+                let records = gen.decls-of(g, "record");
+                let first = if records.len() > 0 && dice.chance(g.dice, 40) { Ty.named-t(dice.pick(g.dice, records).name) } else { Ty.int-t("s32") };
+                let second = dice.pick(g.dice, [Ty.string-t, Ty.bool-t,]);
+                decl.types = [first, second,];
+                lines.push("type {name} = {types.show(first)} | {types.show(second)};");
+            }
+            g.decls.push(decl);
+        }
+    }
+
+    consts-part: func(g: Gen, lines: list<string>, count: s64) {
+        for i in 0..count {
+            let name = gen.fresh(g, "LIMIT");
+            if dice.chance(g.dice, 60) {
+                let v = "{dice.between(g.dice, -50, 500)}";
+                lines.push("const {name}: s32 = {v};");
+                g.consts.push({ name: name, ty: Ty.int-t("s32"), value: v, });
+            } else {
+                let v = exprs.text-literal(g);
+                lines.push("const {name} = {v};");
+                g.consts.push({ name: name, ty: Ty.string-t, value: v, });
+            }
+        }
+    }
+
+    // a func: its params (a readonly list at times), its result, its body; generic ones over T,
+    // generators yielding their result's items; some in a module of their own
+    funcs-part: func(g: Gen, lines: list<string>, count: s64) {
+        let module-lines: list<string> = [];
+        let module-name = gen.fresh(g, "mod");
+        for i in 0..count {
+            let kind = dice.pick(g.dice, ["plain", "plain", "plain", "plain", "generic", "generator", "module",]);
+            let name = gen.fresh(g, "fn");
+            let type-params: list<string> = if kind == "generic" { ["T",] } else { [] };
+            let params: list<Ty> = [];
+            let readonly: list<bool> = [];
+            for k in 0..dice.between(g.dice, 0, 3) {
+                if kind == "generic" && (k == 0 || dice.chance(g.dice, 50)) {
+                    params.push(dice.pick(g.dice, [Ty.param-t("T"), Ty.param-t("T"), Ty.list-t(Ty.param-t("T")),]));
+                    readonly.push(false);
+                } else if kind == "plain" && dice.chance(g.dice, 15) {
+                    params.push(Ty.list-t(dice.pick(g.dice, [Ty.int-t("s32"), Ty.string-t,])));
+                    readonly.push(true);
+                } else {
+                    params.push(pick.any-type(g, 2));
+                    readonly.push(false);
+                }
+            }
+            // a generic func has a T to give: its first param's
+            let result = if kind == "generic" { Ty.param-t("T") } else if kind == "generator" { pick.plain-type(g, 1) } else { pick.any-type(g, 2) };
+            if kind == "generic" {
+                if params.len() == 0 {
+                    params.push(Ty.param-t("T"));
+                    readonly.push(false);
+                }
+                params[0] = Ty.param-t("T");
+            }
+            g.type-params = type-params;
+            g.scopes = [[],];
+            g.results = [result,];
+            g.loops = [0,];
+            g.yields = [if kind == "generator" { some(result) } else { none },];
+            g.frozen = [];
+            g.budget = g.width * 4;
+            let shown: list<string> = [];
+            for k in 0..params.len() {
+                let pn = gen.fresh(g, "a");
+                if readonly[k] {
+                    gen.bind-readonly(g, pn, params[k]);
+                    shown.push("{pn}: {types.show(params[k])} & readonly");
+                } else {
+                    gen.bind(g, pn, params[k], false);
+                    shown.push("{pn}: {types.show(params[k])}");
+                }
+            }
+            let indent = if kind == "module" { "        " } else { "    " };
+            let body = stmts.body(g, if kind == "generator" { Ty.unit-t } else { result }, 0, indent);
+            let generics = if type-params.len() > 0 { "<" + type-params.join(", ") + ">" } else { "" };
+            let returns = if kind == "generator" { " -> seq<{types.show(result)}>" } else { match result {
+                unit-t => "",
+                _ => " -> {types.show(result)}",
+            } };
+            let head = "{name}: func{generics}({shown.join(", ")}){returns} {gen.lb()}";
+            let out = if kind == "module" { module-lines } else { lines };
+            let pad = if kind == "module" { "    " } else { "" };
+            out.push(pad + head);
+            if body != "" { out.push(body); }
+            out.push(pad + gen.rb());
+            out.push("");
+            g.type-params = [];
+            let call-name = if kind == "module" { "{module-name}.{name}" } else { name };
+            g.funcs.push({
+                name: call-name,
+                params: params,
+                readonly: readonly,
+                result: result,
+                type-params: type-params,
+                yields: kind == "generator",
+            });
+        }
+        if module-lines.len() > 0 {
+            lines.push("module {module-name} {gen.lb()}");
+            for l in module-lines { lines.push(l); }
+            lines.push(gen.rb());
+            lines.push("");
+        }
+    }
+
+    // main: each func called (a generic one at s32 and string), what it gives printed
+    main-part: func(g: Gen, lines: list<string>) {
+        g.type-params = [];
+        g.scopes = [[],];
+        g.results = [Ty.int-t("s32"),];
+        g.loops = [0,];
+        g.yields = [none,];
+        g.frozen = [];
+        g.budget = g.width * 6;
+        lines.push("main: func() -> s32 {gen.lb()}");
+        for f in g.funcs {
+            let targs: list<Ty> = if f.type-params.len() > 0 { [dice.pick(g.dice, [Ty.int-t("s32"), Ty.string-t, Ty.list-t(Ty.int-t("u8")),]),] } else { [] };
+            let ps: list<Ty> = [];
+            for p in f.params { ps.push(types.substitute(p, f.type-params, targs)); }
+            for line in stmts.stmt(g, 0, "    ") { lines.push(line); }
+            gen.push-pending(g);
+            let args: list<string> = [];
+            for k in 0..ps.len() {
+                // a readonly param: a list made here (new, so readonly at once)
+                if f.readonly[k] { args.push(exprs.literal(g, ps[k], 0, true)); }
+                else { args.push(exprs.expr(g, ps[k], 0, f.type-params.len() == 0)); }
+            }
+            let r = gen.fresh(g, "r");
+            let call = "{f.name}({args.join(", ")})";
+            for p in gen.pop-pending(g) { lines.push("    " + p); }
+            if f.yields {
+                lines.push("    for {r} in {call} {gen.lb()} print(\"{f.name} yields {gen.lb()}{r}:?{gen.rb()}\\n\"); {gen.rb()}");
+            } else {
+                let result = types.substitute(f.result, f.type-params, targs);
+                lines.push("    let {r}: {types.show(result)} = {call};");
+                if !pick.holds-func(g, result, 0) {
+                    lines.push("    print(\"{f.name}: {gen.lb()}{r}:?{gen.rb()}\\n\");");
+                }
+            }
+        }
+        lines.push("    0");
+        lines.push(gen.rb());
+    }
+
+    // a whole program, from a seed: size scales how many types and funcs, how deep and how long
+    program: func(seed: u64, size: s64) -> string {
+        let g: Gen = {
+            dice: { state: seed, },
+            decls: [], funcs: [], consts: [],
+            scopes: [[],], pending: [[],],
+            counter: 0,
+            depth: 2 + size / 2,
+            width: 2 + size,
+            budget: 0,
+            results: [Ty.unit-t,], loops: [0,], yields: [none,],
+            type-params: [], frozen: [],
+        };
+        let lines: list<string> = ["// yel fuzz program: seed {seed}, size {size}", "",];
+        types-part(g, lines, dice.between(g.dice, 1, 2 + size));
+        lines.push("");
+        consts-part(g, lines, dice.between(g.dice, 0, 2));
+        lines.push("");
+        funcs-part(g, lines, dice.between(g.dice, 1, 2 + size));
+        main-part(g, lines);
+        lines.join("\n") + "\n"
+    }
+}

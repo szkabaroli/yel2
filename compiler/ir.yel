@@ -1,0 +1,494 @@
+// yel IR: one structured tree of nodes, laid out as Porffor's (external/porffor/compiler/ir.js).
+// pipeline: checked tree -> IR (codegen.yel) -> C text (render.yel); between them inline.yel and
+// escape.yel, and the collector's roots (roots.yel), all on this one shape.
+// a node: its kind (Kind: what it is, with its operands), its type (unit for a statement), and its
+// effects (Fx bits, OR-merged from its operands). The constructors below fold as they build.
+//
+// Where yel differs from Porffor: an operand is pure (no fx.call, no fx.read-mem): codegen binds
+// anything else to a local first, so the collector's slots see every pointer live across a call,
+// and C's unordered arguments cannot reorder effects.
+
+// effects: Porffor's FX bits
+record Fx { read-mem: s64, write-mem: s64, call: s64, read-global: s64, write-local: s64, }
+
+fx: func() -> Fx { { read-mem: 1, write-mem: 2, call: 4, read-global: 8, write-local: 16, } }
+
+// span: where in the source it comes from (the expression or the statement codegen made it of;
+// line 0 for none yet), so what is found on the IR is said where the program is
+record Node { kind: Kind, ty: Type, fx: s64, span: Span, }
+
+variant Kind {
+    // constants: a value known as it is written (Constant: a number, a static string, a case
+    // without a payload, a value struct of zeros), of the node's type
+    const(Constant),
+    // an extern's type argument (before its arguments): what it reads of the type (C: its C type
+    // and scan, a template's descriptor, a key's hash and equality; render.yel writes which)
+    type-arg(TypeArg),
+    // a type's scan func (the collector's: what in one of its values points at the heap), as the
+    // runtime takes it
+    scan(Type),
+    // variables: a func's local, a global (by its key: a value of the program's, any func may
+    // write; a store's target too)
+    local(s64),
+    global(string),
+    assign(AssignNode),
+    // operators: a C operator
+    bin(BinNode),
+    un(UnNode),
+    // ty = to: a C cast
+    convert(Node),
+    // memory: a field of a record or a case (->), or of a value struct (.), by its path of
+    // members; a store's target is a load or a list-get
+    load(LoadNode),
+    store(StoreNode),
+    // control flow (statements)
+    if(IfNode),
+    loop(LoopNode),
+    // a label (-1: the innermost loop)
+    break(s64),
+    continue(s64),
+    block(BlockNode),
+    return(Node),
+    // a match no arm fit: the program stops, showing the value
+    unreachable(UnreachableNode),
+    // after a call that never returns (its type never): nothing past it runs, and C is told so
+    halt,
+    // an async func's waits (statements): where it goes on when stepped again (resume, its
+    // state's number), and its leaving, not done (suspend: that state kept)
+    resume(s64),
+    suspend(s64),
+    // a generator's value given (into its frame's result), before it suspends
+    yield(Node),
+    // calls: a yel func's (key, its C name) or the runtime's (key "")
+    call(CallNode),
+    // a func as a value (its C function), and a call through one (Porffor's CallDynamic)
+    func-ref(FuncRefNode),
+    call-ref(CallRefNode),
+    // alloc / gc: a record or a case on the heap, or (escape.yel) on the func's stack
+    alloc(AllocNode),
+    // yel structure: a value struct made of its parts, a list's item, a string of shown pieces
+    make(MakeNode),
+    list-get(ListGetNode),
+    interp(InterpNode),
+    // the value of its type at the address its operand gives (C: *(T *)p): a helper's view of
+    // what the runtime hands it; a store's target too
+    deref(Node),
+    // an lvalue's address (C: &x: a local, a field, a deref): where a canonical value is lowered
+    // into, lifted from, or the host writes a result
+    address-of(Node),
+    // a type's size in bytes (C: sizeof(T)), as a usize: a canonical array's item's
+    size-of(Type),
+    // the address of an array's item (C: &((T *)base)[index]): of type T (its item's), the array at
+    // base (an address)
+    element(ElementNode),
+}
+
+record ElementNode { base: Node, index: Node, item: Type, }
+
+variant Constant {
+    // an integer's (a char's, a usize's) bits, as the node's type holds them
+    int(u64),
+    float(f64),
+    bool(bool),
+    // a () value
+    unit,
+    // an address of nothing (C: NULL)
+    null,
+    // a string's text (a static string)
+    text(string),
+    // a variant's case without a payload (the one shared value of it)
+    case-value(CaseConstant),
+    // a value struct with each part zero (none, an empty string)
+    zero,
+}
+
+// owner: the variant's name; name: the case's
+record CaseConstant { owner: string, name: string, }
+
+// key: a map's key type (its hash and equality go with it)
+record TypeArg { ty: Type, key: bool, }
+
+// how a piece of an interpolation is shown: by a writer (std's format.write-*, by its func's C
+// name), or by std's value.render over its type's descriptor (debug, or display)
+variant Formatter {
+    writer(string),
+    render(RenderFormat),
+}
+
+record RenderFormat { held: Type, display: bool, }
+
+record AssignNode { dest: s64, value: Node, }
+record BinNode { op: string, a: Node, b: Node, }
+record UnNode { op: string, a: Node, }
+// path: the members, outermost first (a case's payload: u, then its member); arrow: base is a
+// pointer (base->path), else a value (base.path)
+record LoadNode { base: Node, path: list<string>, arrow: bool, }
+record StoreNode { target: Node, value: Node, }
+record IfNode { test: Node, yes: list<Node>, no: list<Node>, }
+// test before each turn (none: always), step after each, label (-1: none)
+record LoopNode { test: option<Node>, step: option<Node>, body: list<Node>, label: s64, }
+record BlockNode { body: list<Node>, label: s64, }
+// show: the C func that shows the value
+record UnreachableNode { value: Node, formatter: Formatter, }
+// a func's C function: key and c-name the func's (what keeps it reached), c what is written (its
+// C name cast, or an adapter's)
+// name: the C name, interned (what the passes key a func by)
+record FuncRefNode { key: string, c-name: string, name: Name, c: string, }
+
+record CallRefNode { callee: Node, args: list<Node>, }
+
+// name: the C name, interned (what the passes key a callee by)
+record CallNode { key: string, c-name: string, name: Name, args: list<Node>, }
+// ctype: the C struct (R_x, V_x); rec: the record or variant; is-record: a record's (only those
+// may go on the stack); trace: its trace func; stack: kept on the func's stack (escape.yel)
+record AllocNode { ctype: string, rec: string, is-record: bool, trace: string, stack: bool, }
+// ctype: the value struct's C type; fields: each part's designator ("" for none)
+record MakeNode { ctype: string, fields: list<string>, parts: list<Node>, }
+// fixed: a fixed-length list's (list.items[index]), else a list's heap items
+record ListGetNode { list: Node, index: Node, ctype: string, fixed: bool, }
+// shows: the C func that shows each piece
+record InterpNode { parts: list<Node>, formatters: list<Formatter>, }
+
+// a local: its type, and its yel name ("" for a temporary)
+// a local: its type, its C name's stem, and the binding it is (none: one codegen made)
+record IrLocal { ty: Type, name: string, binding: option<Mark>, }
+
+// a func: its key and C name, its parameters (locals), its locals, its body, and its result's type;
+// labels: how many labels it has; rooted: which locals are live where it may collect (roots.yel
+// sets it; empty: all), so the collector must see them
+record IrFunc {
+    key: string,
+    c-name: string,
+    // the C name, interned (what the passes key a func by)
+    name: Name,
+    params: list<s64>,
+    locals: list<IrLocal>,
+    body: list<Node>,
+    result: Type,
+    labels: s64,
+    rooted: list<bool>,
+    // a closure's body: its C function takes the environment it was made in first (void *), which
+    // env-param (a local; -1 for none) holds
+    closure: bool,
+    env-param: s64,
+    // an async func's: its states (one for each wait), its locals in its frame (a state machine
+    // the executor steps)
+    async: bool,
+    states: s64,
+    // a generator's (async's frame and states too): a value yielded is its result, and done
+    // carries none
+    generator: bool,
+    // a helper the runtime calls (a trace, a scan): its () result is C's void, not a yunit
+    void-result: bool,
+    // a component's export (the canonical ABI's: its name, "" for none): not static, the host
+    // calls it by that name; and the target a helper is made only for ("native", "wasi"; "" for
+    // every one)
+    export-name: string,
+    build: string,
+    // an async func holding a host's end: let go (its release, the runtime's y_async_release_by_step)
+    // by its own step in Y_RELEASE_STATE (a resume of 1000000 in its body), when no one waits for it
+    release: bool,
+}
+
+// ================================================================ constructors
+
+new-node: func(kind: Kind, ty: Type, effects: s64) -> Node {
+    { kind: kind, ty: ty, fx: effects, span: { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, }, }
+}
+
+// a node said to be at sp, where it is not said to be anywhere yet (its operands too)
+stamp: func(n: Node, sp: Span) {
+    if n.span.line != 0 || sp.line == 0 { return; }
+    n.span = sp;
+    for index in 0..operand-count(n) { stamp(operand(n, index), sp); }
+}
+
+const: func(c: Constant, ty: Type) -> Node { new-node(Kind.const(c), ty, 0) }
+
+// an integer of type ty (its bits: a negative one's two's complement)
+int-const: func(v: s64, ty: Type) -> Node { const(Constant.int(v as u64), ty) }
+
+bool-const: func(b: bool) -> Node { const(Constant.bool(b), Type.bool-type) }
+
+unit-const: func() -> Node { const(Constant.unit, Type.unit-type) }
+
+null-const: func() -> Node { const(Constant.null, Type.address-type) }
+
+text-const: func(text: string) -> Node { const(Constant.text(text), Type.string-type) }
+
+zero-const: func(ty: Type) -> Node { const(Constant.zero, ty) }
+
+type-arg: func(ty: Type, key: bool) -> Node { new-node(Kind.type-arg({ ty: ty, key: key, }), Type.unit-type, 0) }
+
+scan: func(ty: Type) -> Node { new-node(Kind.scan(ty), Type.address-type, 0) }
+
+local: func(i: s64, ty: Type) -> Node { new-node(Kind.local(i), ty, 0) }
+
+// a global's value (any call may change it: read as memory is)
+global-node: func(key: string, ty: Type) -> Node { new-node(Kind.global(key), ty, fx().read-mem) }
+
+assign: func(dest: s64, value: Node) -> Node {
+    new-node(
+        Kind.assign({ dest: dest, value: value, }),
+        Type.unit-type,
+        fx().write-local | value.fx,
+    )
+}
+
+// a constant's truth: 1, 0, or -1 (not a constant)
+truth: func(n: Node) -> s64 {
+    match n.kind {
+        const(c) => match c {
+            bool(b) => if b { 1 } else { 0 },
+            _ => -1,
+        },
+        _ => -1,
+    }
+}
+
+bin: func(op: string, ty: Type, a: Node, b: Node) -> Node {
+    new-node(Kind.bin({ op: op, a: a, b: b, }), ty, a.fx | b.fx)
+}
+
+// !: of a constant, its opposite; of a !, what that turns
+un: func(op: string, ty: Type, a: Node) -> Node {
+    if op == "!" {
+        let t = truth(a);
+        if t >= 0 { return bool-const(t == 0); }
+        match a.kind {
+            un(x) => { if x.op == "!" { return x.a; } }
+            _ => {}
+        }
+    }
+    new-node(Kind.un({ op: op, a: a, }), ty, a.fx)
+}
+
+convert: func(ty: Type, a: Node) -> Node { new-node(Kind.convert(a), ty, a.fx) }
+
+// changes: the place can change (a record's field: fx.read-mem); a case's tag and payload, and a
+// value struct's part, never do
+load: func(base: Node, path: list<string>, arrow: bool, ty: Type, changes: bool) -> Node {
+    let f = if changes { fx().read-mem } else { 0 };
+    new-node(Kind.load({ base: base, path: path, arrow: arrow, }), ty, base.fx | f)
+}
+
+store: func(target: Node, value: Node) -> Node {
+    new-node(
+        Kind.store({ target: target, value: value, }),
+        Type.unit-type,
+        target.fx | value.fx | fx().write-mem,
+    )
+}
+
+// an if: on a constant, the branch taken; with no yes, the test turned
+if-stmt: func(test: Node, yes: list<Node>, no: list<Node>) -> Node {
+    let t = truth(test);
+    if t >= 0 { return block-stmt(if t == 1 { yes } else { no }, -1); }
+    if yes.len() == 0 && no.len() > 0 { return if-stmt(un("!", Type.bool-type, test), no, []); }
+    new-node(Kind.if({ test: test, yes: yes, no: no, }), Type.unit-type, test.fx)
+}
+
+loop-stmt: func(test: option<Node>, step: option<Node>, body: list<Node>, label: s64) -> Node {
+    new-node(Kind.loop({ test: test, step: step, body: body, label: label, }), Type.unit-type, 0)
+}
+
+break-stmt: func(label: s64) -> Node { new-node(Kind.break(label), Type.unit-type, 0) }
+
+continue-stmt: func(label: s64) -> Node { new-node(Kind.continue(label), Type.unit-type, 0) }
+
+block-stmt: func(body: list<Node>, label: s64) -> Node {
+    new-node(Kind.block({ body: body, label: label, }), Type.unit-type, 0)
+}
+
+return-stmt: func(value: Node) -> Node { new-node(Kind.return(value), Type.unit-type, value.fx) }
+
+yield-stmt: func(value: Node) -> Node { new-node(Kind.yield(value), Type.unit-type, value.fx) }
+
+resume-stmt: func(state: s64) -> Node { new-node(Kind.resume(state), Type.unit-type, 0) }
+
+suspend-stmt: func(state: s64) -> Node { new-node(Kind.suspend(state), Type.unit-type, fx().call) }
+
+unreachable-stmt: func(value: Node, formatter: Formatter) -> Node {
+    new-node(Kind.unreachable({ value: value, formatter: formatter, }), Type.unit-type, fx().call)
+}
+
+halt-stmt: func() -> Node { new-node(Kind.halt, Type.unit-type, 0) }
+
+// effects: the call's own (fx.call for one that may do anything, collecting included)
+call: func(key: string, c-name: string, args: list<Node>, ty: Type, effects: s64) -> Node {
+    let f = effects;
+    for a in args { f = f | a.fx; }
+    new-node(Kind.call({ key: key, c-name: c-name, name: intern(c-name), args: args, }), ty, f)
+}
+
+alloc: func(ctype: string, rec: string, is-record: bool, trace: string, ty: Type) -> Node {
+    new-node(
+        Kind.alloc({ ctype: ctype, rec: rec, is-record: is-record, trace: trace, stack: false, }),
+        ty,
+        fx().call,
+    )
+}
+
+make: func(ctype: string, fields: list<string>, parts: list<Node>, ty: Type) -> Node {
+    let f = 0;
+    for p in parts { f = f | p.fx; }
+    new-node(Kind.make({ ctype: ctype, fields: fields, parts: parts, }), ty, f)
+}
+
+list-get: func(list: Node, index: Node, ctype: string, ty: Type, fixed: bool) -> Node {
+    new-node(
+        Kind.list-get({ list: list, index: index, ctype: ctype, fixed: fixed, }),
+        ty,
+        list.fx | index.fx | fx().read-mem,
+    )
+}
+
+func-ref: func(key: string, c-name: string, c: string, ty: Type) -> Node {
+    new-node(Kind.func-ref({ key: key, c-name: c-name, name: intern(c-name), c: c, }), ty, 0)
+}
+
+// a call through a func value: it may do anything
+call-ref: func(callee: Node, args: list<Node>, ty: Type) -> Node {
+    let f = fx().call | callee.fx;
+    for a in args { f = f | a.fx; }
+    new-node(Kind.call-ref({ callee: callee, args: args, }), ty, f)
+}
+
+deref: func(address: Node, ty: Type) -> Node { new-node(Kind.deref(address), ty, address.fx | fx().read-mem) }
+
+address-of: func(place: Node) -> Node { new-node(Kind.address-of(place), Type.address-type, place.fx) }
+
+size-of: func(t: Type) -> Node { new-node(Kind.size-of(t), Type.num("usize"), 0) }
+
+element: func(base: Node, index: Node, item: Type) -> Node {
+    new-node(Kind.element({ base: base, index: index, item: item, }), Type.address-type, base.fx | index.fx)
+}
+
+interp: func(parts: list<Node>, formatters: list<Formatter>) -> Node {
+    new-node(Kind.interp({ parts: parts, formatters: formatters, }), Type.string-type, fx().call)
+}
+
+// whether a node may be an operand: it neither calls nor reads what may change
+pure: func(n: Node) -> bool { (n.fx & (fx().call | fx().read-mem)) == 0 }
+
+// ================================================================ the one walk every pass shares
+
+// the bodies a statement holds (an if's two, a loop's, a block's): how many, and each by its
+// index. A walk counts rather than takes a list, so it makes nothing at each node
+nested-count: func(n: Node) -> s64 {
+    match n.kind {
+        if(x) => 2,
+        loop(x) => 1,
+        block(x) => 1,
+        _ => 0,
+    }
+}
+
+nested-body: func(n: Node, index: s64) -> list<Node> {
+    match n.kind {
+        if(x) => if index == 0 { x.yes } else { x.no },
+        loop(x) => x.body,
+        block(x) => x.body,
+        _ => panic("a statement read past its bodies"),
+    }
+}
+
+// the operands a node reads (a loop's test and step included): how many, and each by its index
+operand-count: func(n: Node) -> s64 {
+    match n.kind {
+        assign(x) => 1,
+        bin(x) => 2,
+        un(x) => 1,
+        convert(a) => 1,
+        load(x) => 1,
+        store(x) => 2,
+        if(x) => 1,
+        loop(x) => present(x.test) + present(x.step),
+        return(v) => 1,
+        yield(v) => 1,
+        unreachable(x) => 1,
+        call(x) => x.args.len(),
+        call-ref(x) => 1 + x.args.len(),
+        make(x) => x.parts.len(),
+        list-get(x) => 2,
+        interp(x) => x.parts.len(),
+        deref(a) => 1,
+        address-of(a) => 1,
+        element(x) => 2,
+        _ => 0,
+    }
+}
+
+operand: func(n: Node, index: s64) -> Node {
+    match n.kind {
+        assign(x) => x.value,
+        bin(x) => if index == 0 { x.a } else { x.b },
+        un(x) => x.a,
+        convert(a) => a,
+        load(x) => x.base,
+        store(x) => if index == 0 { x.target } else { x.value },
+        if(x) => x.test,
+        loop(x) => loop-operand(x.test, x.step, index),
+        return(v) => v,
+        yield(v) => v,
+        unreachable(x) => x.value,
+        call(x) => x.args[index],
+        call-ref(x) => if index == 0 { x.callee } else { x.args[index - 1] },
+        make(x) => x.parts[index],
+        list-get(x) => if index == 0 { x.list } else { x.index },
+        interp(x) => x.parts[index],
+        deref(a) => a,
+        address-of(a) => a,
+        element(x) => if index == 0 { x.base } else { x.index },
+        _ => panic("a node read past its operands"),
+    }
+}
+
+// 1 for a loop's test or step that is there, 0 for none
+present: func(part: option<Node>) -> s64 {
+    match part {
+        some(_) => 1,
+        none => 0,
+    }
+}
+
+// a loop's index-th operand: its test first where it has one, then its step
+loop-operand: func(test: option<Node>, step: option<Node>, index: s64) -> Node {
+    match test {
+        some(found) => { if index == 0 { return found; } }
+        none => {}
+    }
+    match step {
+        some(found) => found,
+        none => panic("a loop read past its test and step"),
+    }
+}
+
+// a body's statements, the nested ones too, each before those it holds
+flatten: func(body: list<Node>) -> list<Node> {
+    let out: list<Node> = [];
+    flatten-into(body, out);
+    out
+}
+
+flatten-into: func(body: list<Node>, out: list<Node>) {
+    for n in body {
+        out.push(n);
+        for index in 0..nested-count(n) { flatten-into(nested-body(n, index), out); }
+    }
+}
+
+// the locals a node reads, its operands' too (into out)
+reads: func(n: Node, out: list<s64>) {
+    match n.kind {
+        local(i) => out.push(i),
+        _ => {}
+    }
+    for index in 0..operand-count(n) { reads(operand(n, index), out); }
+}
+
+// a body's statements replaced by others, in place (other nodes may hold the list)
+replace-body: func(body: list<Node>, by: list<Node>) {
+    for k in 0..body.len() { body.pop(); }
+    for n in by { body.push(n); }
+}

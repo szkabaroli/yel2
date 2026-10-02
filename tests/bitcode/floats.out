@@ -1,0 +1,9 @@
+swap 2.25 1.5
+sum5 767
+scale 2 5 -8
+mix 1.5 42
+pair 21 1.75
+reverse 5 4 3 2 1
+half some(2.5) none
+negate -2.5
+nested 3 6 1.75

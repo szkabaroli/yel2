@@ -1,0 +1,71 @@
+// values held across allocations (tools/bitcode-test.sh runs it with a collection before every one
+// too): a linked list of cases, records holding strings and lists, options and tuples of pointers,
+// a tree, strings made in a loop
+
+variant Cells { cons(Cell), end, }
+record Cell { value: s64, rest: Cells, }
+
+record Person { name: string, tags: list<string>, best: option<Person>, }
+
+variant Tree { leaf(s64), node(Branch), }
+record Branch { left: Tree, right: Tree, }
+
+build: func(count: s64) -> Cells {
+    let cells = Cells.end;
+    for i in 0..count { cells = Cells.cons({ value: i, rest: cells, }); }
+    cells
+}
+
+sum: func(cells: Cells) -> s64 {
+    let total = 0;
+    let at = cells;
+    loop {
+        match at {
+            cons(c) => {
+                total += c.value;
+                at = c.rest;
+            }
+            end => { break; }
+        }
+    }
+    total
+}
+
+grow: func(depth: s64, from: s64) -> Tree {
+    if depth == 0 { return Tree.leaf(from); }
+    Tree.node({ left: grow(depth - 1, from * 2), right: grow(depth - 1, from * 2 + 1), })
+}
+
+leaves: func(t: Tree) -> s64 {
+    match t {
+        leaf(v) => v,
+        node(b) => leaves(b.left) + leaves(b.right),
+    }
+}
+
+main: func() -> s32 {
+    let cells = build(2000);
+    print("sum {sum(cells)}\n");
+
+    let ada: Person = { name: "Ada", tags: ["math", "engines",], best: none, };
+    let grace: Person = { name: "Grace", tags: ["compilers",], best: some(ada), };
+    // a string made while both are held only by locals
+    let line = "{grace.name} likes {grace.tags[0]}";
+    match grace.best {
+        some(p) => print("{line}, best friend {p.name} ({p.tags[1]})\n"),
+        none => print("{line}\n"),
+    }
+
+    let pair = (cells, "{ada.name}!");
+    print("pair {sum(pair.0)} {pair.1}\n");
+
+    let tree = grow(10, 1);
+    print("tree {leaves(tree)}\n");
+
+    let names: list<string> = [];
+    for i in 0..300 { names.push("name {i}"); }
+    let length = 0;
+    for n in names { length += n.len(); }
+    print("names {names.len()} {length} {names[299]}\n");
+    0
+}

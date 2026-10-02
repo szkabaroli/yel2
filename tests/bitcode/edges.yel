@@ -1,0 +1,34 @@
+// the integers' edges, as yel defines them: wrapping, the least value divided by -1, shifts past the
+// width, conversions narrowing and widening by sign; each part's value folded into the exit code
+
+mix: func(acc: u64, v: u64) -> u64 { (acc * 31 + v) % 1000003 }
+
+main: func() -> s32 {
+    let acc: u64 = 7;
+    let least: s32 = -2147483647 - 1;
+    acc = mix(acc, (least / -1) as u64);
+    acc = mix(acc, (least % -1) as u64);
+    let big: s64 = 9223372036854775807;
+    acc = mix(acc, (big + 1) as u64);
+    let byte: u8 = 200;
+    acc = mix(acc, (byte * 2) as u64);
+    let shift: s32 = 1;
+    acc = mix(acc, (shift << 35) as u64);
+    let negative: s32 = -64;
+    acc = mix(acc, (negative >> 3) as u64);
+    let wide: u32 = 4000000000;
+    acc = mix(acc, (wide >> 40) as u64);
+    let small: s8 = -1;
+    acc = mix(acc, small as u64);
+    acc = mix(acc, (small as u8) as u64);
+    acc = mix(acc, ((300 as s16) as s8) as u64);
+    let c: char = 'z';
+    acc = mix(acc, c as u64);
+    let t = true;
+    acc = mix(acc, t as u64);
+    acc = mix(acc, (7 % -3) as u64);
+    acc = mix(acc, (-7 / 2) as u64);
+    let unsigned: u64 = 18446744073709551615;
+    acc = mix(acc, unsigned / 3);
+    (acc % 256) as s32
+}

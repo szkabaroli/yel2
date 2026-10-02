@@ -1,0 +1,25 @@
+// Interpolation specs ("{x:>8}", "{n:08x}", "{f:.2}", "{x:?}") and a type's display func
+
+record point { x: s32, y: s32, }
+
+variant shape { circle(f64), square(f64), }
+
+// how "{p}" shows a point; inside it, "{p}" would be the point's own text
+display: func(p: point) -> string { "({p.x}, {p.y})" }
+
+describe: func<T>(value: T) -> string { to-string(value) }
+
+main: func() {
+    let p: point = { x: 1, y: -2, };
+    let name = "yel";
+    let n: s32 = 255;
+    let f = 3.14159;
+    print("{p} {p:?} {describe(p)}\n");
+    print("{shape.circle(1.5)} {shape.circle(1.5):?}\n");
+    print("[{name}] [{name:?}] [{name:>6}] [{name:*^7}] [{name:<5}|] [{"é":.>3}]\n");
+    print("[{n}] [{n:x}] [{n:X}] [{n:b}] [{n:o}] [{n:08}] [{n:6}] [{-n:08x}]\n");
+    print("[{f:.2}] [{f:8.3}] [{f:<8.1}|] [{f:08.2}] [{2.5:.0}]\n");
+    print("[{'c'}] [{'c':?}] [{p:>10}] [{[1, 2,]:?}] [{some(n):?}]\n");
+    // a colon inside brackets or a string is the expression's
+    print("[{["a:b",][0]}]\n");
+}

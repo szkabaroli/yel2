@@ -1,0 +1,14 @@
+// Porffor's bench/strcat.js: five strings joined by +, 14000 times
+
+from "wasi:clocks" include monotonic-clock;
+
+main: func() {
+    let a = "alfa";
+    let b = "bravo";
+    let c = "charlie";
+    let d = "delta";
+    let e = "echo";
+    let t = monotonic-clock.now();
+    for i in 0..14000 { let joined = a + b + c + d + e; }
+    print("{(monotonic-clock.now() - t) as f64 / 1000000.0}\n");
+}

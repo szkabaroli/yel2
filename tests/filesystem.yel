@@ -1,0 +1,80 @@
+// wasi:filesystem used directly: the same natively (std's host, runtime/std/host-filesystem.yel)
+// and as a WASI 0.3 component (wasmtime's), the working directory preopened
+
+from "wasi:filesystem" include types, preopens;
+
+show: func(what: string, done: result<(), types.error-code>) {
+    match done {
+        ok(_) => print("{what}: ok\n"),
+        err(error) => print("{what}: {error}\n"),
+    }
+}
+
+main: async func() {
+    let dirs = preopens.get-directories();
+    print("{dirs.len()} {dirs[0].1}\n");
+    let root = dirs[0].0;
+    let none: types.path-flags = types.path-flags.symlink-follow & types.path-flags.symlink-follow;
+    let follow = types.path-flags.symlink-follow;
+    let fresh = types.open-flags.create | types.open-flags.truncate;
+    let writing = types.descriptor-flags.write;
+    show("create-directory-at", wait root.create-directory-at("build/fs-test"));
+    show("create-directory-at again", wait root.create-directory-at("build/fs-test"));
+
+    // a file written through a stream, then read back through one
+    match wait root.open-at(follow, "build/fs-test/a.txt", fresh, writing) {
+        ok(file) => {
+            let (bytes, out): tuple<stream<u8>, writer<u8>> = streams.stream-pair(64);
+            let written = file.write-via-stream(bytes, 0);
+            for byte in [104, 101, 108, 108, 111,] { wait streams.write(out, byte as u8); }
+            streams.close(out);
+            print("written: {wait written}\n");
+            file.drop();
+        }
+        err(error) => print("open-at: {error}\n"),
+    }
+    match wait root.stat-at(follow, "build/fs-test/a.txt") {
+        ok(found) => print("{found.type} {found.size}\n"),
+        err(error) => print("stat-at: {error}\n"),
+    }
+    match wait root.open-at(follow, "build/fs-test/a.txt", types.open-flags.create & types.open-flags.directory, types.descriptor-flags.read) {
+        ok(file) => {
+            let (bytes, reading) = file.read-via-stream(1);
+            let text = buffer.buffer(16);
+            loop {
+                match wait streams.read(bytes) {
+                    some(byte) => text.push-byte(byte as s64),
+                    none => { break; }
+                }
+            }
+            print("read: {text.to-string()} {wait reading}\n");
+            file.drop();
+        }
+        err(error) => print("open-at: {error}\n"),
+    }
+
+    // a missing file, a directory listed, renamed and removed
+    match wait root.open-at(follow, "build/fs-test/none.txt", types.open-flags.create & types.open-flags.directory, types.descriptor-flags.read) {
+        ok(file) => file.drop(),
+        err(error) => print("open-at a missing file: {error}\n"),
+    }
+    match wait root.open-at(none, "build/fs-test", types.open-flags.directory, types.descriptor-flags.read) {
+        ok(dir) => {
+            let (entries, reading) = dir.read-directory();
+            loop {
+                match wait streams.read(entries) {
+                    some(entry) => print("entry: {entry.name} {entry.type}\n"),
+                    none => { break; }
+                }
+            }
+            print("listed: {wait reading}\n");
+            dir.drop();
+        }
+        err(error) => print("open-at a directory: {error}\n"),
+    }
+    show("rename-at", wait root.rename-at("build/fs-test/a.txt", root, "build/fs-test/b.txt"));
+    show("remove a full directory", wait root.remove-directory-at("build/fs-test"));
+    show("unlink-file-at", wait root.unlink-file-at("build/fs-test/b.txt"));
+    show("unlink-file-at again", wait root.unlink-file-at("build/fs-test/b.txt"));
+    show("remove-directory-at", wait root.remove-directory-at("build/fs-test"));
+}

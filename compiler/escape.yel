@@ -1,0 +1,687 @@
+// The IR's flow: which locals may hold one value (a union-find of groups), and of each group whether
+// its value escapes (is stored: a field, a list, a case; kept by a func it is given; captured), is
+// held by another group (a call kept it in another of its arguments: map.set's value in the map;
+// it escapes only where that one does, and one a parameter holds is kept in that parameter),
+// is given back (returned), or may be one made elsewhere (stale: a parameter's, a field read from
+// another value, a result that is not new). Each func's summary (which parameters it keeps and gives
+// back, whether its result is new) is a fixpoint over the program (flow.fixpoint), a call read
+// through its callee's summary, the runtime's through flow.yel's table.
+//
+// What uses it: a record that never leaves the func making it is kept on the func's stack, so it
+// is never allocated (Porffor's escape.js goes further: a literal's fields become locals; here the
+// record keeps its layout, traced through the frame), a record made in a loop only if nothing holds
+// it from one turn into the next; and a binding's stream or future that no one else has has its
+// end let go after its last use (gen.yel's releases).
+
+// a func's locals in groups that may hold one value, and whether each group's value escapes the
+// func; for each local, the loop it is first defined in (0: none), each loop's parent, and each
+// record the func makes with the loop it is made in
+record Groups {
+    parent: list<s64>,
+    escapes: list<bool>,
+    returned: list<bool>,
+    stale: list<bool>,
+    // stale from elsewhere than a parameter (a field read from another value, a result that is not
+    // new): what such a value holds, others may reach
+    outside: list<bool>,
+    written: list<bool>,
+    // moved to the host (given a WIT func: a stream's or a future's end leaves the component)
+    moved: list<bool>,
+    // the locals whose values hold each group's (a call kept it in another argument), and the
+    // params (by position) whose values hold it, through any chain of holders (close)
+    holders: list<list<s64>>,
+    holding-params: list<list<s64>>,
+    def-loop: list<s64>,
+    loop-parent: list<s64>,
+    records: list<s64>,
+    record-loops: list<s64>,
+}
+
+// what a call does with its arguments (by index): kept, written, given back; moved to the host
+// (all of them: a WIT func's); and whether its result is new
+// (keeps: anywhere; into: only in those other arguments)
+record CallFlow {
+    keeps: list<bool>,
+    kept-in: list<list<s64>>,
+    writes: list<bool>,
+    gives: list<bool>,
+    moved: bool,
+    new-result: bool,
+}
+
+// what escape analysis needs to know of the program: its funcs by C name, which of each one's
+// params escape it, which named types hold pointers (records, and variants with payloads), and,
+// by C name, each func's groups (as last found) and the yel funcs it calls
+record Facts {
+    funcs: map<Name, IrFunc>,
+    // by C name: which parameters each func keeps (lets escape), which it gives back, and whether
+    // what it gives back is new
+    param-escapes: map<Name, list<bool>>,
+    // by C name: for each parameter, the others it is kept in (only)
+    param-kept-in: map<Name, list<list<s64>>>,
+    param-gives: map<Name, list<bool>>,
+    param-writes: map<Name, list<bool>>,
+    fresh-result: map<Name, bool>,
+    // the WIT funcs' wrappers (and an async one's start), by C name: what they are given crosses to
+    // the host (moved, or copied), what they give back is new
+    wit: set<Name>,
+    // what each extern does, by its C name (flow.derive)
+    externs: map<string, RuntimeEffect>,
+    pointer-types: map<Name, bool>,
+    // the named types that may hold a func value (a closure's environment with it)
+    func-holders: map<Name, bool>,
+    groups: map<Name, Groups>,
+    callees: map<Name, list<Name>>,
+    // what was found once and asked again: a call's flow, by its callee's C name (a yel func's
+    // dropped when its summary changes), and, by func, whether each local's type holds a mutable
+    // value (its type is fixed while the analysis runs)
+    flows: map<Name, CallFlow>,
+    mutable-locals: map<Name, list<bool>>,
+}
+
+module opt {
+    // whether a value of type t may hold a func value (holders: the named types that may)
+    holds-funcs: func(holders: map<Name, bool>, t: Type) -> bool {
+        match t {
+            func-type(f) => true,
+            named(n) => holders.has(n),
+            _ => any-child(t, { x -> holds-funcs(holders, x) }),
+        }
+    }
+
+    // whether a call's argument may be (part of) its result: a func value only where the result may
+    // hold one (a closure given filter is none of the list it gives)
+    may-become: func(p: Facts, arg: Node, result: Type) -> bool {
+        match arg.ty {
+            func-type(f) => holds-funcs(p.func-holders, result),
+            _ => true,
+        }
+    }
+
+    holds-pointers: func(p: Facts, t: Type) -> bool {
+        match t {
+            string-type => true,
+            buffer-type => true,
+            // a closure's environment
+            func-type(f) => true,
+            list-type(x) => true,
+            map-type(x) => true,
+            future-type(x) => true,
+            seq-type(x) => true,
+            stream-type(x) => true,
+            named(n) => p.pointer-types.has(n),
+            _ => any-child(t, { x -> holds-pointers(p, x) }),
+        }
+    }
+
+    // whether local d's value may hold a value that is written (holds-mutable of its type: found
+    // once for each of the func's locals)
+    local-mutable: func(p: Facts, f: IrFunc, d: s64) -> bool {
+        let known = p.mutable-locals.get-or(f.name, []);
+        if known.len() != f.locals.len() {
+            known = f.locals.map({ x -> holds-mutable(p, x.ty) });
+            p.mutable-locals.set(f.name, known);
+        }
+        known[d]
+    }
+
+    // whether a value of type t may hold a value that is written (a list, a record, a closure's
+    // environment, …): a string, a number or anything made of them holds none
+    holds-mutable: func(p: Facts, t: Type) -> bool {
+        match t {
+            string-type => false,
+            option-type(x) => any-child(t, { y -> holds-mutable(p, y) }),
+            result-type(r) => any-child(t, { y -> holds-mutable(p, y) }),
+            tuple-type(xs) => any-child(t, { y -> holds-mutable(p, y) }),
+            union-type(xs) => any-child(t, { y -> holds-mutable(p, y) }),
+            anon-record(r) => any-child(t, { y -> holds-mutable(p, y) }),
+            fixed-list(x) => any-child(t, { y -> holds-mutable(p, y) }),
+            _ => holds-pointers(p, t),
+        }
+    }
+
+    find: func(gr: Groups, i: s64) -> s64 {
+        let r = i;
+        for step in 0..gr.parent.len() + 1 {
+            if gr.parent[r] == r { return r; }
+            r = gr.parent[r];
+        }
+        r
+    }
+
+    join: func(gr: Groups, a: s64, b: s64) {
+        let x = find(gr, a);
+        let y = find(gr, b);
+        if x == y { return; }
+        gr.parent[y] = x;
+        if gr.escapes[y] { gr.escapes[x] = true; }
+        if gr.returned[y] { gr.returned[x] = true; }
+        if gr.stale[y] { gr.stale[x] = true; }
+        if gr.outside[y] { gr.outside[x] = true; }
+        if gr.written[y] { gr.written[x] = true; }
+        if gr.moved[y] { gr.moved[x] = true; }
+        for k in gr.holders[y] { gr.holders[x].push(k); }
+        for q in gr.holding-params[y] {
+            if !gr.holding-params[x].contains(q) { gr.holding-params[x].push(q); }
+        }
+    }
+
+    // what n reads is written (through it: a field set, an item pushed)
+    write: func(gr: Groups, n: Node) {
+        let read: list<s64> = [];
+        reads(n, read);
+        for i in read { gr.written[find(gr, i)] = true; }
+    }
+
+    // d's group may hold a value made elsewhere
+    taint: func(gr: Groups, d: s64) { if d >= 0 { gr.stale[find(gr, d)] = true; } }
+
+    // d's, where it may hold a value that is written (a number's, a string's: nothing to say)
+    taint-holder: func(p: Facts, gr: Groups, f: IrFunc, d: s64) {
+        if d >= 0 && local-mutable(p, f, d) {
+            taint(gr, d);
+            gr.outside[find(gr, d)] = true;
+        }
+    }
+
+    // what n reads is given back
+    give-back: func(gr: Groups, n: Node) {
+        let read: list<s64> = [];
+        reads(n, read);
+        for i in read { gr.returned[find(gr, i)] = true; }
+    }
+
+    // d may hold what n reads
+    flow: func(gr: Groups, d: s64, n: Node) {
+        let read: list<s64> = [];
+        reads(n, read);
+        for i in read { join(gr, d, i); }
+    }
+
+    // what n reads leaves the func
+    escape: func(gr: Groups, n: Node) {
+        let read: list<s64> = [];
+        reads(n, read);
+        for i in read { gr.escapes[find(gr, i)] = true; }
+    }
+
+    // what n reads is held by what holder reads (kept in it; where holder reads no local, the
+    // value escapes: a field's, a temporary's)
+    hold: func(gr: Groups, n: Node, holder: Node) {
+        let held: list<s64> = [];
+        reads(n, held);
+        let by: list<s64> = [];
+        reads(holder, by);
+        if by.len() == 0 {
+            escape(gr, n);
+            return;
+        }
+        for h in held {
+            for k in by { gr.holders[find(gr, h)].push(k); }
+        }
+    }
+
+    // what holds each group, followed to the end: a group held by one that escapes, is given back
+    // or came from outside (a field's value: others may reach it) does too, and one a parameter's
+    // group holds is kept in that parameter (its position)
+    close: func(gr: Groups, f: IrFunc) {
+        loop {
+            let changed = false;
+            for i in 0..gr.parent.len() {
+                if find(gr, i) != i { continue; }
+                for k in gr.holders[i] {
+                    let h = find(gr, k);
+                    if h == i { continue; }
+                    if (gr.escapes[h] || gr.outside[h]) && !gr.escapes[i] {
+                        gr.escapes[i] = true;
+                        changed = true;
+                    }
+                    if gr.returned[h] && !gr.returned[i] {
+                        gr.returned[i] = true;
+                        changed = true;
+                    }
+                    for at in 0..f.params.len() {
+                        let q = find(gr, f.params[at]);
+                        let holds-it = q == h || gr.holding-params[h].contains(at);
+                        if holds-it && q != i && !gr.holding-params[i].contains(at) {
+                            gr.holding-params[i].push(at);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed { break; }
+        }
+    }
+
+    define: func(gr: Groups, i: s64, loop: s64) {
+        if gr.def-loop[i] < 0 { gr.def-loop[i] = loop; }
+    }
+
+    // a func's groups: who shares a value with whom, and which values leave it
+    groups: func(p: Facts, f: IrFunc) -> Groups {
+        let gr: Groups = {
+            parent: [],
+            escapes: [],
+            returned: [],
+            stale: [],
+            outside: [],
+            written: [],
+            moved: [],
+            holders: [],
+            holding-params: [],
+            def-loop: [],
+            loop-parent: [0,],
+            records: [],
+            record-loops: [],
+        };
+        for i in 0..f.locals.len() {
+            gr.parent.push(i);
+            gr.escapes.push(false);
+            gr.returned.push(false);
+            gr.stale.push(false);
+            gr.outside.push(false);
+            gr.written.push(false);
+            gr.moved.push(false);
+            gr.holders.push([]);
+            gr.holding-params.push([]);
+            gr.def-loop.push(-1);
+        }
+        // a parameter's value is its caller's
+        for q in f.params {
+            define(gr, q, 0);
+            taint(gr, q);
+        }
+        group-walk(p, gr, f, f.body, 0);
+        close(gr, f);
+        gr
+    }
+
+    group-walk: func(p: Facts, gr: Groups, f: IrFunc, body: list<Node>, loop: s64) {
+        for n in body {
+            match n.kind {
+                assign(x) => {
+                    define(gr, x.dest, loop);
+                    value-flow(p, gr, f, x.dest, x.value, loop);
+                }
+                call(c) => value-flow(p, gr, f, -1, n, loop),
+                call-ref(c) => value-flow(p, gr, f, -1, n, loop),
+                store(x) => {
+                    escape(gr, x.value);
+                    write(gr, x.target);
+                }
+                return(v) => give-back(gr, v),
+                // a generator's value: read by whoever steps it, any time later
+                yield(v) => escape(gr, v),
+                loop(x) => {
+                    let inner = gr.loop-parent.len();
+                    gr.loop-parent.push(loop);
+                    group-walk(p, gr, f, x.body, inner);
+                }
+                _ => { for index in 0..nested-count(n) { group-walk(p, gr, f, nested-body(n, index), loop); } }
+            }
+        }
+    }
+
+    // a value given to d (-1: none): who may hold it, and what it lets escape
+    value-flow: func(p: Facts, gr: Groups, f: IrFunc, d: s64, v: Node, loop: s64) {
+        // only a value that may hold another (not a string, a number: what no one writes) shares
+        let holds = d >= 0 && local-mutable(p, f, d);
+        match v.kind {
+            // a func value's call: any argument may escape, the result be any of them (or anything)
+            call-ref(c) => {
+                for a in c.args {
+                    escape(gr, a);
+                    write(gr, a);
+                }
+                if holds {
+                    for a in c.args {
+                        if may-become(p, a, f.locals[d].ty) { flow(gr, d, a); }
+                    }
+                }
+                taint-holder(p, gr, f, d);
+            }
+            // a call: as call-flow says of each argument
+            call(c) => {
+                let cf = call-flow(p, c);
+                for i in 0..c.args.len() {
+                    let a = c.args[i];
+                    if cf.moved {
+                        let read: list<s64> = [];
+                        reads(a, read);
+                        for r in read { gr.moved[find(gr, r)] = true; }
+                    }
+                    if cf.keeps[i] { escape(gr, a); }
+                    for j in cf.kept-in[i] { hold(gr, a, c.args[j]); }
+                    if cf.writes[i] { write(gr, a); }
+                    if holds && cf.gives[i] && may-become(p, a, f.locals[d].ty) { flow(gr, d, a); }
+                }
+                if !cf.new-result { taint-holder(p, gr, f, d); }
+            }
+            alloc(a) => {
+                if d >= 0 && a.is-record {
+                    gr.records.push(d);
+                    gr.record-loops.push(loop);
+                }
+            }
+            // a field or a payload was stored (so escaped) before it can be loaded: a value
+            // struct's part is the struct's, another value's (->) is that value's
+            load(x) => {
+                if holds && !x.arrow { flow(gr, d, x.base); }
+                if x.arrow { taint-holder(p, gr, f, d); }
+            }
+            list-get(x) => {
+                if holds { flow(gr, d, x.list); }
+                taint-holder(p, gr, f, d);
+            }
+            interp(x) => {}
+            // a global's value: any func may reach what it holds
+            global(_) => taint-holder(p, gr, f, d),
+            // a value struct (some(r), a tuple) holds what it is made of
+            _ => { if holds { flow(gr, d, v); } }
+        }
+    }
+
+    // what a call does with each of its arguments (by index, a generic extern's type arguments'
+    // first: nothing), and whether its result is new: a WIT func's moves them to the host (copied
+    // across, a stream's or a future's end moved) and gives back a new value; the runtime's, as its
+    // declaration says (flow.derive; one not declared may give back any, its result not new); an
+    // async func's or a generator's start, its frame holding every one (what its step keeps, kept
+    // now); a yel func's, as its summary says; one not known, anything
+    call-flow: func(p: Facts, c: CallNode) -> CallFlow {
+        match p.flows.get(c.name) {
+            some(known) => { if known.keeps.len() == c.args.len() { return known; } }
+            none => {}
+        }
+        let cf = find-call-flow(p, c);
+        p.flows.set(c.name, cf);
+        cf
+    }
+
+    // a call's flow, found (call-flow keeps it: what it gives is only read)
+    find-call-flow: func(p: Facts, c: CallNode) -> CallFlow {
+        let n = c.args.len();
+        let cf: CallFlow = { keeps: [], kept-in: [], writes: [], gives: [], moved: false, new-result: true, };
+        if p.wit.has(c.name) {
+            cf.moved = true;
+            for i in 0..n {
+                cf.keeps.push(false);
+                cf.kept-in.push([]);
+                cf.writes.push(false);
+                cf.gives.push(false);
+            }
+            return cf;
+        }
+        if c.key == "" {
+            let e = flow.call-effect(p.externs, c.c-name);
+            let k = type-args-before(c.args);
+            for i in 0..n {
+                cf.keeps.push(i >= k && flow.keeps(e, i - k));
+                // the extern's params past its type arguments
+                let holders: list<s64> = [];
+                if i >= k {
+                    for j in flow.kept-in(e, i - k) { holders.push(j + k); }
+                }
+                cf.kept-in.push(holders);
+                cf.writes.push(i >= k && flow.writes(e, i - k));
+                cf.gives.push(i >= k && flow.gives(e, i - k));
+            }
+            cf.new-result = e.listed;
+            return cf;
+        }
+        let begun = starts-at(c.c-name, 0, "s_");
+        let step = if begun { intern("u" + c.c-name.substring(1, c.c-name.len())) } else { c.name };
+        let start = begun && p.param-escapes.has(step);
+        let key = if start { step } else { c.name };
+        if !p.param-escapes.has(key) {
+            for i in 0..n {
+                cf.keeps.push(true);
+                cf.kept-in.push([]);
+                cf.writes.push(true);
+                cf.gives.push(true);
+            }
+            cf.new-result = false;
+            return cf;
+        }
+        let esc = p.param-escapes[key];
+        let kept-in = p.param-kept-in[key];
+        let ws = p.param-writes[key];
+        let gives = p.param-gives[key];
+        for i in 0..n {
+            cf.keeps.push(i >= esc.len() || esc[i]);
+            cf.kept-in.push(if i < kept-in.len() { kept-in[i] } else { [] });
+            cf.writes.push(i >= ws.len() || ws[i]);
+            cf.gives.push(start || i >= gives.len() || gives[i]);
+        }
+        cf.new-result = start || p.fresh-result[key];
+        cf
+    }
+
+    // the values a statement lets escape (stored, yielded, kept by the func it is given, given a
+    // func value)
+    escaping: func(p: Facts, n: Node) -> list<Node> {
+        match n.kind {
+            assign(x) => escaping(p, x.value),
+            store(x) => [x.value,],
+            yield(v) => [v,],
+            call-ref(c) => c.args,
+            call(c) => {
+                let cf = call-flow(p, c);
+                let out: list<Node> = [];
+                // kept anywhere, or in another argument (another name holds it)
+                for i in 0..c.args.len() {
+                    if cf.keeps[i] || cf.kept-in[i].len() > 0 { out.push(c.args[i]); }
+                }
+                out
+            }
+            _ => [],
+        }
+    }
+
+    // how many of a runtime call's arguments are its type arguments
+    type-args-before: func(args: list<Node>) -> s64 {
+        let k = 0;
+        loop {
+            if k == args.len() { return k; }
+            let is-type-arg = match args[k].kind {
+                type-arg(_) => true,
+                _ => false,
+            };
+            if !is-type-arg { return k; }
+            k += 1;
+        }
+    }
+
+    // a yel func a statement calls, by C name ("" for none)
+    callee: func(n: Node) -> option<Name> {
+        match value(n).kind {
+            call(c) => if c.key != "" { some(c.name) } else { none },
+            _ => none,
+        }
+    }
+
+    // the yel funcs a body calls (by C name, once each, in the order first called), and how often
+    // each is called (into counts)
+    calls: func(body: list<Node>, out: list<Name>, counts: map<Name, s64>) {
+        let listed: set<Name> = set.new();
+        for c in out { listed.add(c); }
+        for n in flatten(body) {
+            match callee(n) {
+                some(c) => {
+                    if !listed.has(c) {
+                        listed.add(c);
+                        out.push(c);
+                    }
+                    counts.set(c, counts.get-or(c, 0) + 1);
+                }
+                none => {}
+            }
+        }
+    }
+
+    // each func's callees (the yel funcs it calls, by C name), found once
+    find-callees: func(p: Facts, funcs: list<IrFunc>) {
+        p.callees = map.new();
+        for f in funcs {
+            let out: list<Name> = [];
+            calls(f.body, out, map.new());
+            p.callees.set(f.name, out);
+        }
+    }
+
+    // each func's summary (which parameters it keeps, which it gives back, whether its result is
+    // new): a fixpoint (flow.fixpoint) from none kept, none given back, every result new; each
+    // func's groups kept
+    param-escapes: func(p: Facts, funcs: list<IrFunc>) {
+        p.param-escapes = map.new();
+        p.param-kept-in = map.new();
+        p.param-gives = map.new();
+        p.param-writes = map.new();
+        p.fresh-result = map.new();
+        p.groups = map.new();
+        p.flows = map.new();
+        p.mutable-locals = map.new();
+        find-callees(p, funcs);
+        let keys: list<Name> = [];
+        for f in funcs {
+            let zeros: list<bool> = [];
+            for q in f.params { zeros.push(false); }
+            p.param-escapes.set(f.name, zeros);
+            let none-in: list<list<s64>> = [];
+            for q in f.params { none-in.push([]); }
+            p.param-kept-in.set(f.name, none-in);
+            p.param-gives.set(f.name, zeros.slice(0, zeros.len()));
+            p.param-writes.set(f.name, zeros.slice(0, zeros.len()));
+            p.fresh-result.set(f.name, true);
+            keys.push(f.name);
+        }
+        flow.fixpoint(keys, p.callees, { n -> summarize(p, n) });
+    }
+
+    // a func's groups found again, and its summary; whether the summary changed
+    summarize: func(p: Facts, n: Name) -> bool {
+        let f = p.funcs[n];
+        let gr = groups(p, f);
+        p.groups.set(n, gr);
+        let esc: list<bool> = [];
+        let kept-in: list<list<s64>> = [];
+        let gives: list<bool> = [];
+        let ws: list<bool> = [];
+        for q in f.params {
+            // a generator's frame holds its parameters as long as it is read: kept
+            esc.push(gr.escapes[find(gr, q)] || f.generator);
+            kept-in.push(gr.holding-params[find(gr, q)]);
+            gives.push(gr.returned[find(gr, q)]);
+            ws.push(gr.written[find(gr, q)]);
+        }
+        let fresh = p.fresh-result[n] && gives-new(gr, f);
+        let changed = !same(esc, p.param-escapes[n]) || !same(gives, p.param-gives[n])
+            || !same(ws, p.param-writes[n]) || fresh != p.fresh-result[n] || !same-in(kept-in, p.param-kept-in[n]);
+        // a call of it found again (and of its start, an async func's step's)
+        if changed {
+            p.flows.remove(n);
+            let text = name-text(n);
+            if starts-at(text, 0, "u_") { p.flows.remove(intern("s" + text.substring(1, text.len()))); }
+        }
+        p.param-escapes.set(n, esc);
+        p.param-kept-in.set(n, kept-in);
+        p.param-gives.set(n, gives);
+        p.param-writes.set(n, ws);
+        p.fresh-result.set(n, fresh);
+        changed
+    }
+
+    // whether everything a func gives back is new (no returned group holds a value made elsewhere)
+    gives-new: func(gr: Groups, f: IrFunc) -> bool {
+        for i in 0..f.locals.len() {
+            if gr.returned[find(gr, i)] && gr.stale[find(gr, i)] { return false; }
+        }
+        true
+    }
+
+    same-in: func(a: list<list<s64>>, b: list<list<s64>>) -> bool {
+        if a.len() != b.len() { return false; }
+        for i in 0..a.len() {
+            if a[i].len() != b[i].len() { return false; }
+            for q in a[i] {
+                if !b[i].contains(q) { return false; }
+            }
+        }
+        true
+    }
+
+    same: func(a: list<bool>, b: list<bool>) -> bool {
+        if a.len() != b.len() { return false; }
+        for i in 0..a.len() {
+            if a[i] != b[i] { return false; }
+        }
+        true
+    }
+
+    // whether loop a is b or inside it
+    within: func(gr: Groups, a: s64, b: s64) -> bool {
+        let l = a;
+        for step in 0..gr.loop-parent.len() + 1 {
+            if l == b { return true; }
+            if l == 0 { return false; }
+            l = gr.loop-parent[l];
+        }
+        false
+    }
+
+    // a group's root and the roots of every group holding it, through any chain of holders
+    holder-roots: func(gr: Groups, root: s64) -> list<s64> {
+        let out: list<s64> = [root,];
+        let at = 0;
+        loop {
+            if at >= out.len() { break; }
+            for k in gr.holders[out[at]] {
+                let h = find(gr, k);
+                if !out.contains(h) { out.push(h); }
+            }
+            at += 1;
+        }
+        out
+    }
+
+    // a func's records that never leave it go on its stack: none of its group escapes, and every
+    // local of its group is first defined in the loop the record is made in (else a later turn
+    // would make it again in the same place while an earlier turn's is still held)
+    place-records: func(p: Facts, f: IrFunc) {
+        let gr = p.groups[f.name];
+        let stack: map<string, bool> = map.new();
+        for k in 0..gr.records.len() {
+            let d = gr.records[k];
+            let root = find(gr, d);
+            // not held by a parameter either (its caller has it)
+            let ok = !gr.escapes[root] && !gr.returned[root] && gr.holding-params[root].len() == 0;
+            // its group and every group holding it (a list it is pushed to): each local of them first
+            // defined in the record's loop
+            let held-by = holder-roots(gr, root);
+            if ok {
+                for j in 0..f.locals.len() {
+                    if ok && held-by.contains(find(gr, j)) && gr.def-loop[j] >= 0 && !within(
+                        gr,
+                        gr.def-loop[j],
+                        gr.record-loops[k],
+                    ) {
+                        ok = false;
+                    }
+                }
+            }
+            if ok { stack.set("{d}", true); }
+        }
+        for n in flatten(f.body) {
+            match n.kind {
+                assign(x) => {
+                    match x.value.kind {
+                        // an async func's: never on the stack (it is gone while it waits)
+                        alloc(a) => { a.stack = stack.has("{x.dest}") && !f.async; }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}

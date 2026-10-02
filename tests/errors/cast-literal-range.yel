@@ -1,0 +1,4 @@
+// error: 3:13: 200 is out of range for s8
+main: func() {
+    let b = 200 as s8;
+}

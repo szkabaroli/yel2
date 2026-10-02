@@ -1,0 +1,6 @@
+[{name: "barbara", score: 1}, {name: "grace", score: 3}, {name: "ada", score: 9}]
+[{name: "ada", score: 9}, {name: "grace", score: 3}, {name: "barbara", score: 1}]
+7 81
+inc: 8 {label: "inc", run: <func>}
+square: 49 {label: "square", run: <func>}
+16 true

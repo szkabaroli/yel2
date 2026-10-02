@@ -1,0 +1,12 @@
+package test:shapes;
+
+module colors {
+    enum Color { red, green, }
+
+    name: func(c: Color) -> string {
+        match c {
+            red => "red",
+            green => "green",
+        }
+    }
+}

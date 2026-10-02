@@ -1,0 +1,213 @@
+// yelc: the yel compiler, in yel. A package (a directory of files, or one file), after the
+// runtime's prelude (whose extern funcs are C functions), to C against runtime/yel.h. The C it
+// makes of itself is its seed (../seed/yelc.c), which ../bootstrap.sh builds it from.
+//
+//   yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none]
+//        [--wit <dir>]   (the component's WIT world, for wasm-component-ld --component-type <dir>)
+//        [--backend c|bitcode] [--triple <t>]   (bitcode: LLVM's, for clang, llvm.yel: integers and
+//        control so far)
+//   yelc check <input.yel | package dir> [prelude.yel] [-I <dir>]...   (every error, as a compile
+//        finds it, lexer to readonly and moves; no C made)
+//   yelc --fmt <file.yel | dir>...   (each file formatted in place, fmt.yel)
+//
+// This package is the compiler: its top level holds what every part shares (syntax.yel, types.yel,
+// text.yel), and each part is a module: lexer, parser, checker, gen, and packages, which reads a
+// program's packages. main runs them in that order.
+
+package yel:yelc@0.0.2;
+
+main: async func(argv: list<string>) -> s64 {
+    // yelc <input> <output.c> [prelude.yel] [-I <dir>]...: the input is a package's directory, or
+    // one file
+    let positional: list<string> = [];
+    let search: list<string> = [];
+    // size (the default): inline only what that makes no bigger; speed: small funcs too
+    let mode = "size";
+    // --wit <dir>: the component's WIT (its world, and the WIT packages it needs) written there
+    let wit-out = "";
+    // --backend c (the default: C for runtime/yel.h) or bitcode (LLVM's, llvm.yel: a start); --triple:
+    // the bitcode's target (by default the one yelc runs on: its C calling convention is what the
+    // bitcode calls the runtime by)
+    let backend = "c";
+    let triple = host-triple();
+    let i = 0;
+    let fmt = false;
+    // yelc check: the program's errors told, no C made
+    let check = argv.len() > 0 && argv[0] == "check";
+    if check { i = 1; }
+
+    for step in 0..argv.len() {
+        if i < argv.len() {
+            if argv[i] == "--fmt" {
+                fmt = true;
+                i += 1;
+            } else if argv[i] == "--backend" && i + 1 < argv.len() {
+                backend = argv[i + 1];
+                if backend != "c" && backend != "bitcode" {
+                    eprint("yelc: --backend is c or bitcode\n");
+                    return 2;
+                }
+                i += 2;
+            } else if argv[i] == "--triple" && i + 1 < argv.len() {
+                triple = argv[i + 1];
+                i += 2;
+            } else if argv[i] == "--wit" && i + 1 < argv.len() {
+                wit-out = argv[i + 1];
+                i += 2;
+            } else if argv[i] == "--no-opt" {
+                mode = "none";
+                i += 1;
+            } else if argv[i] == "--opt" && i + 1 < argv.len() {
+                mode = argv[i + 1];
+                if mode != "size" && mode != "speed" && mode != "none" {
+                    eprint("yelc: --opt is size, speed or none\n");
+                    return 2;
+                }
+                i += 2;
+            } else if argv[i] == "-I" && i + 1 < argv.len() {
+                search.push(argv[i + 1]);
+                i += 2;
+            } else {
+                positional.push(argv[i]);
+                i += 1;
+            }
+        }
+    }
+
+    if fmt {
+        for p in positional { wait format-path(p); }
+        return 0;
+    }
+
+    if positional.len() < (if check { 1 } else { 2 }) {
+        eprint("usage: yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none] [--wit <dir>]\n");
+        eprint("       yelc check <input.yel | package dir> [prelude.yel] [-I <dir>]...\n");
+        return 2;
+    }
+
+    let input = positional[0];
+    let output = if check { "" } else { positional[1] };
+    let prelude = "runtime/prelude.yel";
+    let prelude-at = if check { 1 } else { 2 };
+    if positional.len() > prelude-at { prelude = positional[prelude-at]; }
+
+    // WIT packages: beside the prelude (runtime/wit), then in each -I directory
+    let wit-dirs: list<string> = [packages.dir-name(prelude) + "/wit",];
+    for d in search {
+        wit-dirs.push(d);
+    }
+
+    let context: Context = {
+        sources: [],
+        errors: [],
+        input: input,
+        mode: if check { "check" } else { mode },
+        backend: backend,
+        triple: triple,
+    };
+    let prog: Program = {
+        context: context,
+        decls: [],
+        packages: map.new(),
+        search: search,
+        prelude: map.new(),
+        wit-dirs: wit-dirs,
+        wit: map.new(),
+        wit-read: false,
+        wit-types: map.new(),
+        wit-done: map.new(),
+        root: blank-scope(input).pkg,
+    };
+    let prelude-source = wait diagnostics.read-source(prog.context, prelude);
+    parser.declarations(parser.parser(prog.context, prelude-source, prog.context.sources[prelude-source].text, 1, 1), prog.decls);
+
+    for d in prog.decls {
+        prog.prelude.set(decl-name(d), true);
+    }
+
+    // the standard library (runtime/std, beside the prelude): yel:std, written in yel over the
+    // prelude's externs, as Porffor's builtins are over its intrinsics. Every program reaches its
+    // names after its own and the prelude's
+    let std-dir = packages.dir-name(prelude) + "/std";
+    if wait diagnostics.is-dir(std-dir) { wait packages.load-package(prog, std-dir, "the standard library"); }
+
+    prog.root = wait packages.load-package(prog, input, "");
+    packages.key-decls(prog.decls);
+    // each phase goes on past an error to find the others; where it ends, any found are shown and
+    // the compiler stops (the checker never sees a file that did not parse, codegen never an error)
+    diagnostics.abort-if-errors(prog.context);
+
+    let sites = checker.check-program(prog.context, prog.decls, prog.prelude);
+    diagnostics.abort-if-errors(prog.context);
+
+    let world: World = { items: [], interfaces: [], };
+    // check: as far as the readonly and move checks (on the IR), then done
+    let c = gen.compile(prog.context, prog.decls, sites, world);
+    diagnostics.abort-if-errors(prog.context);
+    if check { return 0; }
+    wait diagnostics.write-output(output, c);
+
+    if wit-out != "" {
+        wait write-world(prog, wit-out, world);
+    }
+
+    0
+}
+
+// a file formatted in place (its name printed when that changed it), or each .yel file under a
+// directory
+format-path: async func(path: string) {
+    if wait diagnostics.is-dir(path) {
+        for e in wait diagnostics.entries(path) {
+            let p = path + "/" + e;
+            if wait diagnostics.is-dir(p) || e.len() > 4 && e.substring(e.len() - 4, e.len(),) == ".yel" {
+                wait format-path(p);
+            }
+        }
+        return;
+    }
+    let context: Context = { sources: [], errors: [], input: path, mode: "", backend: "", triple: "", };
+    let src = context.sources[wait diagnostics.read-source(context, path)].text;
+    let out = fmt.format(src, path);
+    if out != src {
+        wait diagnostics.write-output(path, out);
+        print("{path}\n");
+    }
+}
+
+// the component's WIT: its world (named for the program's package, yel:app for none) in
+// <dir>/world.wit, and the WIT packages it may need in <dir>/deps
+write-world: async func(prog: Program, dir: string, world: World) {
+    wait packages.wit-index(prog);
+    wait diagnostics.make-dirs(dir + "/deps");
+    for id in prog.wit.keys() {
+        let wp = prog.wit[id];
+        let base = wp.file.substring(packages.dir-name(wp.file).len() + 1, wp.file.len(),);
+        wait diagnostics.write-output(dir + "/deps/" + base, prog.context.sources[wait diagnostics.read-source(prog.context, wp.file)].text);
+    }
+    let root = prog.root;
+    let id = if root.id == "" { "yel:app" } else { root.id };
+    let version = if root.version == "" { "" } else { "@" + root.version };
+    let name = id.substring(find-byte(id, 58).unwrap-or(-1) + 1, id.len());
+    let lines = ["package {id}{version};", "",];
+    for l in world.interfaces { lines.push(l); }
+    lines.push("world {name} \{");
+    for l in world.items { lines.push(l); }
+    lines.push("\}");
+    lines.push("");
+    wait diagnostics.write-output(dir + "/world.wit", lines.join(from-byte(10)));
+}
+
+decl-name: func(d: Decl) -> string {
+    match d {
+        func-decl(f) => f.name,
+        extern-decl(x) => x.name,
+        record-decl(r) => r.name,
+        variant-decl(v) => v.name,
+        flags-decl(fl) => fl.name,
+        resource-decl(r) => r.name,
+        const-decl(x) => x.name,
+        global-decl(x) => x.name,
+        type-decl(x) => x.name,
+    }
+}

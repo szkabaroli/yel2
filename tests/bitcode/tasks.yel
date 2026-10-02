@@ -1,0 +1,15 @@
+double: async func(x: s64) -> s64 {
+    x * 2
+}
+count: func() -> seq<s64> {
+    for i in 0..3 { yield i; }
+}
+main: async func() -> s32 {
+    let a = wait double(20);
+    let f = start double(1);
+    let b = wait f;
+    let total = 0;
+    for v in count() { total += v; }
+    print("{a} {b} {total}\n");
+    0
+}

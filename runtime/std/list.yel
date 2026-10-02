@@ -1,0 +1,137 @@
+// Lists: their items (len, get and set: xs[i], push, pop), found, copied, sorted, and made of others
+// through a func (contains, slice, reverse and len are text's names too: which is meant is the first
+// argument's type). Written over memory.yel's intrinsics.
+
+module list {
+    // how many items xs has
+    len: func<T>(xs: list<T> & readonly) -> s64 { memory.list-length(xs) }
+
+    // the item at index (xs[index]): a panic past the ends
+    at: func<T>(xs: list<T> & readonly, index: s64) -> T {
+        check-index(memory.list-length(xs), index);
+        memory.item-at(xs, index)
+    }
+
+    // the item at index; none past the ends
+    get: func<T>(xs: list<T> & readonly, index: s64) -> option<T> {
+        if index < 0 || index >= memory.list-length(xs) { none } else { some(memory.item-at(xs, index)) }
+    }
+
+    // the item at index replaced (xs[index] = item)
+    set: func<T>(xs: list<T>, index: s64, item: T) {
+        check-index(memory.list-length(xs), index);
+        memory.set-item(xs, index, item);
+    }
+
+    // item added at the end (the room doubled where it is full)
+    push: func<T>(xs: list<T>, item: T) {
+        let length = memory.list-length(xs);
+        if length == memory.list-room(xs) { grow(xs, length * 2); }
+        memory.set-length(xs, length + 1);
+        memory.set-item(xs, length, item);
+    }
+
+    // xs's items moved to room for count of them (nothing collected while the new room is held
+    // only here: no allocation comes between)
+    grow: func<T>(xs: list<T>, count: s64) {
+        let items = memory.new-items(xs, count);
+        memory.copy-bytes(items, memory.items-address(xs), (memory.list-length(xs) as s64) * memory.item-size(xs));
+        memory.set-items(xs, items, count);
+    }
+
+    // the last item, taken off
+    pop: func<T>(xs: list<T>) -> T {
+        let length = memory.list-length(xs);
+        if length == 0 { panic("pop of an empty list"); }
+        memory.set-length(xs, length - 1);
+        memory.item-at(xs, length - 1)
+    }
+
+    // a panic for an index past a list's ends
+    check-index: func(length: s64, index: s64) {
+        if index < 0 || index >= length { panic("index {index} out of range (length {length})"); }
+    }
+
+    contains: func<T>(xs: list<T>, x: T) -> bool { index-of(xs, x) >= 0 }
+    // where x is first in xs; -1 for nowhere
+    index-of: func<T>(xs: list<T>, x: T) -> s64 {
+        for i in 0..xs.len() {
+            if xs[i] == x { return i; }
+        }
+        -1
+    }
+
+    // a new list of xs's items from from up to (not with) to
+    slice: func<T>(xs: list<T>, from: s64, to: s64) -> list<T> {
+        let out: list<T> = [];
+        for i in from..to { out.push(xs[i]); }
+        out
+    }
+
+    // a new list of xs's items, the last first
+    reverse: func<T>(xs: list<T>) -> list<T> {
+        let out: list<T> = [];
+        let n = xs.len();
+        for k in 0..n { out.push(xs[n - 1 - k]); }
+        out
+    }
+
+    // xs sorted in place, less its order: stable (equal items keep their order), a merge sort
+    sort: func<T>(xs: list<T>, less: func(T, T) -> bool) {
+        if xs.len() < 2 { return; }
+        let tmp: list<T> = [];
+        for x in xs { tmp.push(x); }
+        merge-sort(xs, tmp, 0, xs.len(), less);
+    }
+
+    // xs[lo..hi] sorted, tmp as long as xs to merge through
+    merge-sort: func<T>(xs: list<T>, tmp: list<T>, lo: s64, hi: s64, less: func(T, T) -> bool) {
+        if hi - lo < 2 { return; }
+        let mid = lo + (hi - lo) / 2;
+        merge-sort(xs, tmp, lo, mid, less);
+        merge-sort(xs, tmp, mid, hi, less);
+        let i = lo;
+        let j = mid;
+        for k in lo..hi {
+            // the right's only where it is less than the left's (so equal ones keep their order)
+            if j < hi && (i >= mid || less(xs[j], xs[i])) {
+                tmp[k] = xs[j];
+                j += 1;
+            } else {
+                tmp[k] = xs[i];
+                i += 1;
+            }
+        }
+        for k in lo..hi { xs[k] = tmp[k]; }
+    }
+
+    // the items of xs that keep says to keep
+    filter: func<T>(xs: list<T>, keep: func(T) -> bool) -> list<T> {
+        let out: list<T> = [];
+        for x in xs {
+            if keep(x) { out.push(x); }
+        }
+        out
+    }
+
+    // each item of xs made into another
+    map: func<T, U>(xs: list<T>, f: func(T) -> U) -> list<U> {
+        let out: list<U> = [];
+        for x in xs { out.push(f(x)); }
+        out
+    }
+
+    any: func<T>(xs: list<T>, test: func(T) -> bool) -> bool {
+        for x in xs {
+            if test(x) { return true; }
+        }
+        false
+    }
+
+    all: func<T>(xs: list<T>, test: func(T) -> bool) -> bool {
+        for x in xs {
+            if !test(x) { return false; }
+        }
+        true
+    }
+}

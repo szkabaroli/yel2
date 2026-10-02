@@ -1,0 +1,13 @@
+// a stream from the host read in part, then let go: no use of it after its last, so its end is
+// let go there (the compiler's), and the host's writer, told, ends stdin's future
+from "wasi:cli" include stdin;
+
+main: async func() {
+    let (input, done) = stdin.read-via-stream();
+    let first = wait read(input);
+    print("first {first}\n");
+    match wait done {
+        ok(_) => print("stdin done\n"),
+        err(e) => print("stdin: {e}\n"),
+    }
+}

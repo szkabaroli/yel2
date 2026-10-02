@@ -1,0 +1,641 @@
+// LLVM bitcode, written by yel itself (Zig's route: no libLLVM, the bitstream made here): a module
+// built up (its types, globals, funcs and their instructions) and written. llvm.yel lowers the IR
+// into one (yelc --backend bitcode).
+//
+// The bitstream (llvm.org/docs/BitCodeFormat.html): bits written low first into 32-bit little-endian
+// words; a block opens with ENTER_SUBBLOCK (its id, its abbreviation width, its length in words,
+// filled in once it ends) and closes with END_BLOCK; a record here is always UNABBREV_RECORD (its
+// code and each operand a 6-bit VBR). The module is the old layout LLVM still reads (version 1:
+// value ids relative to the instruction, names in the module's value symbol table, no string table),
+// with opaque pointers' types (a function's record names its function type, an alloca, a load or a
+// call the type they work on).
+
+// the bits written so far: whole bytes, and the bits of the word being filled (low first)
+record BitWriter {
+    out: list<u8>,
+    word: u64,
+    used: s64,
+    // the abbreviation width where the writer is, and for each open block: where its length word is
+    // (a byte index into out) and the width outside it
+    width: s64,
+    starts: list<s64>,
+    widths: list<s64>,
+}
+
+// a module being made: its types (each once, by key: a record's code and operands), its globals
+// (each a module string constant's), its funcs, its attributes, and its target
+record BcModule {
+    triple: string,
+    type-keys: list<string>,
+    type-codes: list<s64>,
+    type-operands: list<list<u64>>,
+    globals: list<BcGlobal>,
+    funcs: list<BcFunc>,
+    // attribute groups (each a param's attributes: its index, then theirs, as PARAMATTR_GRP_CODE_ENTRY
+    // has them), and attribute sets (a func's or a call's: its groups, numbered from 1)
+    group-keys: list<string>,
+    groups: list<list<u64>>,
+    set-keys: list<string>,
+    sets: list<list<u64>>,
+}
+
+// a param's attributes (index: 1 for the first param, 0 for the result), each as its record has it
+// (sret, byval, align, zeroext, signext below)
+record BcParamAttributes { index: s64, attributes: list<u64>, }
+
+// a global: a constant holding bytes (an [n x i8]), private to the module (a C string's, terminated,
+// ends in a NUL besides: an [n + 1 x i8]); or (external) one the runtime defines, of type ty. align:
+// its alignment as a record has it (log2 of the bytes, + 1; 0 for its type's)
+// writable: a variable (a program's global), else a constant
+record BcGlobal { name: string, ty: s64, bytes: string, terminated: bool, external: bool, align: u64, elements: list<BcElement>, writable: bool, }
+
+// an element of a global's aggregate (a struct's field, an array's item): of type ty, an integer
+// (kind 0, value its bits), null (1), or another global's address (2, value its index)
+record BcElement { ty: s64, kind: s64, value: u64, }
+
+// a func: its name and function type, whether it has a body (else it is declared: the C runtime's,
+// libc's) and is the module's own (internal); its params' count; its attribute set (0: none); its constants (each a type and a
+// value: an integer's bits; or (const-kinds) a null pointer, an undefined value); its blocks of
+// instructions
+record BcFunc {
+    name: string,
+    ty: s64,
+    defined: bool,
+    internal: bool,
+    params: s64,
+    attributes: u64,
+    // what attributes made its set: its params' (the C calling convention's, a wasm name), and
+    // its own besides them (nounwind, memory(none): merged into the set as the module is written)
+    param-attributes: list<BcParamAttributes>,
+    function-attributes: list<u64>,
+    const-types: list<s64>,
+    const-values: list<u64>,
+    // 0 an integer, 1 null, 2 undefined (an aggregate to fill), 3 a float (its IEEE bits)
+    const-kinds: list<s64>,
+    blocks: list<list<BcInst>>,
+    // how many of its instructions give a value (the next one's number)
+    values: s64,
+}
+
+// an instruction: its record's code, its operands, and whether it gives a value (made: its value's
+// number in the order instructions were added, -1 for none; written: its place in the blocks'
+// order, which the writer numbers by)
+record BcInst { code: s64, operands: list<BcOperand>, gives: bool, made: s64, }
+
+// an operand: a number as it is (a type, a block, an opcode), or a value (relative to the
+// instruction, as version 1 says; absolute: an alloca's count)
+variant BcOperand {
+    raw(u64),
+    value(BcValue),
+    absolute(BcValue),
+}
+
+// a value: a global's, a func's, a param's, a constant's of the func, or the n-th instruction that
+// gives one
+variant BcValue {
+    global(s64),
+    function(s64),
+    param(s64),
+    constant(s64),
+    instruction(s64),
+}
+
+module bitcode {
+    // ---- the bitstream
+
+    writer: func() -> BitWriter { { out: [], word: 0, used: 0, width: 2, starts: [], widths: [], } }
+
+    // value, in bits bits (at most 32)
+    emit: func(w: BitWriter, value: u64, bits: s64) {
+        w.word = w.word | (value << (w.used as u64));
+        w.used += bits;
+        loop {
+            if w.used < 32 { break; }
+            for index in 0..4 { w.out.push(((w.word >> ((index * 8) as u64)) & 255) as u8); }
+            w.word = w.word >> 32;
+            w.used -= 32;
+        }
+    }
+
+    // value as a VBR of bits bits: bits - 1 of it in each chunk, the top bit saying another follows
+    emit-vbr: func(w: BitWriter, value: u64, bits: s64) {
+        let rest = value;
+        let top: u64 = 1 << ((bits - 1) as u64);
+        loop {
+            if rest < top {
+                emit(w, rest, bits);
+                return;
+            }
+            emit(w, (rest & (top - 1)) | top, bits);
+            rest = rest >> ((bits - 1) as u64);
+        }
+    }
+
+    // the next bit at a word's start
+    align: func(w: BitWriter) {
+        if w.used > 0 { emit(w, 0, 32 - w.used); }
+    }
+
+    // a block opened: its id, and the abbreviation width inside it
+    enter-block: func(w: BitWriter, id: s64, width: s64) {
+        emit(w, 1, w.width);
+        emit-vbr(w, id as u64, 8);
+        emit-vbr(w, width as u64, 4);
+        align(w);
+        w.starts.push(w.out.len());
+        emit(w, 0, 32);
+        w.widths.push(w.width);
+        w.width = width;
+    }
+
+    // the block closed: its length (in words, after its length word) filled in
+    end-block: func(w: BitWriter) {
+        emit(w, 0, w.width);
+        align(w);
+        let start = w.starts.pop();
+        let words = (w.out.len() - start - 4) / 4;
+        for index in 0..4 { w.out[start + index] = ((words >> (index * 8)) & 255) as u8; }
+        w.width = w.widths.pop();
+    }
+
+    // a record: its code and its operands, each a 6-bit VBR
+    emit-record: func(w: BitWriter, code: s64, operands: list<u64>) {
+        emit(w, 3, w.width);
+        emit-vbr(w, code as u64, 6);
+        emit-vbr(w, operands.len() as u64, 6);
+        for operand in operands { emit-vbr(w, operand, 6); }
+    }
+
+    // a string's bytes as operands
+    chars: func(text: string) -> list<u64> {
+        let out: list<u64> = [];
+        for index in 0..text.len() { out.push(text.byte-at(index) as u64); }
+        out
+    }
+
+    // a signed integer as bitcode writes one: its magnitude shifted up, its sign the low bit (bits:
+    // the value's, read as an s64)
+    signed: func(bits: u64) -> u64 {
+        let value = bits as s64;
+        if value >= 0 { (value as u64) << 1 } else { (((0 - value) as u64) << 1) | 1 }
+    }
+
+    // ---- building a module
+
+    module-of: func(triple: string) -> BcModule {
+        {
+            triple: triple, type-keys: [], type-codes: [], type-operands: [], globals: [], funcs: [],
+            group-keys: [], groups: [], set-keys: [], sets: [],
+        }
+    }
+
+    // a type's id: its record's, made once
+    type-id: func(m: BcModule, code: s64, operands: list<u64>) -> s64 {
+        let key = "{code}:{operands:?}";
+        let at = m.type-keys.index-of(key);
+        if at >= 0 { return at; }
+        m.type-keys.push(key);
+        m.type-codes.push(code);
+        m.type-operands.push(operands);
+        m.type-keys.len() - 1
+    }
+
+    void-type: func(m: BcModule) -> s64 { type-id(m, 2, []) }
+
+    int-type: func(m: BcModule, bits: s64) -> s64 { type-id(m, 7, [bits as u64,]) }
+
+    pointer-type: func(m: BcModule) -> s64 { type-id(m, 25, [0,]) }
+
+    // float (32) or double (64)
+    float-type: func(m: BcModule, bits: s64) -> s64 { type-id(m, if bits == 32 { 3 } else { 4 }, []) }
+
+    array-type: func(m: BcModule, count: s64, item: s64) -> s64 { type-id(m, 11, [count as u64, item as u64,]) }
+
+    // a vector of count items (<2 x float>: one register's lanes)
+    vector-type: func(m: BcModule, count: s64, item: s64) -> s64 { type-id(m, 12, [count as u64, item as u64,]) }
+
+    // a struct of fields (not packed: each aligned as C's)
+    struct-type: func(m: BcModule, fields: list<s64>) -> s64 {
+        let operands: list<u64> = [0,];
+        for f in fields { operands.push(f as u64); }
+        type-id(m, 18, operands)
+    }
+
+    func-type: func(m: BcModule, result: s64, params: list<s64>) -> s64 {
+        let operands: list<u64> = [0, result as u64,];
+        for p in params { operands.push(p as u64); }
+        type-id(m, 21, operands)
+    }
+
+    // a func added: its index (its value, after the globals')
+    add-func: func(m: BcModule, name: string, ty: s64, params: s64, defined: bool, internal: bool) -> s64 {
+        m.funcs.push({
+            name: name, ty: ty, defined: defined, internal: internal, params: params, attributes: 0, param-attributes: [], function-attributes: [],
+            const-types: [], const-values: [], const-kinds: [], blocks: [[],], values: 0,
+        });
+        m.funcs.len() - 1
+    }
+
+    // the func of that name, declared where it is not there yet (the runtime's, libc's)
+    declared: func(m: BcModule, name: string, ty: s64, params: s64) -> s64 {
+        for index in 0..m.funcs.len() {
+            if m.funcs[index].name == name {
+                // one function, one type: calls made by another would read their values wrong
+                if m.funcs[index].ty != ty { panic("bitcode: {name} declared as two function types"); }
+                return index;
+            }
+        }
+        add-func(m, name, ty, params, false, false)
+    }
+
+    // ---- attributes
+
+    // a set of params' attributes, made once: its number (for a func's or a call's record; 0 for none)
+    attribute-set: func(m: BcModule, params: list<BcParamAttributes>) -> u64 {
+        let ids: list<u64> = [];
+        for p in params {
+            if p.attributes.len() == 0 { continue; }
+            // (a function's own: index 0xFFFFFFFF)
+            let group: list<u64> = [if p.index < 0 { 4294967295 } else { p.index as u64 },];
+            for a in p.attributes { group.push(a); }
+            let key = "{group:?}";
+            let at = m.group-keys.index-of(key);
+            if at < 0 {
+                m.group-keys.push(key);
+                m.groups.push(group);
+                at = m.group-keys.len() - 1;
+            }
+            ids.push((at + 1) as u64);
+        }
+        if ids.len() == 0 { return 0; }
+        let key = "{ids:?}";
+        let at = m.set-keys.index-of(key);
+        if at < 0 {
+            m.set-keys.push(key);
+            m.sets.push(ids);
+            at = m.set-keys.len() - 1;
+        }
+        (at + 1) as u64
+    }
+
+    // a func's params' attributes (its set kept: a call's record names it too): the set's number
+    set-attributes: func(m: BcModule, at: s64, params: list<BcParamAttributes>) -> u64 {
+        m.funcs[at].param-attributes = params;
+        m.funcs[at].attributes = attribute-set(m, params);
+        m.funcs[at].attributes
+    }
+
+    // attributes of a func's own (each as its group has it), added to what its set has
+    add-function-attributes: func(m: BcModule, at: s64, attributes: list<u64>) {
+        for a in attributes { m.funcs[at].function-attributes.push(a); }
+    }
+
+    // a func's set with its own attributes merged in (into its one function group: index -1)
+    merge-function-attributes: func(m: BcModule, at: s64) {
+        let f = m.funcs[at];
+        if f.function-attributes.len() == 0 { return; }
+        let own: list<u64> = [];
+        let params: list<BcParamAttributes> = [];
+        for p in f.param-attributes {
+            if p.index < 0 { for a in p.attributes { own.push(a); } } else { params.push(p); }
+        }
+        for a in f.function-attributes { own.push(a); }
+        params.push({ index: -1, attributes: own, });
+        m.funcs[at].attributes = attribute-set(m, params);
+    }
+
+    // a func that never unwinds (yel has no exceptions; C built without them: all of it), that
+    // reads and writes no memory, frees none, syncs with no other thread, and returns (enum
+    // attributes: kind 0; memory an int one, kind 1: 0 for none)
+    nounwind: func() -> list<u64> { [0, 18,] }
+
+    willreturn: func() -> list<u64> { [0, 61,] }
+
+    nofree: func() -> list<u64> { [0, 62,] }
+
+    nosync: func() -> list<u64> { [0, 63,] }
+
+    memory-none: func() -> list<u64> { [1, 86, 0,] }
+
+    // a result written where the pointer param says (of type ty), and a param that is a pointer to
+    // the callee's own copy of a ty: type attributes (kind 6: with a type)
+    sret: func(ty: s64) -> list<u64> { [6, 29, ty as u64,] }
+
+    byval: func(ty: s64) -> list<u64> { [6, 3, ty as u64,] }
+
+    // the memory's alignment in bytes (an int attribute: kind 1)
+    aligned: func(bytes: s64) -> list<u64> { [1, 1, bytes as u64,] }
+
+    // a string attribute's key and value (kind 4: each NUL-ended): a function's (its index -1),
+    // as wasm-import-module = "wasi:cli/environment@0.3.0"
+    string-attribute: func(key: string, value: string) -> list<u64> {
+        let out: list<u64> = [4,];
+        for c in chars(key) { out.push(c); }
+        out.push(0);
+        for c in chars(value) { out.push(c); }
+        out.push(0);
+        out
+    }
+
+    // an integer narrower than a register, widened by the caller (or, a result, the callee): with
+    // zeros or its sign (enum attributes: kind 0)
+    zeroext: func() -> list<u64> { [0, 34,] }
+
+    signext: func() -> list<u64> { [0, 24,] }
+
+    // a constant global of bytes: its index
+    add-bytes: func(m: BcModule, name: string, bytes: string) -> s64 {
+        m.globals.push({ name: name, ty: array-type(m, bytes.len(), int-type(m, 8)), bytes: bytes, terminated: false, external: false, align: 1, elements: [], writable: false, });
+        m.globals.len() - 1
+    }
+
+    // a constant global of bytes aligned to align (as a record has it): its index
+    add-aligned-bytes: func(m: BcModule, name: string, bytes: string, align: u64) -> s64 {
+        let at = add-bytes(m, name, bytes);
+        m.globals[at].align = align;
+        at
+    }
+
+    // a global the runtime defines (y_top), of type ty, declared where it is not there yet: its index
+    external-global: func(m: BcModule, name: string, ty: s64) -> s64 {
+        for index in 0..m.globals.len() {
+            if m.globals[index].name == name { return index; }
+        }
+        m.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: true, align: 0, elements: [], writable: false, });
+        m.globals.len() - 1
+    }
+
+    // a constant global of a C string (its bytes, then a NUL): its index
+    add-c-string: func(m: BcModule, name: string, text: string) -> s64 {
+        m.globals.push({ name: name, ty: array-type(m, text.len() + 1, int-type(m, 8)), bytes: text, terminated: true, external: false, align: 1, elements: [], writable: false, });
+        m.globals.len() - 1
+    }
+
+    // a constant global of type ty (a struct or an array) made of elements, aligned to align (as a
+    // record has it): its index
+    // a variable of type ty, zero to start with (its module's own: internal): its index
+    add-variable: func(m: BcModule, name: string, ty: s64, align: u64) -> s64 {
+        m.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: false, align: align, elements: [], writable: true, });
+        m.globals.len() - 1
+    }
+
+    add-aggregate: func(m: BcModule, name: string, ty: s64, elements: list<BcElement>, align: u64) -> s64 {
+        m.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: false, align: align, elements: elements, writable: false, });
+        m.globals.len() - 1
+    }
+
+    // the module's constants: an initialized global's (its bytes; an aggregate's elements but the
+    // globals' addresses, then the aggregate): how many
+    constant-count: func(m: BcModule) -> s64 {
+        let count = 0;
+        for g in m.globals {
+            if !g.external { count += 1 + g.elements.filter({ e -> e.kind != 2 }).len(); }
+        }
+        count
+    }
+
+    // a func's integer constant (bits: its value's, in the type's width): its value
+    integer: func(f: BcFunc, ty: s64, bits: u64) -> BcValue {
+        constant(f, ty, bits, 0)
+    }
+
+    null: func(f: BcFunc, ty: s64) -> BcValue { constant(f, ty, 0, 1) }
+
+    // a float's constant (f32 or f64 ty: bits, its IEEE bits in that width)
+    float: func(f: BcFunc, ty: s64, bits: u64) -> BcValue { constant(f, ty, bits, 3) }
+
+    // an undefined value of a type (an aggregate's start, its fields inserted after)
+    undefined: func(f: BcFunc, ty: s64) -> BcValue { constant(f, ty, 0, 2) }
+
+    // a constant of the func, made once
+    constant: func(f: BcFunc, ty: s64, bits: u64, kind: s64) -> BcValue {
+        for index in 0..f.const-types.len() {
+            if f.const-types[index] == ty && f.const-values[index] == bits && f.const-kinds[index] == kind {
+                return BcValue.constant(index);
+            }
+        }
+        f.const-types.push(ty);
+        f.const-values.push(bits);
+        f.const-kinds.push(kind);
+        BcValue.constant(f.const-types.len() - 1)
+    }
+
+    // a block of f: its index
+    new-block: func(f: BcFunc) -> s64 {
+        f.blocks.push([]);
+        f.blocks.len() - 1
+    }
+
+    // an instruction at block's end: the value it gives (none for one that gives none)
+    add-inst: func(f: BcFunc, block: s64, code: s64, operands: list<BcOperand>, gives: bool) -> option<BcValue> {
+        f.blocks[block].push({ code: code, operands: operands, gives: gives, made: if gives { f.values } else { -1 }, });
+        if !gives { return none; }
+        f.values += 1;
+        some(BcValue.instruction(f.values - 1))
+    }
+
+    // whether a block ends (its last instruction a terminator: ret, br, unreachable)
+    ended: func(f: BcFunc, block: s64) -> bool {
+        let insts = f.blocks[block];
+        if insts.len() == 0 { return false; }
+        let code = insts[insts.len() - 1].code;
+        code == 10 || code == 11 || code == 15
+    }
+
+    // ---- writing it
+
+    write: func(m: BcModule) -> string {
+        let w = writer();
+        // the wrapper's magic: BC 0xC0DE
+        emit(w, 66, 8);
+        emit(w, 67, 8);
+        emit(w, 0, 4);
+        emit(w, 12, 4);
+        emit(w, 14, 4);
+        emit(w, 13, 4);
+        // MODULE_BLOCK; VERSION 1: value ids relative to the instruction
+        enter-block(w, 8, 3);
+        emit-record(w, 1, [1,]);
+        enter-block(w, 17, 4);
+        emit-record(w, 1, [m.type-keys.len() as u64,]);
+        for index in 0..m.type-keys.len() { emit-record(w, m.type-codes[index], m.type-operands[index]); }
+        end-block(w);
+        // PARAMATTR_GROUP_BLOCK (its ENTRY: the group's number, then its param's index and
+        // attributes), then PARAMATTR_BLOCK (each set's ENTRY: its groups); each func's own
+        // attributes merged into its set first
+        for at in 0..m.funcs.len() { merge-function-attributes(m, at); }
+        if m.groups.len() > 0 {
+            enter-block(w, 10, 3);
+            for index in 0..m.groups.len() {
+                let entry: list<u64> = [(index + 1) as u64,];
+                for x in m.groups[index] { entry.push(x); }
+                emit-record(w, 3, entry);
+            }
+            end-block(w);
+            enter-block(w, 9, 3);
+            for set in m.sets { emit-record(w, 2, set); }
+            end-block(w);
+        }
+        if m.triple != "" { emit-record(w, 2, chars(m.triple)); }
+        // GLOBALVAR: its type (explicit: bit 1 of the next), constant (bit 0), its initializer (the
+        // module constant after the globals and funcs, + 1; 0 for none), linkage (private 9, external
+        // 0), alignment
+        let globals = m.globals.len();
+        let funcs = m.funcs.len();
+        // each initializer's value: the module's constants come after its globals and funcs
+        let initializers: list<s64> = [];
+        let next = globals + funcs;
+        for g in m.globals {
+            if g.external {
+                initializers.push(-1);
+            } else {
+                next += g.elements.filter({ e -> e.kind != 2 }).len();
+                initializers.push(next);
+                next += 1;
+            }
+        }
+        for index in 0..globals {
+            let g = m.globals[index];
+            if g.external {
+                emit-record(w, 7, [g.ty as u64, 2, 0, 0, g.align, 0,]);
+            } else {
+                // (a variable: internal, 3; not constant)
+                if g.writable { emit-record(w, 7, [g.ty as u64, 2, (initializers[index] + 1) as u64, 3, g.align, 0,]); }
+                else { emit-record(w, 7, [g.ty as u64, 3, (initializers[index] + 1) as u64, 9, g.align, 0,]); }
+            }
+        }
+        // FUNCTION: type, calling convention, a declaration only, linkage (internal 3, external
+        // 0), attribute set, alignment, section, visibility, gc, unnamed_addr
+        for f in m.funcs {
+            emit-record(w, 8, [f.ty as u64, 0, if f.defined { 0 } else { 1 }, if f.internal { 3 } else { 0 }, f.attributes, 0, 0, 0, 0, 0,]);
+        }
+        // the module's constants: each initialized global's bytes (STRING, or CSTRING: its NUL
+        // implied), or its aggregate (each element but a global's address, then AGGREGATE)
+        if constant-count(m) > 0 {
+            enter-block(w, 11, 4);
+            let at = globals + funcs;
+            for g in m.globals {
+                if g.external { continue; }
+                if g.elements.len() > 0 {
+                    let ids: list<u64> = [];
+                    for e in g.elements {
+                        if e.kind == 2 {
+                            ids.push(e.value);
+                        } else {
+                            emit-record(w, 1, [e.ty as u64,]);
+                            if e.kind == 1 { emit-record(w, 2, []); } else { emit-record(w, 4, [signed(e.value),]); }
+                            ids.push(at as u64);
+                            at += 1;
+                        }
+                    }
+                    emit-record(w, 1, [g.ty as u64,]);
+                    emit-record(w, 7, ids);
+                    at += 1;
+                    continue;
+                }
+                at += 1;
+                emit-record(w, 1, [g.ty as u64,]);
+                // STRING (an empty one: NULL, the zero value; a STRING of none is no record)
+                if g.terminated { emit-record(w, 9, chars(g.bytes)); }
+                else if g.bytes.len() == 0 { emit-record(w, 2, []); }
+                else { emit-record(w, 8, chars(g.bytes)); }
+            }
+            end-block(w);
+        }
+        // VALUE_SYMTAB: the names of the globals and the funcs
+        enter-block(w, 14, 4);
+        for index in 0..globals {
+            let entry: list<u64> = [index as u64,];
+            for c in chars(m.globals[index].name) { entry.push(c); }
+            emit-record(w, 1, entry);
+        }
+        for index in 0..funcs {
+            let entry: list<u64> = [(globals + index) as u64,];
+            for c in chars(m.funcs[index].name) { entry.push(c); }
+            emit-record(w, 1, entry);
+        }
+        end-block(w);
+        // each body, in the funcs' order
+        for f in m.funcs {
+            if f.defined { write-func(w, m, f); }
+        }
+        end-block(w);
+        align(w);
+        let out = buffer(w.out.len());
+        for byte in w.out { out.push-byte(byte as s64); }
+        out.to-string()
+    }
+
+    // a func's body: its blocks' count, its constants, its instructions (each value relative to the
+    // instruction's number: the module's values, the params, the constants, then the instructions
+    // that give one)
+    write-func: func(w: BitWriter, m: BcModule, f: BcFunc) {
+        // the module's values: its globals, its funcs, and the globals' initializers
+        let base = m.globals.len() + m.funcs.len() + constant-count(m);
+        let params = base;
+        let constants = params + f.params;
+        let first = constants + f.const-types.len();
+        enter-block(w, 12, 4);
+        emit-record(w, 1, [f.blocks.len() as u64,]);
+        if f.const-types.len() > 0 {
+            enter-block(w, 11, 4);
+            let current = -1;
+            for index in 0..f.const-types.len() {
+                if f.const-types[index] != current {
+                    current = f.const-types[index];
+                    emit-record(w, 1, [current as u64,]);
+                }
+                // NULL 2, UNDEF 3, INTEGER 4, FLOAT 6
+                if f.const-kinds[index] == 1 { emit-record(w, 2, []); }
+                else if f.const-kinds[index] == 2 { emit-record(w, 3, []); }
+                else if f.const-kinds[index] == 3 { emit-record(w, 6, [f.const-values[index],]); }
+                else { emit-record(w, 4, [signed(f.const-values[index]),]); }
+            }
+            end-block(w);
+        }
+        // each value's number in the blocks' order (a block filled after a later one: the code after
+        // a loop): what the reader counts by
+        let written: list<s64> = [];
+        for k in 0..f.values { written.push(0); }
+        let counted = first;
+        for block in f.blocks {
+            for inst in block {
+                if inst.gives {
+                    written[inst.made] = counted;
+                    counted += 1;
+                }
+            }
+        }
+        let number = first;
+        for block in f.blocks {
+            for inst in block {
+                let operands: list<u64> = [];
+                for o in inst.operands {
+                    operands.push(match o {
+                        raw(x) => x,
+                        value(v) => {
+                            let at = absolute-id(m, v, params, constants, written);
+                            // a value from further on would need its type written too
+                            if at >= number { panic("bitcode: a value used before it is made (in {f.name})"); }
+                            (number - at) as u64
+                        }
+                        absolute(v) => absolute-id(m, v, params, constants, written) as u64,
+                    });
+                }
+                emit-record(w, inst.code, operands);
+                if inst.gives { number += 1; }
+            }
+        }
+        end-block(w);
+    }
+
+    absolute-id: func(m: BcModule, v: BcValue, params: s64, constants: s64, written: list<s64>) -> s64 {
+        match v {
+            global(index) => index,
+            function(index) => m.globals.len() + index,
+            param(index) => params + index,
+            constant(index) => constants + index,
+            instruction(index) => written[index],
+        }
+    }
+}

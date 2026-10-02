@@ -1,0 +1,9 @@
+// a task waiting for a stream no one writes, its writer still held (in a list: so not closed for
+// it): nothing will wake it, and the executor says so
+
+main: async func() {
+    let (s, w) = stream-pair(1);
+    let held = [w,];
+    let x: option<s32> = wait s.read();
+    print("{held.len()}\n");
+}

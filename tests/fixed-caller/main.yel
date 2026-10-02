@@ -1,0 +1,11 @@
+// fixed-length lists through a component's imports: tests/fixed-api's exports, plugged in (wac)
+
+from "test:fixed" include api;
+
+main: func() {
+    let v: list<s32, 3> = [1, 2, 3];
+    print("{api.flip(v)} {v}\n");
+    print("{api.shout(["a", "b"])} {api.corner([[1, 2], [3, 4]])}\n");
+    let p: api.pixel = { rgb: [0, 100, 255], alpha: 7, };
+    print("{api.brighten(p)}\n");
+}

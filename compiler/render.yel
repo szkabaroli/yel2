@@ -1,0 +1,557 @@
+// Render: a func's IR (ir.yel) as C, as Porffor's render.js: render-expr for a value, render-stmt
+// for a statement, a body cut at its first terminator, a label written only where a goto names
+// it. Part of the generator's module. Where yel adds to it: the func's frame, the collector's
+// roots (a slot for each pointer of a rooted local, written where the local is assigned).
+
+// the func being written: its C lines; each local's C name, and its pointers (as C) and where their
+// slots start (-1: it has none); how many slots its frame has; the labels of the loops around, and
+// the labels a goto names
+record Render {
+    g: Gen,
+    f: IrFunc,
+    lines: list<string>,
+    names: list<string>,
+    paths: list<list<string>>,
+    slot-at: list<s64>,
+    slots: s64,
+    framed: bool,
+    loops: list<s64>,
+    used-labels: map<string, bool>,
+}
+
+module gen {
+    // a local's C name: v<n>_<name>, or t<n> for a temporary
+    local-c: func(f: IrFunc, i: s64) -> string {
+        // an async func's locals: in its frame (they last while it waits)
+        if f.async { return "fr->l{i}"; }
+        let n = f.locals[i].name;
+        if n == "" { "t{i}" } else { "v{i}_{mangle(n)}" }
+    }
+
+    line: func(r: Render, s: string) { r.lines.push(s); }
+
+    // a local just assigned: its pointers into its slots
+    root: func(r: Render, i: s64) {
+        let first = r.slot-at[i];
+        if first < 0 { return; }
+        let paths = r.paths[i];
+        for k in 0..paths.len() { line(r, "ys[{first + k}] = (void *)({paths[k]});"); }
+    }
+
+    // ================================================================ values
+
+    render-expr: func(r: Render, n: Node) -> string {
+        let g = r.g;
+        match n.kind {
+            const(c) => constant-c(g, c, n.ty),
+            scan(t) => scan-fn(g, t),
+            global(k) => global-c(k),
+            local(i) => r.names[i],
+            bin(x) => "({render-expr(r, x.a)} {x.op} {render-expr(r, x.b)})",
+            un(x) => "({x.op}{render-expr(r, x.a)})",
+            convert(a) => "(({c-type(g, n.ty)}){render-expr(r, a)})",
+            load(x) => "{operand-c(r, x.base)}{if x.arrow { "->" } else { "." }}{x.path.join(".")}",
+            func-ref(x) => x.c,
+            call-ref(x) => {
+                let args: list<string> = [];
+                for a in x.args { args.push(top-expr(r, a)); }
+                // a func value: its C function, given its environment first
+                let f = operand-c(r, x.callee);
+                let env = [f + ".env",];
+                for a in args { env.push(a); }
+                "{f}.fn({env.join(", ")})"
+            }
+            call(x) => {
+                let args: list<string> = [];
+                for a in x.args {
+                    match a.kind {
+                        type-arg(arg) => { for part in type-arg-c(g, x.c-name, args.len(), arg) { args.push(part); } }
+                        _ => args.push(top-expr(r, a)),
+                    }
+                }
+                if find-byte(x.c-name, 36) != none || x.c-name.byte-at(0) == 40 { return expand(x.c-name, args); }
+                "{x.c-name}({args.join(", ")})"
+            }
+            make(x) => {
+                let parts: list<string> = [];
+                for k in 0..x.parts.len() {
+                    let v = top-expr(r, x.parts[k]);
+                    parts.push(if x.fields[k] == "" { v } else { ".{x.fields[k]} = {v}" });
+                }
+                c"(({x.ctype}){ {parts.join(", ")} })"
+            }
+            deref(a) => "(*({c-type(g, n.ty)} *)({render-expr(r, a)}))",
+            address-of(a) => "(&{operand-c(r, a)})",
+            size-of(x) => "sizeof({c-type(g, x)})",
+            element(x) => "(&(({c-type(g, x.item)} *)({render-expr(r, x.base)}))[{top-expr(r, x.index)}])",
+            list-get(x) => if x.fixed {
+                "{operand-c(r, x.list)}.items[{top-expr(r, x.index)}]"
+            } else {
+                "(({x.ctype} *){operand-c(r, x.list)}->items)[{top-expr(r, x.index)}]"
+            },
+            // a loop's step
+            assign(x) => "{r.names[x.dest]} = {top-expr(r, x.value)}",
+            _ => panic("{r.f.c-name}: a statement where a value was expected"),
+        }
+    }
+
+    // C that writes value's text at the buffer yb's end: by its writer (std's format.write-*), or
+    // by std's value.render over its type's descriptor, the value held where it can point at it
+    // (the interpolation holds the collector)
+    format-line: func(r: Render, formatter: Formatter, value: Node) -> string {
+        let shown = match formatter {
+            writer(name) => { return "{name}(yb, {top-expr(r, value)});"; }
+            render(x) => x,
+        };
+        let walker = r.g.funcs[gen.render-key()].c-name;
+        let push = r.g.funcs["yel:std/buffer.push"].c-name;
+        let held = "{c-type(r.g, value.ty)} y_v = {top-expr(r, value)};";
+        let call = "{walker}((int64_t)(uintptr_t)&{type-desc(r.g, shown.held)}, (int64_t)(uintptr_t)&y_v, {shown.display})";
+        c"{ {held} {push}(yb, {call}); }"
+    }
+
+    // an extern's type argument's C (slot: the C arguments before it, so a template's $n): its C
+    // type, and its scan (a template's only where it reads it, else 0) and a template's
+    // descriptor, and a key's hash and equality. Made as codegen makes the call (the helpers it
+    // names with it), written again by render
+    type-arg-c: func(g: Gen, c-name: string, slot: s64, x: TypeArg) -> list<string> {
+        let out = [c-type(g, x.ty),];
+        if !is-template(c-name) {
+            out.push(scan-fn(g, x.ty));
+        } else {
+            out.push(if mentions(c-name, slot + 2) { scan-fn(g, x.ty) } else { "0" });
+            out.push(if mentions(c-name, slot + 3) { "&" + type-desc(g, x.ty) } else { "0" });
+        }
+        if x.key {
+            out.push(key-hash-fn(g, x.ty));
+            out.push(key-eq-fn(g, x.ty));
+        }
+        out
+    }
+
+    // a constant's C, as a value of type t
+    constant-c: func(g: Gen, c: Constant, t: Type) -> string {
+        match c {
+            int(v) => int-c(g, v, t),
+            float(v) => float-c(v, t),
+            bool(b) => if b { "true" } else { "false" },
+            unit => "0",
+            null => "NULL",
+            text(s) => literal(g, s),
+            case-value(x) => "(&{singleton(x.owner, x.name)})",
+            zero => c"(({c-type(g, t)}){ 0 })",
+        }
+    }
+
+    // an integer's C: an int32_t's as a number, a char's as UINT32_C, others cast to their type
+    // (a negative one by its bits, the cast wrapping it)
+    int-c: func(g: Gen, v: u64, t: Type) -> string {
+        let ct = c-type(g, t);
+        if ct == "bool" { return if v == 0 { "false" } else { "true" }; }
+        match resolve(t) {
+            char-type => { return "UINT32_C({v})"; }
+            _ => {}
+        }
+        let negative = (v as s64) < 0;
+        if ct == "int32_t" && !negative && v < 2147483648 { return "{v}"; }
+        if negative { return "(({ct})(int64_t)UINT64_C({v}))"; }
+        if v < 1000000000 { "(({ct}){v})" } else { "(({ct})UINT64_C({v}))" }
+    }
+
+    // a float's C: exactly, as a hexadecimal float (an f32's cast from it), or NAN or INFINITY
+    float-c: func(v: f64, t: Type) -> string {
+        let single = match resolve(t) {
+            num(n) => n == "f32",
+            _ => false,
+        };
+        let bits = f64-bits(v);
+        let sign = if (bits >> 63) != 0 { "-" } else { "" };
+        let exponent = ((bits >> 52) & 2047) as s64;
+        let fraction = bits & 4503599627370495;
+        let digits = "0123456789abcdef";
+        let hex: list<string> = [];
+        for k in 0..13 {
+            let d = ((fraction >> (((12 - k) * 4) as u64)) & 15) as s64;
+            hex.push(digits.substring(d, d + 1));
+        }
+        let written = if exponent == 2047 {
+            if fraction != 0 { "NAN" } else { "({sign}INFINITY)" }
+        } else if exponent == 0 && fraction == 0 {
+            "{sign}0.0"
+        } else if exponent == 0 {
+            "{sign}0x0.{hex.join("")}p-1022"
+        } else {
+            "{sign}0x1.{hex.join("")}p{exponent - 1023}"
+        };
+        if single { "((float){written})" } else { "((double){written})" }
+    }
+
+    // an intrinsic's C: its template with $n the nth argument's C as it is (the template puts a
+    // value's in parentheses: a type's cannot be), the highest first so $1 is not read inside $12
+    expand: func(template: string, args: list<string>) -> string {
+        let out = template;
+        for step in 0..args.len() {
+            let index = args.len() - step;
+            out = out.replace("$" + "{index}", args[index - 1]);
+        }
+        out
+    }
+
+    // a value where any expression fits (Porffor's rx(node, P_COMMA)): an operator's outer
+    // parentheses dropped
+    top-expr: func(r: Render, n: Node) -> string {
+        match n.kind {
+            bin(x) => "{render-expr(r, x.a)} {x.op} {render-expr(r, x.b)}",
+            un(x) => "{x.op}{render-expr(r, x.a)}",
+            _ => render-expr(r, n),
+        }
+    }
+
+    // a node as the base of -> or .: in parentheses unless a local
+    operand-c: func(r: Render, n: Node) -> string {
+        match n.kind {
+            local(i) => r.names[i],
+            _ => "({render-expr(r, n)})",
+        }
+    }
+
+    // ================================================================ statements
+
+    // a body, cut at its first terminator (what follows never runs)
+    render-stmts: func(r: Render, body: list<Node>) {
+        for n in body {
+            render-stmt(r, n);
+            let ends = match n.kind {
+                return(v) => true,
+                break(l) => true,
+                continue(l) => true,
+                unreachable(x) => true,
+                halt => true,
+                _ => false,
+            };
+            if ends { return; }
+        }
+    }
+
+    render-stmt: func(r: Render, n: Node) {
+        let g = r.g;
+        match n.kind {
+            assign(x) => {
+                let d = r.names[x.dest];
+                match x.value.kind {
+                    alloc(a) => {
+                        if a.stack { line(r, "{d} = &yr{x.dest};"); }
+                        else { line(r, "{d} = y_new(sizeof({a.ctype}), {a.trace});"); }
+                    }
+                    // std's writers fill a buffer (nothing collected meanwhile: the buffer is held
+                    // only here)
+                    interp(s) => {
+                        line(r, c"{");
+                        line(r, "y_gc_hold++;");
+                        line(r, "ybuffer *yb = yel_buffer_new(16);");
+                        for k in 0..s.parts.len() {
+                            line(r, format-line(r, s.formatters[k], s.parts[k]));
+                        }
+                        line(r, "{d} = yel_buffer_string(yb);");
+                        line(r, "y_gc_hold--;");
+                        line(r, c"}");
+                    }
+                    _ => line(r, "{d} = {top-expr(r, x.value)};"),
+                }
+                root(r, x.dest);
+            }
+            store(x) => {
+                line(r, "{render-expr(r, x.target)} = {top-expr(r, x.value)};");
+                // an item set in a local's fixed-length list: the local's slots again
+                match x.target.kind {
+                    list-get(t) => {
+                        match t.list.kind {
+                            local(i) => root(r, i),
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // an intrinsic's value not used: a cast says so (C warns of an unused comma)
+            call(x) => line(r, if find-byte(x.c-name, 36) != none || x.c-name.byte-at(0) == 40 { "(void){render-expr(r, n)};" } else { "{render-expr(r, n)};" }),
+            call-ref(x) => line(r, "{render-expr(r, n)};"),
+            if(x) => {
+                if x.yes.len() == 0 && x.no.len() == 0 { return; }
+                line(r, c"if ({top-expr(r, x.test)}) {");
+                render-stmts(r, x.yes);
+                if x.no.len() > 0 {
+                    line(r, c"} else {");
+                    render-stmts(r, x.no);
+                }
+                line(r, c"}");
+            }
+            loop(x) => {
+                let test = match x.test {
+                    some(t) => top-expr(r, t),
+                    none => "",
+                };
+                match x.step {
+                    some(s) => line(r, c"for (; {test}; {render-expr(r, s)}) {"),
+                    none => line(r, c"while ({if test == "" { "1" } else { test }}) {"),
+                }
+                r.loops.push(x.label);
+                render-stmts(r, x.body);
+                if x.label >= 0 && r.used-labels.has("{x.label}_c") {
+                    line(r, "yl{x.label}_c:;");
+                }
+                r.loops.pop();
+                line(r, c"}");
+                if x.label >= 0 && r.used-labels.has("{x.label}_b") {
+                    line(r, "yl{x.label}_b:;");
+                }
+            }
+            break(label) => {
+                if label < 0 || innermost(r, label) { line(r, "break;"); }
+                else {
+                    r.used-labels.set("{label}_b", true);
+                    line(r, "goto yl{label}_b;");
+                }
+            }
+            continue(label) => {
+                if label < 0 || innermost(r, label) { line(r, "continue;"); }
+                else {
+                    r.used-labels.set("{label}_c", true);
+                    line(r, "goto yl{label}_c;");
+                }
+            }
+            block(x) => {
+                if x.body.len() == 0 && x.label < 0 { return; }
+                line(r, c"{");
+                render-stmts(r, x.body);
+                line(r, c"}");
+                if x.label >= 0 && r.used-labels.has("{x.label}_b") {
+                    line(r, "yl{x.label}_b:;");
+                }
+            }
+            return(v) => {
+                // an async func's: its result kept in its frame, and done
+                // a generator's: done, its last value read (none here)
+                if r.f.generator {
+                    line(r, "fr->h.done = 1;");
+                    line(r, "return 1;");
+                    return;
+                }
+                if r.f.async {
+                    line(r, "fr->result = {top-expr(r, v)};");
+                    line(r, "fr->h.done = 1;");
+                    line(r, "return 1;");
+                    return;
+                }
+                if r.framed { line(r, "y_top = yf.prev;"); }
+                // a helper's () result: C's void
+                if r.f.void-result { line(r, "return;"); } else { line(r, "return {top-expr(r, v)};"); }
+            }
+            // where an async func goes on when stepped again, and its leaving (that state kept)
+            resume(k) => line(r, "ya{k}:;"),
+            yield(v) => line(r, "fr->result = {top-expr(r, v)};"),
+            suspend(k) => {
+                line(r, "fr->h.state = {k};");
+                line(r, "return 0;");
+            }
+            unreachable(x) => {
+                line(r, c"{");
+                line(r, "y_gc_hold++;");
+                line(r, "ybuffer *yb = yel_buffer_new(16);");
+                line(r, format-line(r, x.formatter, x.value));
+                line(r, "yel_no_match(yel_buffer_string(yb));");
+                line(r, c"}");
+            }
+            halt => line(r, "__builtin_unreachable();"),
+            // a pure value whose value is not used does nothing
+            _ => {}
+        }
+    }
+
+    // whether label is the innermost loop's
+    innermost: func(r: Render, label: s64) -> bool {
+        r.loops.len() > 0 && r.loops[r.loops.len() - 1] == label
+    }
+
+    // ================================================================ a func
+
+    // a func as C: its declaration's line into protos, and its definition into out
+    // an async func: a state machine. Its frame (Q_<name>: the task's header, its result, every
+    // local, so they last while it waits; traced by the collector), its start (s_<name>: a frame
+    // made, its arguments in it) and its step (the C func: back to the state it left, on until it
+    // waits again, 0, or is done, 1)
+    render-async: func(r: Render, f: IrFunc, out: list<string>) {
+        let g = r.g;
+        // named by its step's C name (a generic func's instances each their own)
+        let q = "Q" + f.c-name.substring(1, f.c-name.len());
+        // its locals: fields of the frame (the frame is traced: no slots)
+        for i in 0..f.locals.len() {
+            r.names.push(local-c(f, i));
+            r.paths.push([]);
+            r.slot-at.push(-1);
+        }
+        let fields = ["y_async h;", "{c-type(g, f.result)} result;",];
+        for i in 0..f.locals.len() { fields.push("{c-type(g, f.locals[i].ty)} l{i};"); }
+        g.value-decls.push(c"typedef struct { {fields.join(" ")} } {q};");
+        // the frame's trace: every pointer in it
+        let trace = "y_trace_" + q;
+        g.helper-protos.push("static void {trace}(void *obj);");
+        g.helper-bodies.push(c"static void {trace}(void *obj) {");
+        g.helper-bodies.push("\t{q} *fr = obj;");
+        for p in ptr-paths(g, f.result, "fr->result") { g.helper-bodies.push("\ty_mark({p});"); }
+        for i in 0..f.locals.len() {
+            for p in ptr-paths(g, f.locals[i].ty, "fr->l{i}") {
+                g.helper-bodies.push("\ty_mark({p});");
+            }
+        }
+        g.helper-bodies.push(c"}");
+        g.helper-bodies.push("");
+        // the start: a frame, its parameters set
+        let params: list<string> = [];
+        for k in 0..f.params.len() { params.push("{c-type(g, f.locals[f.params[k]].ty)} a{k}"); }
+        let ps = if params.len() == 0 { "void" } else { params.join(", ") };
+        let start = "static y_async *s{f.c-name.substring(1, f.c-name.len())}({ps})";
+        g.protos.push(start + ";");
+        out.push(start + c" {");
+        out.push("\t{q} *fr = y_new(sizeof({q}), {trace});");
+        out.push("\tfr->h.step = {f.c-name};");
+        if f.release { out.push("\tfr->h.release = y_async_release_by_step;"); }
+        for k in 0..f.params.len() { out.push("\tfr->l{f.params[k]} = a{k};"); }
+        out.push("\treturn (y_async *)fr;");
+        out.push(c"}");
+        out.push("");
+        // the step: back to where it waited (each wait's state a label), then on
+        line(r, "{q} *fr = y_self;");
+        // each state's place (its resume: a wait's, a release's)
+        let states: list<s64> = [];
+        for n in flatten(f.body) {
+            match n.kind {
+                resume(k) => states.push(k),
+                _ => {}
+            }
+        }
+        if states.len() > 0 {
+            line(r, c"switch (fr->h.state) {");
+            for k in states { line(r, "case {k}: goto ya{k};"); }
+            line(r, c"}");
+        }
+        render-stmts(r, f.body);
+        let signature = "static int32_t {f.c-name}(void *y_self)";
+        emit-func(g, signature, r.lines, out);
+    }
+
+    render-func: func(g: Gen, f: IrFunc, out: list<string>) {
+        let r: Render = {
+            g: g,
+            f: f,
+            lines: [],
+            names: [],
+            paths: [],
+            slot-at: [],
+            slots: 0,
+            framed: false,
+            loops: [],
+            used-labels: map.new(),
+        };
+        // an async func: a frame, a start and a step (its own rendering)
+        if f.async {
+            render-async(r, f, out);
+            return;
+        }
+        // every rooted local holding pointers has slots, one for each
+        for i in 0..f.locals.len() {
+            let name = local-c(f, i);
+            let paths = ptr-paths(g, f.locals[i].ty, name);
+            r.names.push(name);
+            r.paths.push(paths);
+            let rooted = f.rooted.len() == 0 || f.rooted[i];
+            if paths.len() > 0 && rooted {
+                r.slot-at.push(r.slots);
+                r.slots += paths.len();
+            } else {
+                r.slot-at.push(-1);
+            }
+        }
+        // a closure's C function takes the environment it was made in first
+        let params: list<string> = if f.closure { ["void *y_env",] } else { [] };
+        let is-param: list<bool> = [];
+        for i in 0..f.locals.len() { is-param.push(false); }
+        for p in f.params {
+            params.push("{c-type(g, f.locals[p].ty)} {local-c(f, p)}");
+            is-param[p] = true;
+        }
+        // the records kept on the stack: their storage, and (those holding pointers) the frame's
+        // list of them, traced as the collector's roots
+        let objs: list<string> = [];
+        for n in flatten(f.body) {
+            match n.kind {
+                assign(x) => {
+                    match x.value.kind {
+                        alloc(a) => {
+                            if a.stack {
+                                line(r, c"{a.ctype} yr{x.dest} = { 0 };");
+                                if a.trace != "NULL" { objs.push(c"{ &yr{x.dest}, {a.trace} }"); }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        // the frame: the collector's roots
+        r.framed = r.slots > 0 || objs.len() > 0;
+        if r.framed {
+            if r.slots > 0 { line(r, c"void *ys[{r.slots}] = { 0 };"); }
+            if objs.len() > 0 { line(r, c"y_stack_obj yo[{objs.len()}] = { {objs.join(", ")} };"); }
+            let ys = if r.slots > 0 { "ys" } else { "NULL" };
+            let yo = if objs.len() > 0 { "yo" } else { "NULL" };
+            line(r, c"y_frame yf = { y_top, {r.slots}, {ys}, {objs.len()}, {yo} };");
+            line(r, "y_top = &yf;");
+        }
+        for i in 0..f.locals.len() {
+            if !is-param[i] { line(r, c"{c-type(g, f.locals[i].ty)} {local-c(f, i)} = { 0 };"); }
+        }
+        for p in f.params { root(r, p); }
+        if f.env-param >= 0 {
+            line(r, "{r.names[f.env-param]} = y_env;");
+            root(r, f.env-param);
+        }
+        render-stmts(r, f.body);
+        // a body that gets to its end (a helper's: a trace, a lowering) pops its frame there too
+        let ends = f.body.len() > 0 && match f.body[f.body.len() - 1].kind {
+            return(v) => true,
+            halt => true,
+            _ => false,
+        };
+        if r.framed && !ends { line(r, "y_top = yf.prev;"); }
+        let ps = if params.len() == 0 { "void" } else { params.join(", ") };
+        let result = if f.void-result { "void" } else { c-type(g, f.result) };
+        // a component's export: the host's to call, by its name
+        if f.export-name != "" {
+            out.push("Y_EXPORT(\"{c-escape(f.export-name)}\")");
+            emit-func(g, "{result} {f.c-name}({ps})", r.lines, out);
+            return;
+        }
+        let signature = "static {result} {f.c-name}({ps})";
+        emit-func(g, signature, r.lines, out);
+    }
+
+    // a function's prototype and its body, indented by brace: a line that closes one goes out
+    // first, one that opens one goes in after
+    emit-func: func(g: Gen, signature: string, lines: list<string>, out: list<string>) {
+        g.protos.push(signature + ";");
+        out.push(signature + c" {");
+        let depth = 1;
+        let tabs = [from-byte(9),];
+        for line in lines {
+            let len = line.len();
+            if len > 0 && line.byte-at(0) == 125 { depth -= 1; }
+            for step in tabs.len()..depth + 1 { tabs.push(tabs[tabs.len() - 1] + from-byte(9)); }
+            out.push(tabs[depth - 1] + line);
+            if len > 0 && line.byte-at(len - 1) == 123 { depth += 1; }
+        }
+        out.push(c"}");
+        out.push("");
+    }
+}

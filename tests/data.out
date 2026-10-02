@@ -1,0 +1,10 @@
+p = {x: 3, y: 4}, p.x + p.y = 7
+moved: {x: 10, y: 5}
+dot: 0
+circle(2): 12
+rect({x: 5, y: 6}): 30
+red green not red or green: blue
+some 8 / nothing
+yes
+hits: [0, 1, 4]
+true false false

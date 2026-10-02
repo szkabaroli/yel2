@@ -1,0 +1,5 @@
+// error: 3:13: field a is given twice
+main: func() -> s32 {
+    let r = { a: 1, a: 2, };
+    0
+}

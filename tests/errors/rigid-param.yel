@@ -1,0 +1,3 @@
+// error: 2:26: the value: expected T, found an integer
+id: func<T>(x: T) -> T { 0 }
+main: func() -> s32 { 0 }

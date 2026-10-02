@@ -1,0 +1,4 @@
+// error: 3:1: no package test:nothing
+// note: looked for nothing/ in tests/errors, and for a WIT package in runtime/wit
+from "test:nothing" include x;
+main: func() -> s32 { 0 }

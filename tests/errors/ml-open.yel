@@ -1,0 +1,5 @@
+// error: 3:13: a """ string's text starts on the next line
+main: func() -> s32 {
+    let s = """text""";
+    0
+}

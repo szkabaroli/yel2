@@ -1,0 +1,6 @@
+// error: 4:13: Access has no flag delete
+flags Access { read, write, }
+main: func() -> s32 {
+    let a = Access.delete;
+    0
+}

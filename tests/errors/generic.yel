@@ -1,0 +1,6 @@
+// error: 4:21: the value of s: expected string, found an integer
+id: func<T>(x: T) -> T { x }
+main: func() -> s32 {
+    let s: string = id(1);
+    0
+}

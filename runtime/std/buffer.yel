@@ -1,0 +1,82 @@
+// Buffers: bytes gathered, append-only, as Porffor's builtins make a string (its size at once, then
+// filled): built once, handed out as a string (sharing its bytes: none is written again) or a
+// list<u8> (copied: a list's items change). Written over memory.yel's intrinsics; the runtime only makes one (runtime/yel.h's ybuffer). A buffer is
+// no WIT type: at a component's boundary, give its to-string() or to-bytes().
+
+module buffer {
+    // an empty buffer, room for capacity bytes before it grows
+    @c(name = "yel_buffer_new") buffer: extern func(capacity: s64) -> buffer;
+
+    // a string's bytes at the buffer's end (room made first: the string, used after, stays rooted)
+    push: func(b: buffer, s: string) {
+        let count = s.len() as s64;
+        if count == 0 { return; }
+        reserve(b, count);
+        let length = memory.buffer-length(b);
+        memory.copy-bytes(memory.buffer-data(b) + length, memory.string-data(s), count);
+        memory.set-buffer-length(b, length + count);
+    }
+
+    // a byte at the buffer's end
+    push-byte: func(b: buffer, byte: s64) {
+        reserve(b, 1);
+        let length = memory.buffer-length(b);
+        memory.store-byte(memory.buffer-data(b) + length, byte);
+        memory.set-buffer-length(b, length + 1);
+    }
+
+    // a char at the buffer's end, as UTF-8
+    push-char: func(b: buffer, c: char) {
+        let code = c as s64;
+        if code < 0x80 { push-byte(b, code); return; }
+        if code < 0x800 {
+            push-byte(b, 0xc0 | (code >> 6));
+        } else {
+            if code < 0x10000 {
+                push-byte(b, 0xe0 | (code >> 12));
+            } else {
+                push-byte(b, 0xf0 | (code >> 18));
+                push-byte(b, 0x80 | ((code >> 12) & 0x3f));
+            }
+            push-byte(b, 0x80 | ((code >> 6) & 0x3f));
+        }
+        push-byte(b, 0x80 | (code & 0x3f));
+    }
+
+    // a list's bytes at the buffer's end
+    push-bytes: func(b: buffer, bytes: list<u8> & readonly) {
+        let count = bytes.len() as s64;
+        if count == 0 { return; }
+        reserve(b, count);
+        let length = memory.buffer-length(b);
+        memory.copy-bytes(memory.buffer-data(b) + length, memory.items-address(bytes), count);
+        memory.set-buffer-length(b, length + count);
+    }
+
+    // how many bytes it has
+    @c(name = "(($1)->len)") len: extern func(b: buffer & readonly) -> s64;
+
+    // its bytes so far, as a string (shared: none is written again) or a list (copied)
+    @c(name = "yel_buffer_string") to-string: extern func(b: buffer & readonly) -> string;
+
+    to-bytes: func(b: buffer & readonly) -> list<u8> {
+        // b's bytes held only at their address while the list is made
+        memory.hold-collector();
+        let out = memory.bytes-list(memory.buffer-data(b), len(b));
+        memory.release-collector();
+        out
+    }
+
+    // room for count more bytes without growing again (as Rust's reserve): twice the room, 16 at
+    // least, the bytes moved
+    reserve: func(b: buffer, count: s64) {
+        let length = memory.buffer-length(b);
+        let room = memory.buffer-room(b);
+        if length + count <= room { return; }
+        let grown = if room * 2 < length + count { length + count } else { room * 2 };
+        let size = if grown < 16 { 16 } else { grown };
+        let data = memory.new-bytes(size);
+        if length > 0 { memory.copy-bytes(data, memory.buffer-data(b), length); }
+        memory.set-buffer-data(b, data, size);
+    }
+}

@@ -1,0 +1,11 @@
+// Sets: set<T> is a map<T, ()> (runtime/yel.h's map): each value once, equal as == says, in the
+// order added. set.new(), s.add(x), s.values(); s.has(x), s.remove(x) (whether it was there) and
+// s.len() are a map's
+
+module set {
+    // a new set, empty (set.new())
+    new: func<K>() -> set<K> { map.new() }
+    add: func<K>(s: set<K>, k: K) { map.set(s, k, ()); }
+    // the values, in the order they were added
+    values: func<K>(s: set<K> & readonly) -> list<K> { map.keys(s) }
+}

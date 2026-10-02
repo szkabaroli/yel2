@@ -1,0 +1,125 @@
+// Porffor's bench/linked_list.js: a list of 7 nodes (made once) relinked, walked, cut and reversed
+// 400000 times (JS's null is none; the methods the loop calls, as funcs)
+
+from "wasi:clocks" include monotonic-clock;
+
+record Node { value: s32, next: option<Node>, }
+
+record LinkedList { head: option<Node>, size: s32, }
+
+// the node after o (none after none)
+after: func(o: option<Node>) -> option<Node> {
+    match o {
+        some(n) => n.next,
+        none => none,
+    }
+}
+
+get-at: func(l: LinkedList, index: s32) -> option<s32> {
+    if index < 0 || index >= l.size { return none; }
+    let current = l.head;
+    for i in 0..index { current = after(current); }
+    match current {
+        some(n) => some(n.value),
+        none => none,
+    }
+}
+
+index-of: func(l: LinkedList, value: s32) -> s32 {
+    let current = l.head;
+    let index = 0;
+    for step in 0..l.size + 1 {
+        match current {
+            some(n) => {
+                if n.value == value { return index; }
+                current = n.next;
+                index += 1;
+            }
+            none => { return -1; }
+        }
+    }
+    -1
+}
+
+remove-at: func(l: LinkedList, index: s32) -> option<s32> {
+    if index < 0 || index >= l.size { return none; }
+    let removed = l.head;
+    if index == 0 {
+        l.head = after(l.head);
+    } else {
+        let current = l.head;
+        let prev = current;
+        for i in 0..index {
+            prev = current;
+            current = after(current);
+        }
+        removed = current;
+        match prev {
+            some(p) => { p.next = after(current); }
+            none => {}
+        }
+    }
+    l.size -= 1;
+    match removed {
+        some(n) => some(n.value),
+        none => none,
+    }
+}
+
+reverse-list: func(l: LinkedList) {
+    let prev: option<Node> = none;
+    let current = l.head;
+    for step in 0..l.size + 1 {
+        match current {
+            some(n) => {
+                let next = n.next;
+                n.next = prev;
+                prev = current;
+                current = next;
+            }
+            none => { break; }
+        }
+    }
+    l.head = prev;
+}
+
+main: func() {
+    let nodes: list<Node> = [];
+    for i in 0..10 { nodes.push({ value: i, next: none, }); }
+    let l: LinkedList = { head: none, size: 0, };
+
+    let t = monotonic-clock.now();
+    for i in 0..400000 {
+        l.head = some(nodes[0]);
+        nodes[0].next = some(nodes[1]);
+        nodes[1].next = some(nodes[2]);
+        nodes[2].next = some(nodes[3]);
+        nodes[3].next = some(nodes[4]);
+        nodes[4].next = none;
+        l.size = 5;
+
+        nodes[5].next = l.head;
+        l.head = some(nodes[5]);
+        l.size += 1;
+
+        nodes[6].next = nodes[2].next;
+        nodes[2].next = some(nodes[6]);
+        l.size += 1;
+
+        get-at(l, 0);
+        get-at(l, 3);
+        get-at(l, 6);
+
+        index-of(l, 5);
+        index-of(l, 6);
+        index-of(l, 4);
+
+        remove-at(l, 0);
+        remove-at(l, 2);
+
+        reverse-list(l);
+
+        for j in 0..nodes.len() { nodes[j].next = none; }
+    }
+    print("{(monotonic-clock.now() - t) as s64 / 1000000}\n");
+}

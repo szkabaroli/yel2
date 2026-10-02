@@ -1,0 +1,18 @@
+// a value shown by std's walker over its type's descriptor ({x:?}): a record, a variant, an option
+// of a tuple, then a missing map key (its panic shows the key)
+
+record Point { x: s32, label: string, tags: list<string>, }
+variant Shape { circle(f64), square(Point), none, }
+
+main: func() -> s32 {
+    let p: Point = { x: 3, label: "a \"b\"", tags: ["t",], };
+    print("{p:?}\n");
+    print("{Shape.circle(1.5):?} {Shape.square(p):?} {Shape.none:?}\n");
+    let pair: option<tuple<s64, string>> = some((7, "seven"));
+    print("{pair:?} {[1, 2, 3,]:?}\n");
+    let m: map<tuple<s64, string>, s64> = map.new();
+    m.set((1, "one"), 1);
+    print("{m:?}\n");
+    print("{m[(2, "two")]}\n");
+    0
+}

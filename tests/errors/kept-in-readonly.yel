@@ -1,0 +1,18 @@
+// error: 12:40: readonly is wanted here: xs is kept where it may be written (stored, or captured by a closure)
+// error: 15:38: readonly is wanted here: ys is kept where it may be written (stored, or captured by a closure)
+// a list kept in a map (map.set's value), and one kept in a map by a func of yours (its summary: kept
+// in its first parameter), is no longer this name's alone: the map may write it
+
+keep-in: func(m: map<string, list<s32>>, xs: list<s32>) { m.set("k", xs); }
+
+main: func() -> s32 {
+    let xs: list<s32> = [1,];
+    let m: map<string, list<s32>> = map.new();
+    m.set("a", xs);
+    let frozen: list<s32> & readonly = xs;
+    let ys: list<s32> = [2,];
+    keep-in(m, ys);
+    let kept: list<s32> & readonly = ys;
+    print("{frozen:?} {kept:?} {m.len()}\n");
+    0
+}

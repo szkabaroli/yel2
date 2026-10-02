@@ -1,0 +1,3 @@
+// error: 3:46: +: expected a number, found binding
+type binding = distinct u32;
+main: func() { let a = 3 as binding; let b = a + 1; }

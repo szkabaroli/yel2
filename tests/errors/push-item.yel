@@ -1,0 +1,6 @@
+// error: 4:13: argument 2 of yel:std/list.push: expected an integer, found string
+main: func() -> s32 {
+    let xs = [1,];
+    xs.push("a");
+    0
+}

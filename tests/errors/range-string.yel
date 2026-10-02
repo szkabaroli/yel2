@@ -1,0 +1,7 @@
+// error: 4:9: a range pattern on a string: ranges are of integers or chars
+main: func() {
+    match "b" {
+        "a".."c" => {}
+        _ => {}
+    }
+}

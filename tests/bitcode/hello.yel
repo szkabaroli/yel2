@@ -1,0 +1,22 @@
+// strings through the runtime: literals printed on stdout and stderr (escapes, UTF-8, an empty one),
+// main's value the exit code after stdout is flushed
+
+shout: func(times: s32) -> s32 {
+    let n = 0;
+    loop {
+        if n >= times { break; }
+        print("hello, bitcode\n");
+        n += 1;
+    }
+    n
+}
+
+main: func() -> s32 {
+    let greeting: string = "héllo \u{1F600}\n";
+    print(greeting);
+    print("");
+    eprint("to stderr\n");
+    let said = shout(3);
+    print("tab\there, \"quoted\", back\\slash\n");
+    said + 4
+}

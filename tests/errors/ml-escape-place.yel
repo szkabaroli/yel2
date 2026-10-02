@@ -1,0 +1,8 @@
+// error: 5:15: unknown escape \q
+main: func() -> s32 {
+    let s = """
+        fine
+          bad \q here
+        """;
+    0
+}

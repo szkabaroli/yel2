@@ -1,0 +1,4 @@
+// error: 3:27: a list<s32, 3> of 2 items
+main: func() {
+    let v: list<s32, 3> = [1, 2];
+}

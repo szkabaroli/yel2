@@ -1,0 +1,31 @@
+// (): unit, as a value, a type, a pattern, and what a case carrying nothing holds
+
+nothing: func() -> () { () }
+run: func(f: func() -> (), n: s32) -> result<(), string> {
+    f();
+    if n < 0 { return err("negative"); }
+    ok(())
+}
+main: func() {
+    let u: () = nothing();
+    let k: func() -> () = { print("called\n"); };
+    let r = run(k, 1);
+    match r {
+        ok(()) => print("ok\n"),
+        err(e) => print("{e}\n"),
+    }
+    match run(k, -1) {
+        ok => print("ok\n"),
+        err(e) => print("{e}\n"),
+    }
+    print("{u == ()} {shapes()}\n");
+}
+variant Shape { dot, circle(s32), }
+shapes: func() -> s32 {
+    let a = Shape.dot(());
+    let b: Shape = dot(());
+    match a {
+        dot(()) => 1,
+        circle(r) => r,
+    }
+}

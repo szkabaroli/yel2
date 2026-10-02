@@ -1,0 +1,7 @@
+// error: 4:13: expected '=>', found '->'
+main: func() -> s32 {
+    match true {
+        true -> 1,
+        false => 0,
+    }
+}

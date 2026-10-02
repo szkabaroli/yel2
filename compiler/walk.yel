@@ -1,0 +1,187 @@
+// Walking the syntax tree: what a statement or an expression holds directly (its parts), and
+// generators of everything inside a block or an expression, depth first, each in the order it is
+// written. An analysis is a for over one of them (and a return once it knows), not a walker of its
+// own. A closure's body is walked only where closures says so (what runs later is another
+// question), and a loop's body only where loops says so (a break in it is its own).
+
+module walk {
+    // a statement's expressions and blocks (its own: what is inside them is theirs)
+    stmt-parts: func(s: Stmt, xs: list<Expr>, bs: list<Block>) {
+        match s {
+            let-stmt(x) => xs.push(x.value),
+            let-pattern(x) => xs.push(x.value),
+            return-stmt(e) => xs.push(e),
+            for-stmt(x) => {
+                xs.push(x.start);
+                match x.stop {
+                    some(e) => xs.push(e),
+                    none => {}
+                }
+                bs.push(x.body);
+            }
+            loop-stmt(x) => bs.push(x.body),
+            assign(x) => xs.push(x.value),
+            assign-field(x) => {
+                xs.push(x.target);
+                xs.push(x.value);
+            }
+            expr-stmt(x) => xs.push(x.value),
+            break-stmt => {}
+            continue-stmt => {}
+        }
+    }
+
+    // an expression's direct parts: its expressions, and its blocks (a closure's among them)
+    expr-parts: func(e: Expr, xs: list<Expr>, bs: list<Block>) {
+        match e.kind {
+            closure(cl) => bs.push(cl.body),
+            if-else(x) => {
+                xs.push(x.cond);
+                bs.push(x.then);
+                match x.otherwise {
+                    some(b) => bs.push(b),
+                    none => {}
+                }
+            }
+            block(b) => bs.push(b),
+            match-expr(m) => {
+                xs.push(m.value);
+                for arm in m.arms {
+                    match arm.guard {
+                        some(g) => xs.push(g),
+                        none => {}
+                    }
+                    xs.push(arm.body);
+                }
+            }
+            _ => effects.sub-exprs(e, xs),
+        }
+    }
+
+    // whether a statement is a loop (its body's breaks and continues are its own)
+    is-loop: func(s: Stmt) -> bool {
+        match s {
+            for-stmt(x) => true,
+            loop-stmt(x) => true,
+            _ => false,
+        }
+    }
+
+    is-closure: func(e: Expr) -> bool {
+        match e.kind {
+            closure(cl) => true,
+            _ => false,
+        }
+    }
+
+    // every expression in a block, the outer before the inner
+    exprs: func(b: Block, closures: bool) -> seq<Expr> {
+        for s in b.stmts {
+            for e in stmt-exprs(s, closures) { yield e; }
+        }
+    }
+
+    // every expression in a statement
+    stmt-exprs: func(s: Stmt, closures: bool) -> seq<Expr> {
+        let xs: list<Expr> = [];
+        let bs: list<Block> = [];
+        stmt-parts(s, xs, bs);
+        for x in xs {
+            for e in tree(x, closures) { yield e; }
+        }
+        for y in bs {
+            for e in exprs(y, closures) { yield e; }
+        }
+    }
+
+    // an expression, and every expression in it
+    tree: func(e: Expr, closures: bool) -> seq<Expr> {
+        yield e;
+        if !closures && is-closure(e) { return; }
+        let xs: list<Expr> = [];
+        let bs: list<Block> = [];
+        expr-parts(e, xs, bs);
+        for x in xs {
+            for d in tree(x, closures) { yield d; }
+        }
+        for y in bs {
+            for d in exprs(y, closures) { yield d; }
+        }
+    }
+
+    // every statement in a block, nested ones too (in its expressions' blocks), the outer first;
+    // a loop's body where loops says so
+    stmts: func(b: Block, closures: bool, loops: bool) -> seq<Stmt> {
+        for s in b.stmts {
+            yield s;
+            if loops || !is-loop(s) {
+                let xs: list<Expr> = [];
+                let bs: list<Block> = [];
+                stmt-parts(s, xs, bs);
+                for x in xs {
+                    for d in expr-stmts(x, closures, loops) { yield d; }
+                }
+                for y in bs {
+                    for d in stmts(y, closures, loops) { yield d; }
+                }
+            }
+        }
+    }
+
+    // every statement in an expression's blocks
+    expr-stmts: func(e: Expr, closures: bool, loops: bool) -> seq<Stmt> {
+        if !closures && is-closure(e) { return; }
+        let xs: list<Expr> = [];
+        let bs: list<Block> = [];
+        expr-parts(e, xs, bs);
+        for x in xs {
+            for d in expr-stmts(x, closures, loops) { yield d; }
+        }
+        for y in bs {
+            for d in stmts(y, closures, loops) { yield d; }
+        }
+    }
+
+    // the bindings a pattern makes (its names', ...rest's)
+    pattern-marks: func(pattern: Pattern) -> seq<Mark> {
+        match pattern {
+            name(name) => { if name.kind == "bind" { yield name.mark; } }
+            record(record) => {
+                for field in record.patterns { for mark in pattern-marks(field) { yield mark; } }
+                if record.rest != "" { yield record.rest-mark; }
+            }
+            _ => { for part in sub-patterns(pattern) { for mark in pattern-marks(part) { yield mark; } } }
+        }
+    }
+
+    // whether a pattern makes the binding
+    pattern-binds: func(pattern: Pattern, binding: Mark) -> bool {
+        for mark in pattern-marks(pattern) { if mark == binding { return true; } }
+        false
+    }
+
+    // the patterns a pattern is made of (a record's: its fields')
+    sub-patterns: func(pattern: Pattern) -> list<Pattern> {
+        match pattern {
+            case(variant-case) => [variant-case.sub,],
+            record(record) => record.patterns,
+            tuple(parts) => parts,
+            alt(alternatives) => alternatives,
+            typed(typed) => [typed.sub,],
+            member(member) => [member.sub,],
+            _ => [],
+        }
+    }
+
+    // whether an expression reads a name (a closure's too)
+    mentions: func(e: Expr, n: string) -> bool {
+        for x in tree(e, true) {
+            match x.kind {
+                name(m) => { if m == intern(n) { return true; } }
+                _ => {}
+            }
+        }
+        false
+    }
+
+}

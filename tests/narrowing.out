@@ -1,0 +1,9 @@
+read get / read get
+write post / write post
+write put / write put
+remove delete / remove delete
+none
+read get, then write put | other | write put
+small 2 big 9
+write put nothing not a write
+get later

@@ -1,0 +1,19 @@
+// std:cli's exit: wasi:cli's, with the type WIT has no word for. WASI says each of its funcs "does
+// not return"; here their result is never, so a call of one ends a block as a return does.
+// std:cli/exit is this module (compiler/packages.yel); std:cli's other interfaces are WASI's own
+
+from "wasi:cli" include exit as wasi-exit;
+
+module cli-exit {
+    // the program stopped: 0 for ok, 1 for err (what it printed written first)
+    exit: func(status: result) -> never {
+        wasi-exit.exit(status);
+        unreachable()
+    }
+
+    // the program stopped with this code
+    exit-with-code: func(status-code: u8) -> never {
+        wasi-exit.exit-with-code(status-code);
+        unreachable()
+    }
+}

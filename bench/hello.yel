@@ -1,0 +1,3 @@
+// Porffor's bench/hello.js
+
+main: func() { print("hello world!\n"); }

@@ -1,0 +1,16 @@
+// a method call's func: the module's own of that name where its first parameter takes the
+// receiver, else the standard library's that does (a set's add in a module with an add of its
+// own); a standard library's module named as a qualifier (set.add)
+
+module mine {
+    add: func(a: s32, b: s32) -> s32 { a + b }
+    contains: func(x: s32) -> bool { x > 0 }
+    run: func() {
+        let s: set<string> = set.new();
+        s.add("a");
+        set.add(s, "b");
+        let xs = ["x", "y",];
+        print("{add(1, 2)} {s.values()} {xs.contains("y")} {contains(3)}\n");
+    }
+}
+main: func() { mine.run(); }

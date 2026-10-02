@@ -1,0 +1,504 @@
+// The syntax: tokens, expressions, statements and declarations, their spans, and the types
+// the checker gives them. The whole compiler shares these (they are the package's own).
+
+// where a piece of source is: its first byte's line and column, and the line and column just past
+// its last (columns count bytes from 1)
+// where something is: its source (an index into the program's sources: -1 for what the compiler made),
+// and its first and last line and column
+record Span { source: s64, line: s64, col: s64, end-line: s64, end-col: s64, }
+
+// a file the compiler read: its path and its text (the program's sources, in the order read)
+record Source { path: string, text: string, }
+
+// indent: a multiline string's (the spaces taken off each of its lines), -1 for any other token
+record Token {
+    kind: TokenKind,
+    text: string,
+    span: Span,
+    indent: s64,
+    // a C template (c"..."): a { is an interpolation's only before a name or (
+    template: bool,
+    // its bytes in the source: from start to just before end (the formatter prints them as written)
+    start: s64,
+    end: s64,
+}
+
+// comment: only when the lexer is asked to keep them (the formatter)
+enum TokenKind { id, int, float, char, str, op, eof, comment, }
+
+// ty: its type, which the checker sets
+record Expr { kind: ExprKind, span: Span, ty: Type, }
+
+variant ExprKind {
+    // an integer as written (0x, 0o and 0b prefixes kept), a float as written, a char's code point
+    int-lit(string),
+    float-lit(string),
+    char-lit(s64),
+    tuple-lit(list<Expr>),
+    bool-lit(bool),
+    str-lit(string),
+    interp(list<Expr>),
+    list-lit(list<Expr>),
+    name(Name),
+    call(Call),
+    method(Method),
+    field(Field),
+    binary(Binary),
+    unary(Unary),
+    if-else(IfElse),
+    block(Block),
+    record-lit(list<FieldInit>),
+    match-expr(Match),
+    // { params -> body }, or a block where a func is wanted
+    closure(Closure),
+    // a call of what an expression gives (f(x) with f a local is a call by name)
+    apply(Apply),
+    // x as T: a number, char or bool converted (wrapping, saturating; see the checker)
+    cast(Cast),
+    // x is T: whether x's value is one of T's (the checker makes the test a pattern of x's type)
+    is-test(IsTest),
+    // x as? T: some(x) where x is a T (as the narrower type), else none; never fails
+    try-as(IsTest),
+    // a value where a wider type is wanted, held another way (an s32 where s32 | string is: a tag
+    // and the s32), as the checker found it
+    widen(Widen),
+    // start f(x): an async func's call begun, its future (it runs while the starter goes on)
+    // yield v: a generator's next value (it goes on from here when the next is read)
+    yield-expr(Expr),
+    start-expr(Expr),
+    // wait f(x), wait fut, wait a | b (the first done), wait { a: x, b: y } (all of them)
+    wait-expr(Wait),
+    unit,
+}
+
+record Apply { callee: Expr, args: list<Expr>, }
+
+record Cast { value: Expr, ty: Type, }
+
+record Widen { value: Expr, ty: Type, }
+
+// what a wait waits for: one (an async call or a future), any (the first of several done) or all
+// (each, as an anonymous record's fields)
+type wait-mode = "one" | "any" | "all";
+
+record Wait { mode: wait-mode, values: list<Expr>, fields: list<string>, }
+
+record IsTest { value: Expr, ty: Type, pattern: option<Pattern>, }
+
+// a name narrowed (an is test held): its narrower type, its binding's mark
+record Narrowed { name: Name, ty: Type, mark: Mark, }
+
+// the names narrowed where a condition holds (yes) and where it fails (no)
+record Narrowing { yes: list<Narrowed>, no: list<Narrowed>, }
+
+record Split { yes: Type, no: Type, }
+
+// a closure literal: its params (each typed, or its type the wanted func's), its body; marks: its
+// params'; unit: its body's
+record Closure {
+    params: list<string>,
+    types: list<option<Type>>,
+    body: Block,
+    marks: list<Mark>,
+    unit: Unit,
+}
+
+// a binding's (a let's, a for's variable, a match arm's, a param's): whether a closure captures it
+// (the checker sets it: a name read from a closure deeper than its binding), and the unit whose
+// environment then holds it
+// ty: its type, as the checker bound it (a readonly one never writes what it holds)
+record Mark { captured: bool, unit: Unit, ty: Type, }
+
+// a func's, closure's or for's body: whether it has an environment (a record the closures made in
+// it share, holding its captured bindings; a for's, one each turn)
+record Unit { env: bool, }
+
+// type-args: a generic func's type arguments, which the checker sets
+record Call { name: string, args: list<Expr>, type-args: list<Type>, }
+
+record Method { target: Expr, name: string, args: list<Expr>, type-args: list<Type>, }
+
+record Field { target: Expr, name: string, }
+
+record Binary { op: string, left: Expr, right: Expr, }
+
+record Unary { op: string, value: Expr, }
+
+record IfElse { cond: Expr, then: Block, otherwise: option<Block>, }
+
+// each statement's span, for errors
+record Block { stmts: list<Stmt>, spans: list<Span>, }
+
+record FieldInit { name: string, value: Expr, }
+
+record Match { value: Expr, arms: list<Arm>, }
+
+// a match's arm: its pattern, its guard (pattern if cond => …), its body
+record Arm { pattern: Pattern, guard: option<Expr>, body: Expr, span: Span, }
+
+// a pattern: _; a literal; a name; a case and its payload's pattern; a record's fields' patterns;
+// a tuple's; alternatives (p | q, which bind nothing)
+variant Pattern {
+    wild,
+    literal(Expr),
+    name(NamePattern),
+    case(CasePattern),
+    record(RecordPattern),
+    tuple(list<Pattern>),
+    alt(list<Pattern>),
+    // lo..=hi (or lo..hi): an integer or a char from lo to hi
+    range(RangePattern),
+    // let n: T, its name binding a value of type T (test: the checker's pattern of the values of
+    // T, at the type there)
+    typed(TypedPattern),
+    // a value of one kind of a union's (the checker's): its tag, and its payload's pattern
+    member(MemberPattern),
+}
+
+record TypedPattern { ty: Type, sub: Pattern, test: option<Pattern>, }
+
+record MemberPattern { ty: Type, sub: Pattern, }
+
+// a name in a pattern: a case of the type matched there, else (binds: after let, or in a case's
+// parens) a binding, else a constant; the checker finds which (kind: "case", "bind" or "const", a
+// constant's key, and value: its literal, checked where it is) and marks a binding a closure
+// captures
+// what a name in a pattern is, once checked ("": not yet)
+type pattern-name-kind = "" | "case" | "bind" | "const";
+
+record NamePattern {
+    name: string,
+    binds: bool,
+    kind: pattern-name-kind,
+    key: string,
+    value: option<Expr>,
+    mark: Mark,
+    span: Span,
+}
+
+// lo and hi: literals; inclusive for ..=
+record RangePattern { lo: Expr, hi: Expr, inclusive: bool, span: Span, }
+
+record CasePattern { name: string, sub: Pattern, span: Span, }
+
+// a record's fields named, each with its pattern (the others: any value); rest: the name
+// (...rest) bound to the others, an anonymous record of them ("" for none)
+record RecordPattern {
+    fields: list<string>,
+    patterns: list<Pattern>,
+    rest: string,
+    rest-mark: Mark,
+    span: Span,
+}
+
+variant Stmt {
+    let-stmt(Let),
+    // let and a pattern every value fits: its names bound (let { x, y } = p;)
+    let-pattern(LetPattern),
+    return-stmt(Expr),
+    for-stmt(For),
+    // loop { … }: its body again and again, until a break (or a return) leaves it
+    loop-stmt(Loop),
+    assign(Assign),
+    assign-field(AssignField),
+    expr-stmt(ExprStmt),
+    // in a for or a loop: leave it, or go on to its next turn
+    break-stmt,
+    continue-stmt,
+}
+
+record Let { name: string, ty: option<Type>, value: Expr, mark: Mark, }
+
+record LetPattern { pattern: Pattern, ty: option<Type>, value: Expr, }
+
+// over a list (stop none), or a range start..stop (or ..= when inclusive)
+record For {
+    name: string,
+    start: Expr,
+    stop: option<Expr>,
+    inclusive: bool,
+    body: Block,
+    mark: Mark,
+    unit: Unit,
+}
+
+// a loop's body, and its turn's environment (when a closure captures a binding of it)
+record Loop { body: Block, unit: Unit, }
+
+record Assign { name: Name, op: string, value: Expr, }
+
+record AssignField { target: Expr, name: string, op: string, value: Expr, }
+
+// an expression statement: the block's value when is-value (its last, written without `;`)
+record ExprStmt { value: Expr, is-value: bool, }
+
+variant Decl {
+    func-decl(Func),
+    extern-decl(Extern),
+    record-decl(RecordDecl),
+    variant-decl(VariantDecl),
+    flags-decl(FlagsDecl),
+    resource-decl(ResourceDecl),
+    const-decl(ConstDecl),
+    // let name: T; (a global: its type's zero value) or let name: T = value; (a literal)
+    global-decl(GlobalDecl),
+    // type name = T; (WIT's alias): a name for a set of values, the same type as T
+    type-decl(TypeDecl),
+}
+
+// const name = value; (a literal: a number, a string, a char, a bool), its type written or the
+// value's
+// resolved: target, its names as keys (the checker's)
+// type name = T; (an alias: the same type as T), or type name = distinct T; (a type of its own,
+// held as T)
+record TypeDecl { span: Span, scope: Scope, name: string, target: Type, resolved: Type, distinct: bool, }
+
+record ConstDecl { span: Span, scope: Scope, name: string, ty: option<Type>, value: Expr, }
+
+// a global: a value of its own, there for the whole run, written and read by any func (a local of
+// the same name hides it). It starts as a literal, or as its type's zero value (none: what has one
+// is made of numbers, strings, options, collections made empty, and values of them), set before
+// the program's first code runs: no code of the program sets a global up
+record GlobalDecl { span: Span, scope: Scope, name: string, ty: Type, value: option<Expr>, }
+
+// packages and modules. A package is a directory of files (or one file), named by `package
+// ns:name;`; a module is one layer of names inside it (`module api { ... }`), which is what another
+// package includes (`from "ns:name" include api;`) and what WIT calls an interface. Every item has
+// a key, unique in the program: its package's prefix ("" for the program's own, "ns:name/" for an
+// included one), its module and a dot (at a module's top), and its name: `lex`, `lexer.lex`,
+// `yel:ui/api.render`.
+// a module's: yel's own (""), exported (a WIT interface of yel funcs), or extern (a WIT
+// package's interface, which the host implements)
+type direction = "" | "export" | "extern";
+
+record Package {
+    id: string,
+    version: string,
+    prefix: string,
+    dir: string,
+    modules: map<string, direction>,
+    state: s64,
+}
+
+// where a declaration is written: its package, its module ("" at the top level), its file, and the
+// file's includes (a name to a module's key) and what asked for them
+// build: the targets its file is built for, from a first line //+build native (or wasi), as Odin's
+// #+build: its funcs are checked everywhere and made only there ("" for every target)
+record Scope {
+    pkg: Package,
+    module: string,
+    file: string,
+    build: string,
+    includes: map<string, string>,
+    requests: list<Include>,
+}
+
+// from "<spec>" include <names> (each bound as its alias)
+record Include { spec: string, names: list<string>, aliases: list<string>, span: Span, }
+
+// a func's type parameters (func<T>), its parameters' names and types, and its result
+record Func {
+    span: Span,
+    scope: Scope,
+    name: string,
+    type-params: list<string>,
+    params: list<string>,
+    param-types: list<Type>,
+    result: Type,
+    body: Block,
+    marks: list<Mark>,
+    unit: Unit,
+    // async func: it may wait (its body waits, a state machine the executor steps)
+    is-async: bool,
+    // a generator: its body yields (the checker finds it), a state machine stepped for each value
+    is-generator: bool,
+    // the binding each name in its body is (the checker's): what an analysis keys a local by
+    bindings: Bindings,
+}
+
+// which binding (its Mark: one for each let, pattern name, for, parameter) each name read and each
+// name assigned is
+record Bindings { exprs: map<Expr, Mark>, assigns: map<Assign, Mark>, }
+
+// @c(name = "c_func", keeps = "p", gives = "q"): an extern's C func, and what it does that its
+// types cannot say. A name with $1, $2, ... in it is C written in place (an intrinsic, as Porffor's
+// Porffor.IR.*): $n the nth argument, a type parameter's three first (its C type, its scan, its
+// descriptor), then the values
+record CFunc { name: string, keeps: list<string>, gives: list<string>, }
+
+// wit-module and wit-name: a WIT interface's func (a component's import), "" for a C one
+record Extern {
+    span: Span,
+    scope: Scope,
+    name: string,
+    type-params: list<string>,
+    params: list<string>,
+    param-types: list<Type>,
+    result: Type,
+    c-name: string,
+    wit-module: string,
+    wit-name: string,
+    // a WIT async func's (WASI 0.3): a call waits (wait f(…))
+    is-async: bool,
+    // what the C func does with its parameters that its types cannot say (flow.yel derives the
+    // rest from them): the ones it keeps past the call (somewhere of its own: the executor's) and
+    // the ones its result is or holds (its own state: a stream's items)
+    keeps: list<string>,
+    gives: list<string>,
+}
+
+record RecordDecl {
+    span: Span,
+    scope: Scope,
+    name: string,
+    fields: list<string>,
+    field-types: list<Type>,
+}
+
+record VariantDecl { span: Span, scope: Scope, name: string, cases: list<CaseDecl>, }
+
+// a set of named bits: flags Name { a, b, }
+record FlagsDecl { span: Span, scope: Scope, name: string, flags: list<string>, }
+
+// a WIT resource: its values are handles (u32), what its funcs take and give; a component's host
+// owns what each names
+record ResourceDecl { span: Span, scope: Scope, name: string, }
+
+// payload unit-type when has-payload is false
+record CaseDecl { name: string, has-payload: bool, payload: Type, }
+
+// a type: WAVE's (the Component Model's values), with option and result built in
+variant Type {
+    // a number: s8, s16, s32, s64, u8, u16, u32, u64, f32 or f64
+    num(string),
+    bool-type,
+    char-type,
+    string-type,
+    // bytes being gathered (append-only), handed out as a string or a list<u8>
+    buffer-type,
+    // what a statement is; in a result, the absent payload (written _)
+    unit-type,
+    // a func's result that never comes (panic, exit): a call of it does not return, so it is any
+    // type where one is wanted, and a block it ends leaves (as a return does)
+    never-type,
+    // what an expression with an error has (the checker's): it fits anything, so one mistake is
+    // told once, not again at each use of what it made
+    error-type,
+    // an address (C's void *): the IR's only, never written in yel (a helper's param the runtime
+    // gives, a string's bytes, a func value's environment)
+    address-type,
+    // a value of a type as the Component Model lays it out (the canonical ABI's: a string's
+    // pointer and length, a variant's tag and its cases' union): the IR's only, its lowering and
+    // lifting (abi.yel). A size or core i32 the IR holds is num("usize"): pointer-sized
+    canonical-type(Type),
+    list-type(Type),
+    // list<T, N>: N items held by value (as WIT's fixed-length list); len -1 for list<T, ?> (a
+    // let's type, the length its value's)
+    fixed-list(FixedList),
+    // func(T, U) -> R: a func as a value (a top-level func's, no closure)
+    func-type(FuncType),
+    // map<K, V>: values of V by keys of K (equal as == says), in the order they were set;
+    // set<T> is a map<T, ()>
+    map-type(MapType),
+    option-type(Type),
+    result-type(ResultType),
+    tuple-type(list<Type>),
+    // { x: s32, y: string }: a record by its fields, held by value (its fields in order of their
+    // names: one set of fields is one type)
+    anon-record(AnonRecord),
+    // T & readonly: T's values, never written through this type (deep: what is read from it is
+    // readonly too). Held as T
+    readonly-type(Type),
+    // future<T>: an async call started (start f(x)), its result once it is done
+    future-type(Type),
+    // seq<T>: a generator's values, made as they are read (a func that yields: its call)
+    seq-type(Type),
+    // stream<T> (its reading end, WIT's) and writer<T> (its writing end): one stream of T
+    stream-type(StreamType),
+    // A | B: the values of each (as the checker settles it: flattened, each once, in order of
+    // their names; a value of one kind, held as that kind)
+    union-type(list<Type>),
+    // a literal as a type: the one value of its base type, its key (types as sets: semtype.yel)
+    singleton(Singleton),
+    // lo..=hi (or lo..hi): an integer's or a char's values from lo to hi, held as its base type
+    range-type(RangeType),
+    // type name = distinct T: a type of its own (no value of T is one, nor one of it a T: as
+    // converts), held as T
+    distinct-type(Distinct),
+    // a record, variant, enum or flags
+    named(Name),
+    // a generic func's type parameter, in its signature and body
+    param(string),
+    // a type inference has not settled yet
+    var(TypeVar),
+}
+
+record ResultType { ok: Type, err: Type, }
+
+// writer: the writing end (writer<T>), else the reading end (stream<T>)
+record StreamType { item: Type, writer: bool, }
+
+record AnonRecord { fields: list<string>, types: list<Type>, }
+
+// text: as written ("get", 3, 'a', true)
+record Singleton { base: Type, key: string, text: string, }
+
+// lo and hi: the first and last values' keys (decimal: a char's code point); text as written
+record RangeType { base: Type, lo: string, hi: string, text: string, }
+
+record MapType { key: Type, value: Type, }
+
+// type name = distinct T: its name (a key) and what it is held as
+record Distinct { name: string, base: Type, }
+
+record FixedList { item: Type, len: s64, }
+
+record FuncType { params: list<Type>, result: Type, }
+
+// kind: 0 any type, 1 an integer's (an integer literal's, s32 unless settled), 2 a float's (f32)
+record TypeVar { id: s64, kind: s64, bound: option<Type>, }
+
+node: func(kind: ExprKind, span: Span) -> Expr { { kind: kind, span: span, ty: Type.unit-type, } }
+
+// a scope of its own, in a package of its own (a file read alone: the prelude, an interpolation)
+blank-scope: func(file: string) -> Scope {
+    {
+        pkg: { id: "", version: "", prefix: "", dir: "", modules: map.new(), state: 1, },
+        module: "",
+        file: file,
+        build: "",
+        includes: map.new(),
+        requests: [],
+    }
+}
+
+// an if, a match or a block: it ends at its brace, and takes no `;` as a statement
+ends-at-brace: func(e: Expr) -> bool {
+    match e.kind {
+        if-else(x) => true,
+        match-expr(x) => true,
+        block(x) => true,
+        _ => false,
+    }
+}
+
+is-name: func(e: Expr) -> bool {
+    match e.kind {
+        name(n) => true,
+        _ => false,
+    }
+}
+
+expr-name: func(e: Expr) -> string {
+    match e.kind {
+        name(n) => name-text(n),
+        _ => "",
+    }
+}
+
+is-str-lit: func(e: Expr) -> bool {
+    match e.kind {
+        str-lit(s) => true,
+        _ => false,
+    }
+}

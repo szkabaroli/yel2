@@ -1,0 +1,448 @@
+// Reading WIT: a package's interfaces (their uses, types and funcs), as the packages module turns
+// them into yel modules. A world is skipped: a yel program's own is made from what it uses.
+
+// a WIT package as read: its id (ns:name), version, file, and interfaces by name
+record WitPackage { id: string, version: string, file: string, interfaces: map<string, WitInterface>, }
+record WitInterface {
+    name: string,
+    uses: list<WitUse>,
+    types: list<WitTypeDef>,
+    funcs: list<WitFunc>,
+}
+// use ns:name/iface.{a, b as c} (pkg "" for one of the same package's)
+record WitUse { pkg: string, iface: string, names: list<string>, aliases: list<string>, }
+// a type: kind record (fields, types), variant or enum (cases), flags (fields), alias (target), or
+// resource (funcs: its constructor, methods and static funcs)
+type wit-type-kind = "alias" | "record" | "variant" | "enum" | "flags" | "resource";
+
+record WitTypeDef {
+    name: string,
+    kind: wit-type-kind,
+    fields: list<string>,
+    types: list<Type>,
+    cases: list<CaseDecl>,
+    target: Type,
+    funcs: list<WitFunc>,
+}
+// a func; a resource's has a kind: "constructor", "method" (its handle is the first param, self),
+// or "static"; an interface's is "func"
+type wit-func-kind = "func" | "constructor" | "method" | "static";
+
+record WitFunc {
+    name: string,
+    kind: wit-func-kind,
+    params: list<string>,
+    types: list<Type>,
+    result: Type,
+    // async func: it may wait (a yel async func's call: wait f(…))
+    is-async: bool,
+}
+
+module parser {
+    // a WIT file's package
+    wit-file: func(context: Context, source: s64) -> WitPackage {
+        let file = context.sources[source].path;
+        let p = parser(context, source, context.sources[source].text, 1, 1);
+        let pkg: WitPackage = { id: "", version: "", file: file, interfaces: map.new(), };
+        for step in p.pos..p.toks.len() {
+            skip-gates(p);
+            if is-kind(p, 0, TokenKind.eof) { return pkg; }
+            if at(p, "package") {
+                advance(p);
+                let full = package-id(p);
+                pkg.id = without-version(full);
+                if pkg.id != full {
+                    pkg.version = full.substring(pkg.id.len() + 1, full.len());
+                }
+            } else if at(p, "interface") {
+                advance(p);
+                let n = wit-name(p);
+                pkg.interfaces.set(n, wit-interface(p, n));
+            } else if at(p, "world") {
+                advance(p);
+                wit-name(p);
+                skip-braces(p);
+            } else if at(p, "use") {
+                wit-use(p);
+            } else {
+                fail(p, "expected an interface or a world in WIT, found {found(p)}");
+            }
+        }
+        pkg
+    }
+
+    // a WIT name: kebab-case, % before one that is a keyword
+    wit-name: func(p: Parser) -> string {
+        if at(p, "%") { advance(p); }
+        name(p)
+    }
+
+    // @since(version = 0.2.0), @unstable(feature = x), @deprecated(...): gates, skipped
+    skip-gates: func(p: Parser) {
+        for step in p.pos..p.toks.len() {
+            if !at(p, "@") { return; }
+            advance(p);
+            name(p);
+            if at(p, "(") { skip-parens(p); }
+        }
+    }
+
+    skip-parens: func(p: Parser) {
+        let depth = 0;
+        for step in p.pos..p.toks.len() {
+            if at(p, "(") { depth += 1; }
+            if at(p, ")") {
+                depth -= 1;
+                if depth == 0 {
+                    advance(p);
+                    return;
+                }
+            }
+            if is-kind(p, 0, TokenKind.eof) { fail(p, "unclosed '('"); }
+            advance(p);
+        }
+    }
+
+    // a { ... } skipped whole (a world, a resource's methods)
+    skip-braces: func(p: Parser) {
+        let depth = 0;
+        for step in p.pos..p.toks.len() {
+            if at(p, "\{") { depth += 1; }
+            if at(p, "\}") {
+                depth -= 1;
+                if depth == 0 {
+                    advance(p);
+                    return;
+                }
+            }
+            if is-kind(p, 0, TokenKind.eof) { fail(p, "unclosed '\{'"); }
+            advance(p);
+        }
+    }
+
+    wit-interface: func(p: Parser, n: string) -> WitInterface {
+        let face: WitInterface = { name: n, uses: [], types: [], funcs: [], };
+        expect(p, "\{");
+        for step in p.pos..p.toks.len() {
+            skip-gates(p);
+            if at(p, "\}") {
+                advance(p);
+                return face;
+            }
+            if at(p, "use") { face.uses.push(wit-use(p)); }
+            else if at(p, "type") {
+                advance(p);
+                let tn = wit-name(p);
+                expect(p, "=");
+                let target = wit-type(p);
+                expect(p, ";");
+                face.types.push({
+                    name: tn,
+                    kind: "alias",
+                    fields: [],
+                    types: [],
+                    cases: [],
+                    target: target,
+                    funcs: [],
+                });
+            } else if at(p, "record") {
+                advance(p);
+                let tn = wit-name(p);
+                expect(p, "\{");
+                let fields: list<string> = [];
+                let types: list<Type> = [];
+                wit-fields(p, "\}", fields, types);
+                face.types.push({
+                    name: tn,
+                    kind: "record",
+                    fields: fields,
+                    types: types,
+                    cases: [],
+                    target: Type.unit-type,
+                    funcs: [],
+                });
+            } else if at(p, "variant") || at(p, "enum") {
+                let kind: wit-type-kind = if at(p, "variant") { "variant" } else { "enum" };
+                advance(p);
+                let tn = wit-name(p);
+                expect(p, "\{");
+                let cases: list<CaseDecl> = [];
+                wit-cases(p, cases);
+                face.types.push({
+                    name: tn,
+                    kind: kind,
+                    fields: [],
+                    types: [],
+                    cases: cases,
+                    target: Type.unit-type,
+                    funcs: [],
+                });
+            } else if at(p, "flags") {
+                advance(p);
+                let tn = wit-name(p);
+                expect(p, "\{");
+                let flags: list<string> = [];
+                wit-flags(p, flags);
+                face.types.push({
+                    name: tn,
+                    kind: "flags",
+                    fields: flags,
+                    types: [],
+                    cases: [],
+                    target: Type.unit-type,
+                    funcs: [],
+                });
+            } else if at(p, "resource") {
+                advance(p);
+                let tn = wit-name(p);
+                let funcs: list<WitFunc> = [];
+                if at(p, ";") { advance(p); } else { wit-resource(p, tn, funcs); }
+                face.types.push({
+                    name: tn,
+                    kind: "resource",
+                    fields: [],
+                    types: [],
+                    cases: [],
+                    target: Type.unit-type,
+                    funcs: funcs,
+                });
+            } else {
+                let fname = wit-name(p);
+                expect(p, ":");
+                face.funcs.push(wit-func(p, fname, "func"));
+            }
+        }
+        face
+    }
+
+    // a func's type after its name and colon, to its ;: [static] [async] func(params) [-> result]
+    wit-func: func(p: Parser, n: string, kind: wit-func-kind) -> WitFunc {
+        let k = kind;
+        if at(p, "static") {
+            advance(p);
+            k = "static";
+        }
+        // an async func (WASI 0.3): a call waits (yel's async)
+        let is-async = at(p, "async");
+        if is-async { advance(p); }
+        expect(p, "func");
+        expect(p, "(");
+        let params: list<string> = [];
+        let types: list<Type> = [];
+        wit-fields(p, ")", params, types);
+        let result = Type.unit-type;
+        if at(p, "->") {
+            advance(p);
+            result = wit-type(p);
+        }
+        expect(p, ";");
+        { name: n, kind: k, params: params, types: types, result: result, is-async: is-async, }
+    }
+
+    // a resource's { ... }: its constructor, methods and static funcs
+    wit-resource: func(p: Parser, r: string, funcs: list<WitFunc>) {
+        expect(p, "\{");
+        for step in p.pos..p.toks.len() {
+            skip-gates(p);
+            if at(p, "\}") {
+                advance(p);
+                return;
+            }
+            if at(p, "constructor") {
+                advance(p);
+                expect(p, "(");
+                let params: list<string> = [];
+                let types: list<Type> = [];
+                wit-fields(p, ")", params, types);
+                // a constructor may fail: its result is then written
+                let result = Type.named(intern(r));
+                if at(p, "->") {
+                    advance(p);
+                    result = wit-type(p);
+                }
+                expect(p, ";");
+                funcs.push({
+                    name: "new",
+                    kind: "constructor",
+                    params: params,
+                    types: types,
+                    result: result,
+                    is-async: false,
+                });
+            } else {
+                let fname = wit-name(p);
+                expect(p, ":");
+                funcs.push(wit-func(p, fname, "method"));
+            }
+        }
+    }
+
+    // name: type pairs up to close (a record's fields, a func's params), close taken
+    wit-fields: func(p: Parser, close: string, names: list<string>, types: list<Type>) {
+        for s in p.pos..p.toks.len() {
+            skip-gates(p);
+            if at(p, close) {
+                advance(p);
+                return;
+            }
+            names.push(wit-name(p));
+            expect(p, ":");
+            types.push(wit-type(p));
+            if !at(p, close) { expect(p, ","); }
+        }
+    }
+
+    wit-cases: func(p: Parser, cases: list<CaseDecl>) {
+        for s in p.pos..p.toks.len() {
+            skip-gates(p);
+            if at(p, "\}") {
+                advance(p);
+                return;
+            }
+            let c = wit-name(p);
+            let has = false;
+            let payload = Type.unit-type;
+            if at(p, "(") {
+                advance(p);
+                payload = wit-type(p);
+                expect(p, ")");
+                has = true;
+            }
+            cases.push({ name: c, has-payload: has, payload: payload, });
+            if !at(p, "\}") { expect(p, ","); }
+        }
+    }
+
+    wit-flags: func(p: Parser, flags: list<string>) {
+        for s in p.pos..p.toks.len() {
+            skip-gates(p);
+            if at(p, "\}") {
+                advance(p);
+                return;
+            }
+            flags.push(wit-name(p));
+            if !at(p, "\}") { expect(p, ","); }
+        }
+    }
+
+    // use ns:name/iface@version.{a, b as c}; or use iface.{a};
+    wit-use: func(p: Parser) -> WitUse {
+        expect(p, "use");
+        let first = wit-name(p);
+        let pkg = "";
+        let iface = first;
+        if at(p, ":") {
+            advance(p);
+            pkg = first + ":" + wit-name(p);
+            expect(p, "/");
+            iface = wit-name(p);
+            if at(p, "@") { skip-version(p); }
+        }
+        expect(p, ".");
+        expect(p, "\{");
+        let names: list<string> = [];
+        let aliases: list<string> = [];
+        wit-use-names(p, names, aliases);
+        expect(p, ";");
+        { pkg: pkg, iface: iface, names: names, aliases: aliases, }
+    }
+
+    // @version, up to the . before {
+    skip-version: func(p: Parser) {
+        advance(p);
+        for s in p.pos..p.toks.len() {
+            if at(p, ".") && at-off(p, "\{", 1) { return; }
+            advance(p);
+        }
+    }
+
+    // a use's names (a as b) up to its }, taken
+    wit-use-names: func(p: Parser, names: list<string>, aliases: list<string>) {
+        for s in p.pos..p.toks.len() {
+            if at(p, "\}") {
+                advance(p);
+                return;
+            }
+            let n = wit-name(p);
+            let alias = n;
+            if at(p, "as") {
+                advance(p);
+                alias = wit-name(p);
+            }
+            names.push(n);
+            aliases.push(alias);
+            if !at(p, "\}") { expect(p, ","); }
+        }
+    }
+
+    // a WIT type, as a yel type: a name stays a name (the packages module resolves it); own<r> and
+    // borrow<r> are r (a handle both)
+    wit-type: func(p: Parser) -> Type {
+        let n = wit-name(p);
+        if n == "list" || n == "option" {
+            expect(p, "<");
+            let inner = wit-type(p);
+            // list<T, N>: fixed-length
+            if n == "list" && at(p, ",") {
+                advance(p);
+                let len = fixed-len(p, text(p));
+                advance(p);
+                expect(p, ">");
+                return Type.fixed-list({ item: inner, len: len, });
+            }
+            expect(p, ">");
+            return if n == "list" { Type.list-type(inner) } else { Type.option-type(inner) };
+        }
+        if n == "tuple" {
+            expect(p, "<");
+            let items: list<Type> = [];
+            for s in p.pos..p.toks.len() {
+                if at(p, ">") {
+                    advance(p);
+                    return Type.tuple-type(items);
+                }
+                items.push(wit-type(p));
+                if !at(p, ">") { expect(p, ","); }
+            }
+        }
+        if n == "result" {
+            let ok = Type.unit-type;
+            let err = Type.unit-type;
+            if at(p, "<") {
+                advance(p);
+                if at(p, "_") { advance(p); } else { ok = wit-type(p); }
+                if at(p, ",") {
+                    advance(p);
+                    err = wit-type(p);
+                }
+                expect(p, ">");
+            }
+            return Type.result-type({ ok: ok, err: err, });
+        }
+        // a stream or a future (WASI 0.3): yel's (of unit where it has no item)
+        if n == "stream" || n == "future" {
+            let item = Type.unit-type;
+            if at(p, "<") {
+                advance(p);
+                if at(p, "_") { advance(p); } else { item = wit-type(p); }
+                expect(p, ">");
+            }
+            if n == "future" { return Type.future-type(item); }
+            return Type.stream-type({ item: item, writer: false, });
+        }
+        if n == "borrow" || n == "own" {
+            expect(p, "<");
+            let r = wit-name(p);
+            expect(p, ">");
+            return Type.named(intern(r));
+        }
+        if n == "float32" { return Type.num("f32"); }
+        if n == "float64" { return Type.num("f64"); }
+        let num = num-name(n);
+        if num != "" && n != "int" && n != "float" { return Type.num(num); }
+        if n == "bool" { return Type.bool-type; }
+        if n == "char" { return Type.char-type; }
+        if n == "string" { return Type.string-type; }
+        Type.named(intern(n))
+    }
+}

@@ -1,0 +1,161 @@
+// What the fuzzer knows of the program it writes: its types (a type the generator can make values
+// of), the types it declares, its funcs and constants, and the locals in scope where it writes.
+
+// a type of the program
+variant Ty {
+    // s8 to u64, by name
+    int-t(string),
+    // f32 or f64
+    float-t(string),
+    bool-t,
+    char-t,
+    string-t,
+    unit-t,
+    list-t(Ty),
+    fixed-t(Fixed),
+    option-t(Ty),
+    result-t(Sides),
+    tuple-t(list<Ty>),
+    anon-t(Fields),
+    // a declared type, by name: a record, variant, enum, flags, distinct type or alias
+    named-t(string),
+    map-t(Table),
+    func-t(Fun),
+    // a generic func's type parameter, in its body
+    param-t(string),
+}
+
+record Fixed { item: Ty, len: s64, }
+record Sides { ok: Ty, err: Ty, }
+// an anonymous record's fields, in order of their names (as yel keeps them)
+record Fields { names: list<string>, types: list<Ty>, }
+record Table { key: Ty, value: Ty, }
+record Fun { params: list<Ty>, result: Ty, }
+
+// a declared type. kind: "record", "variant" (types: each case's payload, unit-t for none),
+// "enum", "flags", "distinct" (base), "strings" (an alias of string literals: names), "range"
+// (base, low..=high), "union" (an alias of kinds: types)
+record TypeDecl {
+    kind: string,
+    name: string,
+    names: list<string>,
+    types: list<Ty>,
+    base: Ty,
+    low: s64,
+    high: s64,
+}
+
+// a func the program has: how it is called (module.name for a module's), its params, which of them
+// are readonly (only read), its result, its type params (generic), and whether it yields (its
+// result a seq of result)
+record FuncInfo {
+    name: string,
+    params: list<Ty>,
+    readonly: list<bool>,
+    result: Ty,
+    type-params: list<string>,
+    yields: bool,
+}
+
+// a constant: its name and type (an s32 or a string)
+record ConstInfo { name: string, ty: Ty, value: string, }
+
+// a local in scope: whether it may be assigned (a let's, never a param's nor a for's), and whether
+// it is only read (a readonly param: never written, kept nor given another name)
+record Local { name: string, ty: Ty, mutable: bool, readonly: bool, }
+
+module types {
+    int-names: func() -> list<string> { ["s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64",] }
+
+    is-signed: func(n: string) -> bool { n.byte-at(0) == 115 }
+
+    bits: func(n: string) -> s64 {
+        if n == "s8" || n == "u8" { return 8; }
+        if n == "s16" || n == "u16" { return 16; }
+        if n == "s32" || n == "u32" { return 32; }
+        64
+    }
+
+    // the type as yel writes it
+    show: func(t: Ty) -> string {
+        match t {
+            int-t(n) => n,
+            float-t(n) => n,
+            bool-t => "bool",
+            char-t => "char",
+            string-t => "string",
+            unit-t => "()",
+            list-t(x) => "list<{show(x)}>",
+            fixed-t(x) => "list<{show(x.item)}, {x.len}>",
+            option-t(x) => "option<{show(x)}>",
+            result-t(r) => "result<{show(r.ok)}, {show(r.err)}>",
+            tuple-t(xs) => "tuple<{shows(xs)}>",
+            anon-t(f) => {
+                let parts: list<string> = [];
+                for i in 0..f.names.len() { parts.push("{f.names[i]}: {show(f.types[i])}"); }
+                "\{ " + parts.join(", ") + " \}"
+            }
+            named-t(n) => n,
+            map-t(m) => "map<{show(m.key)}, {show(m.value)}>",
+            func-t(f) => {
+                let result = match f.result {
+                    unit-t => "",
+                    _ => " -> " + show(f.result),
+                };
+                "func({shows(f.params)})" + result
+            }
+            param-t(n) => n,
+        }
+    }
+
+    shows: func(ts: list<Ty>) -> string {
+        let parts: list<string> = [];
+        for t in ts { parts.push(show(t)); }
+        parts.join(", ")
+    }
+
+    // whether two types are one (by how yel writes them)
+    same: func(a: Ty, b: Ty) -> bool { show(a) == show(b) }
+
+    // t with each type param its type argument (by name)
+    substitute: func(t: Ty, names: list<string>, args: list<Ty>) -> Ty {
+        match t {
+            param-t(n) => {
+                let i = names.index-of(n);
+                if i >= 0 { args[i] } else { t }
+            }
+            list-t(x) => Ty.list-t(substitute(x, names, args)),
+            fixed-t(x) => Ty.fixed-t({ item: substitute(x.item, names, args), len: x.len, }),
+            option-t(x) => Ty.option-t(substitute(x, names, args)),
+            result-t(r) => Ty.result-t({ ok: substitute(r.ok, names, args), err: substitute(r.err, names, args), }),
+            tuple-t(xs) => {
+                let out: list<Ty> = [];
+                for x in xs { out.push(substitute(x, names, args)); }
+                Ty.tuple-t(out)
+            }
+            map-t(m) => Ty.map-t({ key: substitute(m.key, names, args), value: substitute(m.value, names, args), }),
+            func-t(f) => {
+                let ps: list<Ty> = [];
+                for p in f.params { ps.push(substitute(p, names, args)); }
+                Ty.func-t({ params: ps, result: substitute(f.result, names, args), })
+            }
+            _ => t,
+        }
+    }
+
+    // whether t holds a type param anywhere
+    has-param: func(t: Ty) -> bool {
+        match t {
+            param-t(n) => true,
+            list-t(x) => has-param(x),
+            fixed-t(x) => has-param(x.item),
+            option-t(x) => has-param(x),
+            result-t(r) => has-param(r.ok) || has-param(r.err),
+            tuple-t(xs) => xs.any(has-param),
+            anon-t(f) => f.types.any(has-param),
+            map-t(m) => has-param(m.key) || has-param(m.value),
+            func-t(f) => f.params.any(has-param) || has-param(f.result),
+            _ => false,
+        }
+    }
+}

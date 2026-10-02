@@ -1,0 +1,58 @@
+// integers and control, for the bitcode backend: its exit code the sum of what each part found
+
+square: func(n: s64) -> s64 { n * n }
+
+// the n-th Fibonacci number, by a loop
+fib: func(n: s32) -> s64 {
+    let a: s64 = 0;
+    let b: s64 = 1;
+    for i in 0..n {
+        let next = a + b;
+        a = b;
+        b = next;
+    }
+    a
+}
+
+// recursion, and an early return
+factorial: func(n: u64) -> u64 {
+    if n <= 1 { return 1; }
+    n * factorial(n - 1)
+}
+
+// the integer types: wrapping, conversions, shifts by more than the width
+wraps: func() -> s32 {
+    let small: u8 = 250;
+    small += 10;
+    let signed: s8 = 127;
+    signed += 1;
+    let shifted: u32 = 1;
+    shifted = shifted << 33;
+    (small as s32) + (signed as s32) + (shifted as s32)
+}
+
+// break, continue, a nested loop
+search: func(limit: s32) -> s32 {
+    let found = 0;
+    let i = 0;
+    loop {
+        i += 1;
+        if i > limit { break; }
+        if i % 3 == 0 { continue; }
+        for j in 0..i {
+            if j == 2 { break; }
+            found += 1;
+        }
+    }
+    found
+}
+
+main: func() -> s32 {
+    let total: s64 = square(3) + fib(10) + (factorial(5) as s64) + (wraps() as s64) + (search(10) as s64);
+    let negative: s32 = -7;
+    let q = negative / 2;
+    let r = negative % 3;
+    let big: s64 = 9223372036854775807;
+    let flipped = !(big > 0);
+    (total % 200) as s32 + q + r + (if flipped { 1 } else { 0 })
+}

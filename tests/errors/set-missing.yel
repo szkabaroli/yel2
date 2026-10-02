@@ -1,0 +1,9 @@
+// error: 4:5: the match has no arm for 3: add one, or a _ arm
+type level = 1 | 2 | 3;
+label: func(l: level) -> string {
+    match l {
+        1 => "low",
+        2 => "mid",
+    }
+}
+main: func() { print(label(1)); }

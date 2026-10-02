@@ -1,0 +1,57 @@
+// generators: a func that yields gives back a seq<T>, its values made as they are read (a
+// state machine, as an async func's: its frame holds its locals; for x in s steps it once for
+// each). Calling one runs nothing yet; a for that breaks leaves the rest unmade
+
+variant Tree { leaf(s32), node(list<Tree>), }
+
+// every value of a tree, depth first: a generator over its children's generators
+values: func(t: Tree) -> seq<s32> {
+    match t {
+        leaf(n) => { yield n; }
+        node(kids) => {
+            for k in kids {
+                for v in values(k) { yield v; }
+            }
+        }
+    }
+}
+
+count-to: func(n: s32) -> seq<s32> {
+    for i in 1..=n {
+        if i % 2 == 0 { continue; }
+        yield i;
+    }
+}
+
+words: func(text: string) -> seq<string> {
+    let w = "";
+    for i in 0..text.len() {
+        let c = text.byte-at(i);
+        if c == 32 {
+            if w != "" { yield w; }
+            w = "";
+        } else {
+            w = w + from-byte(c);
+        }
+    }
+    if w != "" { yield w; }
+}
+
+main: func() {
+    let t = Tree.node([Tree.leaf(1), Tree.node([Tree.leaf(2), Tree.leaf(3),]), Tree.leaf(4),]);
+    let all: list<s32> = [];
+    for v in values(t) { all.push(v); }
+    print("{all}\n");
+    let firsts: list<s32> = [];
+    for v in count-to(100) {
+        if v > 7 { break; }
+        firsts.push(v);
+    }
+    print("{firsts}\n");
+    for w in words("the  quick brown fox") { print("[{w}]"); }
+    print("\n");
+    let lazy = count-to(5);
+    print("made {lazy}\n");
+    for v in lazy { print("{v} "); }
+    print("\n");
+}

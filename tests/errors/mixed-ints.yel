@@ -1,0 +1,7 @@
+// error: 5:9: the right of +: expected u32, found s32
+main: func() -> s32 {
+    let a: u32 = 1;
+    let b: s32 = 2;
+    a + b;
+    0
+}

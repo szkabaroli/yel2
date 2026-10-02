@@ -1,0 +1,5 @@
+# what the bootstrap, the tests and the tools make (build/yelc2, the tests' C and binaries, libuv.a)
+build/
+# local scratch, never shared
+private/
+.DS_Store

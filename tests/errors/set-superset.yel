@@ -1,0 +1,7 @@
+// error: 6:10: argument 1 of take: expected "get" | "post", found string
+type method = "get" | "post";
+take: func(m: method) {}
+main: func() {
+    let s = "get";
+    take(s);
+}

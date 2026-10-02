@@ -1,0 +1,26 @@
+// A buffer: bytes gathered (append-only), handed out as a string (sharing its bytes) or a list<u8>
+// (copied); and strings' bytes and chars (the standard library's buffer and text)
+
+record Doc { title: string, body: buffer, }
+
+main: func() {
+    let b = buffer(4);
+    b.push("key");
+    b.push-byte(61);
+    b.push-char('→');
+    b.push-bytes([33, 33,]);
+    let first = b.to-string();
+    // what was handed out keeps its bytes as the buffer grows past them
+    for i in 0..100 { b.push("{i},"); }
+    print("{first} {b.len()} {first.len()}\n");
+    print("{b.to-bytes().len()} {b.to-string().slice(0, 12)}\n");
+    // in a record (the collector traces the buffer through it), and shown
+    let d: Doc = { title: "notes", body: buffer(0), };
+    for i in 0..3 { d.body.push("line {i}\n"); }
+    print("{d.title}: {d.body.len()} bytes, {d}\n");
+    // one name for each type: the first argument's chooses (len of a string, a list, a buffer)
+    let word = "héllo";
+    print("{word.len()} {word.chars().len()} {word.chars()} {word.bytes()}\n");
+    print("{from-utf8([104, 105,])} {from-utf8([104, 255,])} {is-utf8(word)}\n");
+    print("{to-string(42)} {"tea".to-upper()} {"ab".repeat(3)} {"7".pad-start(3, "0")} {"stressed".reverse()}\n");
+}

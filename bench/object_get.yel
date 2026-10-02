@@ -1,0 +1,13 @@
+// Porffor's bench/object_get.js: a record's field read 100 million times
+
+from "wasi:clocks" include monotonic-clock;
+
+record Obj { wow: s32, }
+
+main: func() {
+    let obj: Obj = { wow: 1337, };
+    let start = monotonic-clock.now();
+    let total: s64 = 0;
+    for i in 0..100000000 { total += obj.wow as s64; }
+    print("{(monotonic-clock.now() - start) as s64 / 1000000}\n");
+}

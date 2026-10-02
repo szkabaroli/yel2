@@ -1,0 +1,23 @@
+package test:shapes;
+
+module geometry {
+    record Point { x: s32, y: s32, }
+
+    variant Shape { dot, circle(s32), }
+
+    origin: func() -> Point { { x: 0, y: 0, } }
+
+    move: func(p: Point, dx: s32, dy: s32) -> Point { { x: p.x + dx, y: p.y + dy, } }
+
+    distance2: func(p: Point) -> s32 { square(p.x) + square(p.y) }
+
+    area: func(s: Shape) -> s32 {
+        match s {
+            dot => 0,
+            circle(r) => 3 * square(r),
+        }
+    }
+}
+
+// the package's own: reachable from its modules, not from another package
+square: func(n: s32) -> s32 { n * n }

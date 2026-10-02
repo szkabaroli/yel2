@@ -1,0 +1,808 @@
+// The formatter (yelc --fmt): a file's tokens, as written, laid out again, 100 columns wide, as
+// Prettier lays out JavaScript. Every (), [] and {} is a group, printed on one line where it fits
+// and else broken: its items one to a line, indented four spaces, a list's last given a comma. What
+// the author laid out over lines (a newline between a group's items) stays laid out as written,
+// each of its lines one group of its own; blank lines stay (one at most). A block's braces break
+// with the line they are on, so an if and its elses break together; a call whose last argument is
+// a group keeps the call on one line and breaks only that group (out.push({ ... })). Tokens are
+// printed as their source bytes, so strings and comments are never changed.
+
+// a layout: text; a line (a space where its group fits, else a line break); a soft line (nothing,
+// else a line break); a hard line; text only where its group breaks; a sequence; the lines inside
+// four spaces further in; a group
+variant Doc {
+    text(string),
+    line,
+    softline,
+    hardline,
+    ifbreak(string),
+    concat(list<Doc>),
+    nest(Doc),
+    group(DocGroup),
+    fill(list<Doc>),
+}
+
+// forced: it breaks whatever the width; hug (a call's last argument a group): prefix (what comes
+// before that group), last (that group) and suffix (what closes the call), for printing the call
+// on one line and breaking only the last group
+record DocGroup { doc: Doc, forced: bool, hug: bool, prefix: Doc, last: Doc, suffix: Doc, }
+
+// a token (its index), or a group: its opening token, its items, its closing token
+variant Item {
+    tok(s64),
+    group(GroupItem),
+}
+
+record GroupItem { open: s64, items: list<Item>, close: s64, }
+
+// a layout, and whether it must break the group it is in (a hard line in it)
+record Built { doc: Doc, forced: bool, }
+
+// the file: its source and tokens; the tree's walk position
+// angled: each token's, whether it is inside a type's <...> (a comma there separates no items)
+// failed: its brackets do not match (the file is left as it is)
+record Fmt { src: string, toks: list<Token>, pos: s64, angled: list<bool>, failed: bool, }
+
+// a printing step: the layout, its indentation, whether its group is flat, and (a hugged call's
+// last group) that it breaks
+record Cmd { doc: Doc, indent: s64, flat: bool, must-break: bool, }
+
+// the printer's output: finished lines, the line being made, its column, and whether it has
+// anything yet (its indentation is written with its first text)
+record Out { lines: list<string>, cur: list<string>, col: s64, indent: s64, started: bool, }
+
+module fmt {
+    width: func() -> s64 { 100 }
+
+    // a source's text, formatted
+    format: func(src: string, file: string) -> string {
+        let f: Fmt = {
+            src: src,
+            toks: lexer.lex-all(src, { sources: [{ path: file, text: src, },], errors: [], input: file, mode: "", backend: "", triple: "", }, 0),
+            pos: 0,
+            angled: [],
+            failed: false,
+        };
+        angles(f);
+        let items = tree(f, "");
+        if f.failed {
+            eprint("{file}: not formatted: its brackets do not match\n");
+            return src;
+        }
+        let body = lines(f, items);
+        let doc = Doc.concat([body.doc, Doc.hardline,]);
+        print-doc(doc)
+    }
+
+    // ================================================================ the tree
+
+    // the items up to close (its closing bracket; "" for the file's end), which is left unread
+    tree: func(f: Fmt, close: string) -> list<Item> {
+        let out: list<Item> = [];
+        for step in f.pos..f.toks.len() {
+            let t = f.toks[f.pos];
+            if t.kind == TokenKind.eof { return out; }
+            if t.kind == TokenKind.op && t.text == close { return out; }
+            let closer = closing(t);
+            if closer != "" {
+                let open = f.pos;
+                f.pos += 1;
+                let inner = tree(f, closer);
+                if f.toks[f.pos].kind == TokenKind.eof {
+                    f.failed = true;
+                    return out;
+                }
+                out.push(Item.group({ open: open, items: inner, close: f.pos, }));
+            } else {
+                if t.kind == TokenKind.op && (t.text == ")" || t.text == "]" || t.text == "\}") {
+                    f.failed = true;
+                }
+                out.push(Item.tok(f.pos));
+            }
+            f.pos += 1;
+        }
+        out
+    }
+
+    // an opening bracket's closing one; "" for any other token
+    closing: func(t: Token) -> string {
+        if t.kind != TokenKind.op { return ""; }
+        if t.text == "(" {
+            ")"
+        } else if t.text == "[" {
+            "]"
+        } else if t.text == "\{" {
+            "\}"
+        } else {
+            ""
+        }
+    }
+
+    first: func(i: Item) -> s64 {
+        match i {
+            tok(k) => k,
+            group(g) => g.open,
+        }
+    }
+
+    last: func(i: Item) -> s64 {
+        match i {
+            tok(k) => k,
+            group(g) => g.close,
+        }
+    }
+
+    is-op: func(f: Fmt, i: Item, op: string) -> bool {
+        match i {
+            tok(k) => f.toks[k].kind == TokenKind.op && f.toks[k].text == op,
+            group(g) => false,
+        }
+    }
+
+    // a comma between items (not one of a type's, as in result<_, string>)
+    is-comma: func(f: Fmt, i: Item) -> bool {
+        match i {
+            tok(k) => is-op(f, i, ",") && !f.angled[k],
+            group(g) => false,
+        }
+    }
+
+    // which tokens are inside a type's <...>: a < written against the name before it (list<,
+    // result<, f<T>; a comparison is written with spaces) opens one, a > closes it
+    angles: func(f: Fmt) {
+        let depth = 0;
+        for k in 0..f.toks.len() {
+            let t = f.toks[k];
+            f.angled.push(depth > 0);
+            if t.kind == TokenKind.op && t.text == "<" && k > 0 && f.toks[
+                k - 1
+            ].kind == TokenKind.id && f.toks[k - 1].end == t.start {
+                depth += 1;
+            } else if t.kind == TokenKind.op && t.text == ">" && depth > 0 {
+                depth -= 1;
+            } else if t.kind == TokenKind.op && (
+                t.text == ";" || t.text == "\{" || t.text == "\}"
+            ) {
+                depth = 0;
+            }
+        }
+    }
+
+    is-comment: func(f: Fmt, i: Item) -> bool {
+        match i {
+            tok(k) => f.toks[k].kind == TokenKind.comment,
+            group(g) => false,
+        }
+    }
+
+    // the line a token starts on, and the one it ends on
+    line-of: func(f: Fmt, k: s64) -> s64 { f.toks[k].span.line }
+
+    end-line: func(f: Fmt, k: s64) -> s64 { f.toks[k].span.end-line }
+
+    // a token as written (a comment without its trailing spaces)
+    raw: func(f: Fmt, k: s64) -> string {
+        let t = f.toks[k];
+        let s = f.src.substring(t.start, t.end);
+        if t.kind == TokenKind.comment { trim-end(s) } else { s }
+    }
+
+    trim-end: func(s: string) -> string {
+        let n = s.len();
+        for k in 0..n {
+            let c = s.byte-at(n - 1 - k);
+            if c != 32 && c != 9 && c != 13 { return s.substring(0, n - k); }
+        }
+        ""
+    }
+
+    // ================================================================ layouts
+
+    // items laid out as written: their lines (a line ends where the source breaks one and a
+    // statement or an item ends there), each a group, one blank line kept between them; the lines
+    // of a statement written over several go four spaces further in
+    lines: func(f: Fmt, items: list<Item>) -> Built {
+        let out: list<Doc> = [];
+        // the line being made: its parts (between the lines after its commas), the part being made
+        let parts: list<Doc> = [];
+        let part: list<Doc> = [];
+        let part-forced = false;
+        for k in 0..items.len() {
+            if k > 0 {
+                let a = last(items[k - 1]);
+                let b = first(items[k]);
+                if line-of(f, b) > end-line(f, a) && !continues(f, a) {
+                    parts.push(part-doc(part, part-forced));
+                    out.push(Doc.fill(parts));
+                    out.push(Doc.hardline);
+                    if line-of(f, b) - end-line(f, a) >= 2 { out.push(Doc.hardline); }
+                    parts = [];
+                    part = [];
+                    part-forced = false;
+                } else {
+                    let s = between(f, items[k - 1], items[k], true);
+                    if breaks(s.doc) {
+                        parts.push(part-doc(part, part-forced));
+                        parts.push(s.doc);
+                        part = [];
+                        part-forced = false;
+                    } else {
+                        part.push(s.doc);
+                        if s.forced { part-forced = true; }
+                    }
+                }
+            }
+            let x = item(f, items[k]);
+            part.push(x.doc);
+            if x.forced { part-forced = true; }
+        }
+        if items.len() > 0 {
+            parts.push(part-doc(part, part-forced));
+            out.push(Doc.fill(parts));
+        }
+        { doc: Doc.concat(out), forced: true, }
+    }
+
+    // whether a separator is a place a line may break (a line, or one further in: before && or ||)
+    breaks: func(d: Doc) -> bool {
+        match d {
+            line => true,
+            nest(x) => {
+                match x {
+                    line => true,
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    // a part of a line: broken where it holds a hard line (so its blocks break together)
+    part-doc: func(part: list<Doc>, forced: bool) -> Doc {
+        if forced { Doc.group(plain-group(Doc.concat(part), true)) } else { Doc.concat(part) }
+    }
+
+    // whether the line after token a goes on with a's statement: a ends none (a ; , or block, or
+    // a comment)
+    continues: func(f: Fmt, a: s64) -> bool {
+        let t = f.toks[a];
+        if t.kind == TokenKind.comment { return false; }
+        if t.kind != TokenKind.op { return true; }
+        !(t.text == ";" || t.text == "," || t.text == "\}" || t.text == "\{")
+    }
+
+    // what goes between two items on one line: after a , or ; a line, before && or || a line four
+    // spaces further in, else a space where the source has one; a line break the source has (only
+    // where written = true: an item spanning lines) goes four spaces further in
+    between: func(f: Fmt, x: Item, y: Item, written: bool) -> Built {
+        let a = last(x);
+        let b = first(y);
+        if (is-op(f, y, "&&") || is-op(f, y, "||")) && !is-comment(f, x) {
+            return { doc: Doc.nest(Doc.line), forced: false, };
+        }
+        if line-of(f, b) > end-line(f, a) {
+            if written { return { doc: Doc.nest(Doc.hardline), forced: true, }; }
+            return { doc: Doc.line, forced: false, };
+        }
+        if is-comment(f, y) { return { doc: Doc.text(" "), forced: false, }; }
+        if is-comma(f, x) || is-op(f, x, ";") { return { doc: Doc.line, forced: false, }; }
+        let space = f.toks[b].start > f.toks[a].end;
+        { doc: Doc.text(if space { " " } else { "" }), forced: false, }
+    }
+
+    item: func(f: Fmt, i: Item) -> Built {
+        match i {
+            tok(k) => {
+                let s = raw(f, k);
+                // a string over lines (a multiline one) ends the line it starts
+                { doc: Doc.text(s), forced: find-byte(s, 10) != none, }
+            }
+            group(g) => group-doc(f, g),
+        }
+    }
+
+    plain-group: func(doc: Doc, forced: bool) -> DocGroup {
+        {
+            doc: doc,
+            forced: forced,
+            hug: false,
+            prefix: Doc.text(""),
+            last: Doc.text(""),
+            suffix: Doc.text(""),
+        }
+    }
+
+    // a bracketed group. Its items are a list where a , separates them at its level, a block where
+    // it is braces without; laid out as written where a line break separates two of them (or one
+    // from a bracket), else each list item (or all of a () or []) a group. A block's braces are no
+    // group of their own: they break with the line they are on
+    group-doc: func(f: Fmt, g: GroupItem) -> Built {
+        let open = raw(f, g.open);
+        let close = raw(f, g.close);
+        let items = g.items;
+        if items.len() == 0 {
+            let space = f.toks[g.close].start > f.toks[g.open].end;
+            return { doc: Doc.text(open + (if space { " " } else { "" }) + close), forced: false, };
+        }
+        // one token alone (a long string): breaking around it would not make it fit
+        let alone = items.len() == 1 && !is-comment(f, items[0]) && !ends-block(f, items[0]);
+        if alone && open != "\{" {
+            match items[0] {
+                tok(k) => {
+                    return {
+                        doc: Doc.concat([Doc.text(open), item(f, items[0]).doc, Doc.text(close),]),
+                        forced: false,
+                    };
+                }
+                group(x) => {}
+            }
+        }
+        let is-list = false;
+        for i in items { if is-comma(f, i) { is-list = true; } }
+        let is-block = open == "\{" && !is-list;
+        // how the author broke a [] or {} over lines is kept; a () is laid out afresh (but around a
+        // comment)
+        let written = line-of(f, first(items[0])) > end-line(f, g.open)
+            || line-of(f, g.close) > end-line(f, last(items[items.len() - 1]));
+        for k in 1..items.len() {
+            if line-of(f, first(items[k])) > end-line(f, last(items[k - 1])) { written = true; }
+        }
+        if open == "(" {
+            written = false;
+            for i in items { if is-comment(f, i) { written = true; } }
+        }
+        let content = if written {
+            lines(f, items)
+        } else {
+            flat-items(f, items, is-list, is-block)
+        };
+        let forced = written || content.forced;
+        // a list broken gets a comma after its last item (but after a block, as match arms write
+        // it)
+        let tail = Doc.text("");
+        let end = items[items.len() - 1];
+        if is-list && !is-comma(f, end) && !is-comment(f, end) && !ends-block(f, end) {
+            tail = Doc.ifbreak(",");
+        }
+        let brk = if written {
+            Doc.hardline
+        } else if open == "\{" {
+            Doc.line
+        } else {
+            Doc.softline
+        };
+        let doc = Doc.concat([
+            Doc.text(open),
+            Doc.nest(Doc.concat([brk, content.doc, tail,])),
+            brk,
+            Doc.text(close),
+        ]);
+        if is-block { return { doc: doc, forced: forced, }; }
+        // a call whose last argument is a group: that group may break alone
+        if open == "(" && huggable(f, end) && !forced {
+            let before: list<Doc> = [Doc.text(open),];
+            for k in 0..items.len() - 1 {
+                before.push(item(f, items[k]).doc);
+                before.push(between(f, items[k], items[k + 1], false).doc);
+            }
+            let gr: DocGroup = {
+                doc: doc,
+                forced: false,
+                hug: true,
+                prefix: Doc.concat(before),
+                last: item(f, end).doc,
+                suffix: Doc.text(close),
+            };
+            return { doc: Doc.group(gr), forced: false, };
+        }
+        { doc: Doc.group(plain-group(doc, forced)), forced: false, }
+    }
+
+    // whether a call's last argument may break alone: a {} or [] group with items, or a call whose
+    // own last argument may
+    huggable: func(f: Fmt, i: Item) -> bool {
+        match i {
+            group(g) => {
+                if g.items.len() == 0 { return false; }
+                let open = raw(f, g.open);
+                if open == "(" { return huggable(f, g.items[g.items.len() - 1]); }
+                // a [] against what comes before it is an index (xs[i]), not a list
+                let prev = f.toks[g.open - 1];
+                !(open == "[" && prev.end == f.toks[g.open].start && prev.kind != TokenKind.op)
+                    && !(
+                    open == "["
+                        && prev.end == f.toks[g.open].start
+                        && (prev.text == ")" || prev.text == "]")
+                )
+            }
+            tok(k) => false,
+        }
+    }
+
+    // whether an item is a group closed by } (a block)
+    ends-block: func(f: Fmt, i: Item) -> bool {
+        match i {
+            group(g) => raw(f, g.close) == "\}",
+            tok(k) => false,
+        }
+    }
+
+    // items written on one line: a list's items each a group, a line after each comma; a block's
+    // statements a line after each ; (no groups: they break with the braces); anything else one
+    // group
+    flat-items: func(f: Fmt, items: list<Item>, is-list: bool, is-block: bool) -> Built {
+        let out: list<Doc> = [];
+        let part: list<Doc> = [];
+        let part-forced = false;
+        let forced = false;
+        for k in 0..items.len() {
+            let x = item(f, items[k]);
+            part.push(x.doc);
+            if x.forced { part-forced = true; }
+            let at-end = k == items.len() - 1;
+            if is-list && (is-comma(f, items[k]) || at-end) {
+                out.push(Doc.group(plain-group(Doc.concat(part), part-forced)));
+                if !at-end { out.push(Doc.line); }
+                part = [];
+                part-forced = false;
+            } else if !at-end {
+                let s = between(f, items[k], items[k + 1], false);
+                part.push(s.doc);
+                if s.forced { part-forced = true; }
+            }
+        }
+        if is-list { return { doc: Doc.concat(out), forced: false, }; }
+        if is-block { return { doc: Doc.concat(part), forced: part-forced, }; }
+        { doc: Doc.group(plain-group(Doc.concat(part), part-forced)), forced: false, }
+    }
+
+    // ================================================================ printing
+
+    // a layout's text: Wadler's printer, as Prettier's: a group flat where it fits up to the next
+    // line break, else broken; a nest in a flat group adds nothing (so a group broken inside a flat
+    // one is indented from the line it starts on)
+    print-doc: func(doc: Doc) -> string {
+        let o: Out = { lines: [], cur: [], col: 0, indent: 0, started: false, };
+        let stack: list<Cmd> = [{ doc: doc, indent: 0, flat: false, must-break: false, },];
+        loop {
+            if stack.len() == 0 { break; }
+            let c = stack.pop();
+            match c.doc {
+                text(s) => emit(o, s),
+                line => { if c.flat { emit(o, " "); } else { newline(o, c.indent); } }
+                softline => { if !c.flat { newline(o, c.indent); } }
+                hardline => newline(o, c.indent),
+                ifbreak(s) => { if !c.flat { emit(o, s); } }
+                concat(ds) => {
+                    for k in 0..ds.len() {
+                        stack.push({
+                            doc: ds[ds.len() - 1 - k],
+                            indent: c.indent,
+                            flat: c.flat,
+                            must-break: false,
+                        });
+                    }
+                }
+                nest(d) => stack.push({
+                    doc: d,
+                    indent: if c.flat { c.indent } else { c.indent + 4 },
+                    flat: c.flat,
+                    must-break: false,
+                }),
+                fill(parts) => {
+                    // a content flat where it fits, else broken; the line after it flat where the
+                    // next content fits after it too
+                    let content = parts[0];
+                    let flat = fits(width() - column(o), content, []);
+                    if parts.len() >= 3 {
+                        let two = Doc.concat([content, parts[1], parts[2],]);
+                        let rest: list<Doc> = [];
+                        for k in 2..parts.len() { rest.push(parts[k]); }
+                        stack.push({
+                            doc: Doc.fill(rest),
+                            indent: c.indent,
+                            flat: c.flat,
+                            must-break: false,
+                        });
+                        let sep-flat = c.flat || fits(width() - column(o), two, []);
+                        stack.push({
+                            doc: parts[1],
+                            indent: c.indent,
+                            flat: sep-flat,
+                            must-break: false,
+                        });
+                    }
+                    stack.push({
+                        doc: content,
+                        indent: c.indent,
+                        flat: c.flat || flat,
+                        must-break: false,
+                    });
+                }
+                group(gr) => {
+                    if gr.forced {
+                        stack.push({
+                            doc: gr.doc,
+                            indent: c.indent,
+                            flat: false,
+                            must-break: false,
+                        });
+                    }
+                    else if c.flat {
+                        stack.push({
+                            doc: gr.doc,
+                            indent: c.indent,
+                            flat: true,
+                            must-break: false,
+                        });
+                    }
+                    else if !c.must-break && fits(width() - column(o), gr.doc, stack) {
+                        stack.push({
+                            doc: gr.doc,
+                            indent: c.indent,
+                            flat: true,
+                            must-break: false,
+                        });
+                    } else if gr.hug && fits-open(width() - column(o), gr.prefix, gr.last) {
+                        stack.push({
+                            doc: gr.suffix,
+                            indent: c.indent,
+                            flat: true,
+                            must-break: false,
+                        });
+                        stack.push({
+                            doc: gr.last,
+                            indent: c.indent,
+                            flat: false,
+                            must-break: true,
+                        });
+                        stack.push({
+                            doc: gr.prefix,
+                            indent: c.indent,
+                            flat: true,
+                            must-break: false,
+                        });
+                    } else {
+                        stack.push({
+                            doc: gr.doc,
+                            indent: c.indent,
+                            flat: false,
+                            must-break: false,
+                        });
+                    }
+                }
+            }
+        }
+        newline(o, 0);
+        // the file ends in one line break
+        let n = o.lines.len();
+        for k in 0..n {
+            if n - k - 1 > 0 && o.lines[o.lines.len() - 1] == "" { o.lines.pop(); }
+        }
+        reflow(o.lines).join(from-byte(10)) + from-byte(10)
+    }
+
+    // ================================================================ comments
+
+    // lines with each run of comment lines that has one too wide filled again, word by word; a
+    // comment line indented further (an example, a usage) or empty is a paragraph of its own
+    reflow: func(lines: list<string>) -> list<string> {
+        let out: list<string> = [];
+        let k = 0;
+        for step in 0..lines.len() + 1 {
+            if k >= lines.len() { return out; }
+            let indent = comment-indent(lines[k]);
+            if indent < 0 {
+                out.push(lines[k]);
+                k += 1;
+            } else {
+                // the run: the comment lines after it at its indentation
+                let end = k;
+                let wide = false;
+                for j in k..lines.len() {
+                    if end == j && comment-indent(lines[j]) == indent {
+                        if display-width(lines[j]) > width() { wide = true; }
+                        end = j + 1;
+                    }
+                }
+                if wide {
+                    fill(lines, k, end, indent, out);
+                } else {
+                    for j in k..end {
+                        out.push(lines[j]);
+                    }
+                }
+                k = end;
+            }
+        }
+        out
+    }
+
+    // a line that is only a comment: its indentation; -1 for any other
+    comment-indent: func(l: string) -> s64 {
+        let n = l.len();
+        for k in 0..n {
+            let c = l.byte-at(k);
+            if c != 32 { return if c == 47 && l.byte-at(k + 1) == 47 { k } else { -1 }; }
+        }
+        -1
+    }
+
+    // lines[from..to] (comments at indent) filled to the width: a paragraph's words joined, a line
+    // written as "//" alone, with more than one space after it, or as a label (// error: ...) kept
+    // as it is
+    fill: func(lines: list<string>, from: s64, to: s64, indent: s64, out: list<string>) {
+        let lead = spaces(indent) + "//";
+        let words: list<string> = [];
+        for j in from..to {
+            let body = lines[j].substring(indent + 2, lines[j].len());
+            let plain = body.len() > 1 && body.byte-at(0) == 32 && body.byte-at(1) != 32
+                && !is-label(body);
+            if plain {
+                split-words(body, words);
+            } else {
+                flush(words, lead, out);
+                words = [];
+                out.push(lines[j]);
+            }
+        }
+        flush(words, lead, out);
+    }
+
+    // whether a comment's text (after //) is a label: one word, then a colon (" error: ...", as a
+    // test pins its error with)
+    is-label: func(body: string) -> bool {
+        let n = body.len();
+        for k in 1..n {
+            let c = body.byte-at(k);
+            if c == 58 { return k > 1 && (k + 1 == n || body.byte-at(k + 1) == 32); }
+            if !(is-alpha(c) || is-digit(c) || c == 45) { return false; }
+        }
+        false
+    }
+
+    // the words of s (split at spaces) onto words
+    split-words: func(s: string, words: list<string>) {
+        let start = 0;
+        let n = s.len();
+        for k in 0..n + 1 {
+            if k == n || s.byte-at(k) == 32 {
+                if k > start { words.push(s.substring(start, k)); }
+                start = k + 1;
+            }
+        }
+    }
+
+    flush: func(words: list<string>, lead: string, out: list<string>) {
+        let cur = lead;
+        let empty = true;
+        for w in words {
+            if !empty && display-width(cur) + 1 + display-width(w) > width() {
+                out.push(cur);
+                cur = lead;
+                empty = true;
+            }
+            cur = cur + " " + w;
+            empty = false;
+        }
+        if !empty { out.push(cur); }
+    }
+
+    // the column the next text goes at (a line not started yet: its indentation)
+    column: func(o: Out) -> s64 { if o.started { o.col } else { o.indent } }
+
+    emit: func(o: Out, s: string) {
+        if s == "" { return; }
+        if !o.started {
+            o.cur.push(spaces(o.indent));
+            o.col = o.indent;
+            o.started = true;
+        }
+        o.cur.push(s);
+        let nl = last-newline-at(s);
+        if nl >= 0 {
+            o.col = display-width(s.substring(nl + 1, s.len()));
+        } else {
+            o.col += display-width(s);
+        }
+    }
+
+    newline: func(o: Out, indent: s64) {
+        o.lines.push(trim-end(o.cur.join("")));
+        o.cur = [];
+        o.col = 0;
+        o.indent = indent;
+        o.started = false;
+    }
+
+    spaces: func(n: s64) -> string {
+        let out: list<string> = [];
+        for k in 0..n { out.push(" "); }
+        out.join("")
+    }
+
+    last-newline-at: func(s: string) -> s64 {
+        let n = s.len();
+        for k in 0..n {
+            if s.byte-at(n - 1 - k) == 10 { return n - 1 - k; }
+        }
+        -1
+    }
+
+    // columns: characters, not bytes (a UTF-8 continuation byte adds none)
+    display-width: func(s: string) -> s64 {
+        let w = 0;
+        for k in 0..s.len() {
+            let c = s.byte-at(k);
+            if c < 128 || c >= 192 { w += 1; }
+        }
+        w
+    }
+
+    // whether doc, flat, and what follows it up to the next line break fits in w columns
+    fits: func(w: s64, doc: Doc, rest: list<Cmd>) -> bool {
+        let left = w;
+        let todo: list<Cmd> = [{ doc: doc, indent: 0, flat: true, must-break: false, },];
+        let r = rest.len();
+        loop {
+            if todo.len() == 0 {
+                if r == 0 { return true; }
+                r -= 1;
+                todo.push(rest[r]);
+            }
+            let c = todo.pop();
+            match c.doc {
+                text(s) => {
+                    let nl = find-byte(s, 10).unwrap-or(-1);
+                    left -= display-width(if nl >= 0 { s.substring(0, nl) } else { s });
+                    if left < 0 { return false; }
+                    if nl >= 0 { return true; }
+                }
+                line => {
+                    if !c.flat { return true; }
+                    left -= 1;
+                    if left < 0 { return false; }
+                }
+                softline => { if !c.flat { return true; } }
+                hardline => { return true; }
+                ifbreak(s) => {
+                    if !c.flat {
+                        left -= display-width(s);
+                        if left < 0 { return false; }
+                    }
+                }
+                concat(ds) | fill(ds) => {
+                    for k in 0..ds.len() {
+                        todo.push({
+                            doc: ds[ds.len() - 1 - k],
+                            indent: 0,
+                            flat: c.flat,
+                            must-break: false,
+                        });
+                    }
+                }
+                nest(d) => todo.push({ doc: d, indent: 0, flat: c.flat, must-break: false, }),
+                group(gr) => todo.push({
+                    doc: gr.doc,
+                    indent: 0,
+                    flat: c.flat && !gr.forced,
+                    must-break: false,
+                }),
+            }
+        }
+    }
+
+    // whether a hugged call's prefix, and its last group's opening, fit in w columns
+    fits-open: func(w: s64, prefix: Doc, last: Doc) -> bool {
+        fits(w, Doc.concat([prefix, opening(last),]), [])
+    }
+
+    // a group's layout up to its first break: its opening bracket's text
+    opening: func(d: Doc) -> Doc {
+        match d {
+            group(gr) => opening(gr.doc),
+            concat(ds) => if ds.len() > 0 { opening(ds[0]) } else { d },
+            _ => d,
+        }
+    }
+}

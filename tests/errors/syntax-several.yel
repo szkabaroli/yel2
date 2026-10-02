@@ -1,0 +1,30 @@
+// error: 10:19: unexpected ';'
+// error: 20:28: expected ',', found ';'
+// error: 28:20: expected ',', found '2'
+// syntax errors in several statements and funcs: each told, the parser going on past the
+// statement it is in (an unclosed ( left behind, the block's } still closing the block)
+
+record Point { x: s32, y: s32 }
+
+area: func(p: Point) -> s32 {
+    let w = p.x * ;
+    let h = p.y;
+    w * h
+}
+
+scale: func(p: Point, k: s32) -> Point {
+    let q = { x: p.x * k, y: p.y * k, };
+    if k > 0 {
+        print("growing\n")
+    } else {
+        print("shrinking\n";
+    }
+    q
+}
+
+main: func() -> s32 {
+    let p: Point = { x: 1, y: 2, };
+    print("{area(p)}\n");
+    let r = scale(p 2);
+    0
+}

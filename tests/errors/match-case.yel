@@ -1,0 +1,9 @@
+// error: 6:9: square is not a case of Shape
+variant Shape { dot, circle(s32), }
+enum Other { square, }
+main: func() -> s32 {
+    match Shape.dot {
+        square => 1,
+        _ => 0,
+    }
+}

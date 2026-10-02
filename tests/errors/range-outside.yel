@@ -1,0 +1,5 @@
+// error: 4:22: the value of p: expected 0..=100, found 101
+type percent = 0..=100;
+main: func() {
+    let p: percent = 101;
+}

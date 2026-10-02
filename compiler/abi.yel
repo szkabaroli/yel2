@@ -1,0 +1,1927 @@
+// The canonical ABI: how a component's imported (and exported) funcs pass yel values, as the
+// Component Model has them cross. Part of the generator's module. All of it is IR (helpers: each
+// backend writes them as it writes the program's funcs: C, LLVM bitcode).
+//
+// A type's canonical layout is the IR type canonical-type(t): C's struct A_<id> (a record's fields,
+// a variant's tag and a union of its payloads, a string's or a list's pointer and length), and the
+// bitcode's the same as C lays it out. On wasm32 it is the ABI's memory layout, and natively (a C
+// host in the runtime) the same code runs with native pointers. Lowering writes one from a yel value
+// (a list's items in temporary memory, freed after the call); lifting makes the yel value (on the
+// heap) and frees what the host wrote. A func's values go flat (up to 16 core values; a result as
+// one) through u64 slots: each core value's bits, zero-extended, so a variant's joined payloads
+// need no more than that. The wrappers (an import's, an export's) are helpers; one made only for a
+// target says so (its build: natively std's host gives an import).
+
+// how a literal or union type crosses a component's boundary (crossing)
+type set-crossing = "enum" | "variant" | "checked";
+
+// a core wasm func the component imports (the canonical ABI's): its C name, its module and name,
+// its core params' and result's types (usize for i32, u64 for i64, f32, f64; () for none), the
+// runtime's C for it natively (yn_<name>), and whether natively there is none (std's host gives
+// the import: only a component calls it)
+record CoreImport { c-name: string, module: string, name: string, params: list<Type>, result: Type, native: string, wasm-only: bool, }
+
+module gen {
+    // ================================================================ layouts
+
+    // the core wasm types a value flattens to: i32, i64, f32, f64
+    flat-types: func(g: Gen, t: Type) -> list<string> {
+        match t {
+            num(n) => if n == "s64" || n == "u64" {
+                ["i64",]
+            } else if n == "f32" {
+                ["f32",]
+            } else if n == "f64" {
+                ["f64",]
+            } else {
+                ["i32",]
+            },
+            bool-type => ["i32",],
+            char-type => ["i32",],
+            string-type => ["i32", "i32",],
+            buffer-type => {
+                diagnostics.fatal(g.context, diagnostics.error-at(g.file, buffer-crossing(g)))
+            }
+            list-type(x) => ["i32", "i32",],
+            func-type(f) => {
+                diagnostics.fatal(g.context, diagnostics.error-at(g.file, "a func value ({show-type(t)}) cannot cross a component's boundary: WIT has none"))
+            }
+            // a fixed-length list: its items' flat values, one after another
+            fixed-list(x) => {
+                let out: list<string> = [];
+                for k in 0..x.len { for f in flat-types(g, x.item) { out.push(f); } }
+                out
+            }
+            unit-type => [],
+            tuple-type(xs) => {
+                let out: list<string> = [];
+                for x in xs { for f in flat-types(g, x) { out.push(f); } }
+                out
+            }
+            option-type(x) => variant-flat(g, [x,]),
+            result-type(r) => variant-flat(g, [r.ok, r.err,]),
+            singleton(s) => set-flat(g, t),
+            range-type(r) => set-flat(g, t),
+            // a stream's or future's end: a handle
+            stream-type(x) => ["i32",],
+            future-type(x) => ["i32",],
+            union-type(xs) => set-flat(g, t),
+            anon-record(r) => {
+                let out: list<string> = [];
+                for x in r.types { for f in flat-types(g, x) { out.push(f); } }
+                out
+            }
+            named(n) => {
+                let kind = named-kind(g, n);
+                if kind == "record" {
+                    let out: list<string> = [];
+                    for x in wit-field-types(g, n) {
+                        for f in flat-types(g, x) {
+                            out.push(f);
+                        }
+                    }
+                    out
+                } else if kind == "flags" || kind == "enum" || kind == "handle" {
+                    ["i32",]
+                }
+                else {
+                    let payloads: list<Type> = [];
+                    for k in g.variants[n].cases {
+                        payloads.push(wit-payload(g, n, k.name));
+                    }
+                    variant-flat(g, payloads)
+                }
+            }
+            _ => [],
+        }
+    }
+
+    // ================================================================ literal and union types
+
+    // how a literal or union type crosses: as a WIT enum (string literals), a WIT variant (a
+    // union of kinds, a case each), or checked (one kind otherwise: as that kind, its values
+    // checked when lifted)
+    crossing: func(t: Type) -> set-crossing {
+        match t {
+            singleton(s) => if show-type(s.base) == "string" { "enum" } else { "checked" },
+            union-type(xs) => {
+                if kinds(t).len() > 1 { return "variant"; }
+                for x in xs {
+                    let literal = match x {
+                        singleton(s) => show-type(s.base) == "string",
+                        _ => false,
+                    };
+                    if !literal { return "checked"; }
+                }
+                "enum"
+            }
+            _ => "checked",
+        }
+    }
+
+    // a string-literal type's values, its enum's cases in order
+    enum-values: func(t: Type) -> list<string> {
+        let out: list<string> = [];
+        match t {
+            singleton(s) => out.push(s.key),
+            union-type(xs) => {
+                for x in xs {
+                    match x {
+                        singleton(s) => out.push(s.key),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
+    // the WIT name of a literal or union type: its alias's (the checker saw it has one)
+    set-ident: func(g: Gen, t: Type) -> string {
+        let k = show-type(t);
+        if !g.set-names.has(k) { diagnostics.fatal(g.context, diagnostics.error-at(g.file, "{k} crosses WIT without a name")); }
+        wit-ident(base-name(g.set-names[k]))
+    }
+
+    // a union's members held as kind k, as a type
+    kind-values: func(t: Type, k: Type) -> Type {
+        let members = union-members(t);
+        let out: list<Type> = [];
+        for m in members {
+            if show-type(represented(m)) == show-type(k) { out.push(m); }
+        }
+        union-of(out)
+    }
+
+    // a variant case's name for a kind: its type's, in WIT's letters (list<s32> is list-s32)
+    kind-case: func(k: Type) -> string {
+        let shown = match k {
+            named(n) => base-name(name-text(n)),
+            _ => show-type(k),
+        };
+        let out: list<string> = [];
+        let dash = false;
+        for i in 0..shown.len() {
+            let c = shown.byte-at(i);
+            let letter = c >= 97 && c <= 122 || c >= 48 && c <= 57 || c >= 65 && c <= 90;
+            if letter {
+                if dash && out.len() > 0 { out.push("-"); }
+                dash = false;
+                out.push(from-byte(c));
+            } else {
+                dash = true;
+            }
+        }
+        wit-ident(out.join(""))
+    }
+
+    set-flat: func(g: Gen, t: Type) -> list<string> {
+        let how = crossing(t);
+        if how == "enum" { return ["i32",]; }
+        if how == "variant" { return variant-flat(g, kinds(t)); }
+        flat-types(g, representation(t))
+    }
+
+    // the helper that gives a string-literal type's value as its enum's index (made once)
+    enum-lower-fn: func(g: Gen, t: Type) -> string {
+        let n = "y_enum_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let vals = enum-values(t);
+        let tag = tag-num(vals.len());
+        let f = helper-func(g, n, tag, false);
+        let v = helper-local(f, Type.string-type, "v", true);
+        for i in 0..vals.len() {
+            let same = std-call(g, "yel:std/text.equal", [local(v, Type.string-type), text-const(vals[i]),], Type.bool-type);
+            f.body.push(if-stmt(same, [return-stmt(int-const(i, tag)),], []));
+        }
+        f.body.push(return-stmt(int-const(0, tag)));
+        n
+    }
+
+    // the helper that gives an enum's index as the string-literal type's value (an index it has
+    // not: a trap; made once)
+    enum-lift-fn: func(g: Gen, t: Type) -> string {
+        let n = "y_unenum_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let vals = enum-values(t);
+        let tag = tag-num(vals.len());
+        let f = helper-func(g, n, Type.string-type, false);
+        let v = helper-local(f, tag, "tag", true);
+        for i in 0..vals.len() {
+            f.body.push(if-stmt(bin("==", Type.bool-type, local(v, tag), int-const(i, tag)), [return-stmt(text-const(vals[i])),], []));
+        }
+        f.body.push(runtime-call("y_abi_bad", [int-const(3, Type.num("s32")),], Type.never-type));
+        f.body.push(halt-stmt());
+        n
+    }
+
+    // the helper that checks a lifted value is one of t's (a trap where it is not; made once)
+    check-fn: func(g: Gen, t: Type) -> string {
+        let n = "y_check_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let held = representation(t);
+        let f = helper-func(g, n, held, false);
+        let v = helper-local(f, held, "v", true);
+        f.body.push(if-stmt(un("!", Type.bool-type, member-node(g, t, { -> local(v, held) })), [runtime-call("y_abi_bad", [int-const(0, Type.num("s32")),], Type.never-type), halt-stmt(),], []));
+        f.body.push(return-stmt(local(v, held)));
+        n
+    }
+
+    // ================================================================ streams and futures across
+    // WIT
+
+    // a builtin of the site's, as IR: the core import (the host's, on wasm), and natively a stub
+    // that stops the program (there is no host)
+    site-import-ir: func(g: Gen, c-name: string, params: list<Type>, result: Type, builtin: string) {
+        declare-core-import(g, c-name, g.site-module, builtin, params, result, "", true);
+        let stub = helper-func(g, c-name, result, is-unit-type(result));
+        stub.build = "native";
+        for i in 0..params.len() { let _ = helper-local(stub, params[i], "p{i}", true); }
+        stub.body.push(runtime-call("y_no_host", [], Type.never-type));
+        stub.body.push(halt-stmt());
+    }
+
+    // a stream's (future's) builtins at the site, named by prefixes + id: new, read, write and the
+    // two drops (a stream's read and write take a length)
+    site-builtins-ir: func(g: Gen, kind: string, names: list<string>, id: string, stream: bool) {
+        let index = g.site-index;
+        let name = g.site-name;
+        let u32 = Type.num("u32");
+        let address = Type.address-type;
+        let moves: list<Type> = if stream { [u32, address, Type.num("usize"),] } else { [u32, address,] };
+        site-import-ir(g, names[0] + id, [], Type.num("u64"), "[{kind}-new-{index}]{name}");
+        site-import-ir(g, names[1] + id, moves, u32, "[async-lower][{kind}-read-{index}]{name}");
+        site-import-ir(g, names[2] + id, moves, u32, "[async-lower][{kind}-write-{index}]{name}");
+        site-import-ir(g, names[3] + id, [u32,], Type.unit-type, "[{kind}-drop-readable-{index}]{name}");
+        site-import-ir(g, names[4] + id, [u32,], Type.unit-type, "[{kind}-drop-writable-{index}]{name}");
+    }
+
+    // what scans one of the stream's items (made now), as a value
+    scan-node: func(g: Gen, t: Type) -> Node {
+        scan-fn(g, t);
+        scan(t)
+    }
+
+    // a func of the site's as a value, for the runtime (C: cast to the function type it takes)
+    site-func: func(name: string, c-type: string) -> Node {
+        func-ref(name, name, "(({c-type}){name})", Type.address-type)
+    }
+
+    // the stream (of item) at the site, as IR: its builtins, and its items lifted from and lowered
+    // into the host's layout (y_slift_<id>, y_slower_<id>: made once); its id
+    site-stream: func(g: Gen, item: Type) -> string {
+        let i = g.site-index;
+        let k = "{c-ident(g.site-module + "#" + g.site-name)}_{i}";
+        if made-before(g, "y_sr_" + k) { return k; }
+        site-builtins-ir(g, "stream", ["y_sn_", "y_sr_", "y_sw_", "y_sdr_", "y_sdw_",], k, true);
+        let address = Type.address-type;
+        let s32 = Type.num("s32");
+        let bool = Type.bool-type;
+        let abi = abi-of(g, item);
+        let next = { at: s64 -> assign(at, bin("+", s32, local(at, s32), int-const(1, s32))) };
+        // the host's items, lifted onto the stream's (each rooted while the next is made)
+        let lift = helper-func(g, "y_slift_" + k, Type.unit-type, true);
+        let st: StreamType = { item: item, writer: false, };
+        let stream = Type.stream-type(st);
+        let s = helper-local(lift, stream, "s", true);
+        let buf = helper-local(lift, address, "buf", true);
+        let count = helper-local(lift, s32, "n", true);
+        let at = helper-local(lift, s32, "i", false);
+        let x = helper-local(lift, item, "x", false);
+        lift.body.push(assign(at, int-const(0, s32)));
+        lift.body.push(loop-stmt(some(bin("<", bool, local(at, s32), local(count, s32))), some(next(at)), [
+            assign(x, lift-from-at(g, item, { -> deref(element(local(buf, address), local(at, s32), abi), abi) }, i + 1)),
+            store(deref(runtime-call("y_list_push_slot", [load(local(s, stream), ["items",], true, Type.list-type(item), false),], address), item), local(x, item)),
+        ], -1));
+        // the stream's items, lowered into the host's
+        let lower = helper-func(g, "y_slower_" + k, Type.unit-type, true);
+        let items = helper-local(lower, address, "items", true);
+        let into = helper-local(lower, address, "buf", true);
+        let total = helper-local(lower, s32, "n", true);
+        let index = helper-local(lower, s32, "i", false);
+        let body: list<Node> = [];
+        lower-into-at(g, item, { -> deref(element(local(into, address), local(index, s32), abi), abi) }, { -> deref(element(local(items, address), local(index, s32), item), item) }, i + 1, body);
+        lower.body.push(assign(index, int-const(0, s32)));
+        lower.body.push(loop-stmt(some(bin("<", bool, local(index, s32), local(total, s32))), some(next(index)), body, -1));
+        k
+    }
+
+    // the future (of t) at the site, as IR: its builtins, a host's future read as a yel future
+    // (y_fread_<id>: a task, its end let go if no one waits for it), and a yel future written to a
+    // new host's future by a task (y_fpump_<id>: its readable end) (made once); its id
+    site-future: func(g: Gen, t: Type) -> string {
+        let i = g.site-index;
+        let k = "{c-ident(g.site-module + "#" + g.site-name)}_{i}";
+        if made-before(g, "y_fr_" + k) { return k; }
+        site-builtins-ir(g, "future", ["y_fn_", "y_frd_", "y_fwr_", "y_fdr_", "y_fdw_",], k, false);
+        let u32 = Type.num("u32");
+        let u64 = Type.num("u64");
+        let bool = Type.bool-type;
+        let address = Type.address-type;
+        let abi = abi-of(g, t);
+        let blocked = int-const(4294967295, u32);
+        // its end waited for (the host's event): the code it gives
+        let wait-end = { f: IrFunc, end: s64, code: s64, state: s64 -> if-stmt(bin("==", bool, local(code, u32), blocked), [
+            runtime-call("y_async_host_wait", [local(end, u32),], Type.unit-type),
+            loop-stmt(none, none, [
+                suspend-stmt(state),
+                resume-stmt(state),
+                if-stmt(runtime-call("y_async_host_done", [local(end, u32),], bool), [break-stmt(-1),], []),
+            ], -1),
+            assign(code, runtime-call("y_async_host_code", [local(end, u32),], u32)),
+            runtime-call("y_async_host_forget", [local(end, u32),], Type.unit-type),
+        ], []) };
+        // the host's future, read
+        let read = helper-func(g, "u_fread_" + k, t, false);
+        read.async = true;
+        read.states = 1;
+        read.release = true;
+        let end = helper-local(read, u32, "end", true);
+        let buf = helper-local(read, abi, "buf", false);
+        let code = helper-local(read, u32, "code", false);
+        let result = helper-local(read, t, "result", false);
+        let reading: list<Node> = [
+            assign(code, runtime-call("y_frd_" + k, [local(end, u32), address-of(local(buf, abi)),], u32)),
+            wait-end(read, end, code, 1),
+            if-stmt(bin("==", bool, bin("&", u32, local(code, u32), int-const(15, u32)), int-const(1, u32)), [runtime-call("y_abi_bad", [int-const(6, Type.num("s32")),], Type.never-type), halt-stmt(),], []),
+            assign(result, lift-from-at(g, t, { -> local(buf, abi) }, i + 1)),
+            runtime-call("y_fdr_" + k, [local(end, u32),], Type.unit-type),
+            return-stmt(local(result, t)),
+        ];
+        read.body.push(block-stmt(reading, -1));
+        // no one waits for it (the runtime's release, stepping it in Y_RELEASE_STATE): its end let go
+        read.body.push(resume-stmt(1000000));
+        read.body.push(runtime-call("y_fdr_" + k, [local(end, u32),], Type.unit-type));
+        read.body.push(return-stmt(local(result, t)));
+        let start = helper-func(g, "y_fread_" + k, Type.future-type(t), false);
+        let start-end = helper-local(start, u32, "end", true);
+        start.body.push(return-stmt(runtime-call("s_fread_" + k, [local(start-end, u32),], Type.future-type(t))));
+        // a yel future, written to the host once it is done
+        let pump = helper-func(g, "u_fpump_" + k, Type.unit-type, false);
+        pump.async = true;
+        pump.states = 2;
+        let future = Type.future-type(t);
+        let fut = helper-local(pump, future, "fut", true);
+        let out-end = helper-local(pump, u32, "end", true);
+        let v = helper-local(pump, t, "v", false);
+        let out-buf = helper-local(pump, abi, "buf", false);
+        let out-code = helper-local(pump, u32, "code", false);
+        pump.body.push(loop-stmt(none, none, [
+            if-stmt(runtime-call("yel_async_step", [local(fut, future),], bool), [break-stmt(-1),], []),
+            suspend-stmt(1),
+            resume-stmt(1),
+        ], -1));
+        pump.body.push(assign(v, pure-call(result-fn(g, represented(t)), [local(fut, future),], t)));
+        lower-into-at(g, t, { -> local(out-buf, abi) }, { -> local(v, t) }, i + 1, pump.body);
+        pump.body.push(assign(out-code, runtime-call("y_fwr_" + k, [local(out-end, u32), address-of(local(out-buf, abi)),], u32)));
+        pump.body.push(wait-end(pump, out-end, out-code, 2));
+        pump.body.push(runtime-call("y_fdw_" + k, [local(out-end, u32),], Type.unit-type));
+        pump.body.push(return-stmt(unit-const()));
+        // its pair made, the task started with the writable end; the readable one given
+        let pumping = helper-func(g, "y_fpump_" + k, u32, false);
+        let given = helper-local(pumping, future, "fut", true);
+        let pair = helper-local(pumping, u64, "pair", false);
+        let task = helper-local(pumping, Type.future-type(Type.unit-type), "task", false);
+        pumping.body.push(assign(pair, runtime-call("y_fn_" + k, [], u64)));
+        pumping.body.push(assign(task, runtime-call("s_fpump_" + k, [local(given, future), convert(u32, bin(">>", u64, local(pair, u64), int-const(32, u64))),], Type.future-type(Type.unit-type))));
+        pumping.body.push(runtime-call("yel_async_spawn", [local(task, Type.future-type(Type.unit-type)),], Type.future-type(Type.unit-type)));
+        pumping.body.push(return-stmt(convert(u32, local(pair, u64))));
+        k
+    }
+
+    // a name as a C identifier (each byte that may not be one, _): a site's module and func
+    c-ident: func(n: string) -> string {
+        let out: list<string> = [];
+        for i in 0..n.len() {
+            let ch = n.byte-at(i);
+            let ok = ch >= 97 && ch <= 122 || ch >= 65 && ch <= 90 || ch >= 48 && ch <= 57;
+            out.push(if ok { from-byte(ch) } else { "_" });
+        }
+        out.join("")
+    }
+
+    // the streams and futures a type holds, counted in the component model's walk of a func's
+    // type (depth first: each one its index, a list's items one)
+    handle-count: func(g: Gen, t: Type) -> s64 { handles-in(g, t, 0) }
+
+    handles-in: func(g: Gen, t: Type, depth: s64) -> s64 {
+        if depth > 32 { return 0; }
+        match t {
+            stream-type(x) => 1 + handles-in(g, x.item, depth + 1),
+            future-type(x) => 1 + handles-in(g, x, depth + 1),
+            list-type(x) => handles-in(g, x, depth + 1),
+            fixed-list(x) => handles-in(g, x.item, depth + 1),
+            option-type(x) => handles-in(g, x, depth + 1),
+            result-type(r) => handles-in(g, r.ok, depth + 1) + handles-in(g, r.err, depth + 1),
+            tuple-type(xs) => handles-sum(g, xs, depth + 1),
+            anon-record(r) => handles-sum(g, r.types, depth + 1),
+            union-type(xs) => if crossing(t) == "variant" { handles-sum(g, kinds(t), depth + 1) } else { 0 },
+            named(n) => {
+                if g.records.has(n) { return handles-sum(g, wit-field-types(g, n), depth + 1); }
+                if g.variants.has(n) { return handles-sum(g, case-payloads(g, n), depth + 1); }
+                0
+            }
+            _ => 0,
+        }
+    }
+
+    handles-sum: func(g: Gen, ts: list<Type>, depth: s64) -> s64 {
+        let n = 0;
+        for t in ts { n += handles-in(g, t, depth); }
+        n
+    }
+
+    // the count in the types before the i-th
+    handles-before: func(g: Gen, ts: list<Type>, i: s64) -> s64 {
+        let n = 0;
+        for j in 0..i { n += handle-count(g, ts[j]); }
+        n
+    }
+
+    // a variant's cases' payloads as written (unit for a case carrying none)
+    case-payloads: func(g: Gen, n: Name) -> list<Type> {
+        let out: list<Type> = [];
+        for k in g.variants[n].cases {
+            out.push(if k.has-payload { wit-payload(g, n, k.name) } else { Type.unit-type });
+        }
+        out
+    }
+
+    // a lower or lift helper's name past its type's, for a type holding streams or futures: its
+    // site's (it calls the site's builtins) and its first index
+    site-suffix: func(g: Gen, t: Type) -> string {
+        if handle-count(g, t) == 0 { return ""; }
+        "__{c-ident(g.site-module + "#" + g.site-name)}_{g.site-index}"
+    }
+
+    // a func's site, for the streams and futures in its type: the index of param i's (the result's:
+    // i the params' count), counted over the params before it
+    set-site: func(g: Gen, module: string, name: string, pts: list<Type>, i: s64) {
+        g.site-module = module;
+        g.site-name = name;
+        let k = 0;
+        for j in 0..i {
+            if j < pts.len() { k += handle-count(g, pts[j]); }
+        }
+        g.site-index = k;
+    }
+
+    // a record's field types as written (a literal or union type its own, not its kinds)
+    wit-field-types: func(g: Gen, n: Name) -> list<Type> {
+        if g.wit-fields.has(name-text(n)) { return g.wit-fields[name-text(n)]; }
+        g.records[n].field-types
+    }
+
+    // a variant's case's payload type as written
+    wit-payload: func(g: Gen, n: Name, case-name: string) -> Type {
+        let v = g.variants[n];
+        let i = case-index(v, case-name);
+        if g.wit-cases.has(name-text(n)) { return g.wit-cases[name-text(n)][i]; }
+        v.cases[i].payload
+    }
+
+    // a variant's flat types: its tag, then each place the widest (joined) of its cases'
+    variant-flat: func(g: Gen, payloads: list<Type>) -> list<string> {
+        let out: list<string> = ["i32",];
+        for p in payloads {
+            let fs = flat-types(g, p);
+            for i in 0..fs.len() {
+                if i + 1 >= out.len() { out.push(fs[i]); }
+                else { out[i + 1] = join-flat(out[i + 1], fs[i]); }
+            }
+        }
+        out
+    }
+
+    // the flat core types of params of types pts, one after another
+    params-flat: func(g: Gen, pts: list<Type>) -> list<string> {
+        let out: list<string> = [];
+        for param in pts { for flat in flat-types(g, param) { out.push(flat); } }
+        out
+    }
+
+    // an exported func's name in its module's interface: its last part, as written
+    export-name: func(name: string) -> string { name.substring(name.len() - base-name(name).len(), name.len()) }
+
+    join-flat: func(a: string, b: string) -> string {
+        if a == b { return a; }
+        if (a == "i32" && b == "f32") || (a == "f32" && b == "i32") { return "i32"; }
+        "i64"
+    }
+
+    // a tag's C type, for n cases
+    tag-c: func(n: s64) -> string {
+        if n <= 256 { "uint8_t" } else if n <= 65536 { "uint16_t" } else { "uint32_t" }
+    }
+
+    // why a buffer is no WIT type
+    buffer-crossing: func(g: Gen) -> string {
+        "a buffer cannot cross a component's boundary: give b.to-string() (WIT's string) or b.to-bytes() (WIT's list<u8>)"
+    }
+
+    // a type's canonical layout as C (A_<id> structs made once, those inside first)
+    abi-type: func(g: Gen, t: Type) -> string {
+        match t {
+            num(n) => num-c(n),
+            bool-type => "uint8_t",
+            char-type => "uint32_t",
+            string-type => "yabi_str",
+            named(n) => {
+                let kind = named-kind(g, n);
+                if kind == "enum" { tag-c(g.variants[n].cases.len()) }
+                else if kind == "handle" { "uint32_t" }
+                else if kind == "flags" {
+                    let k = g.flags[n].flags.len();
+                    if k <= 8 {
+                        "uint8_t"
+                    } else if k <= 16 {
+                        "uint16_t"
+                    } else if k <= 32 {
+                        "uint32_t"
+                    } else {
+                        diagnostics.fatal(g.context, diagnostics.error-at(g.file, "flags {n} has more than 32 flags: a component's flags are not that wide yet"))
+                    }
+                } else {
+                    abi-struct(g, t)
+                }
+            }
+            unit-type => "uint8_t",
+            stream-type(x) => "uint32_t",
+            future-type(x) => "uint32_t",
+            singleton(s) => set-abi-type(g, t),
+            range-type(r) => set-abi-type(g, t),
+            union-type(xs) => set-abi-type(g, t),
+            _ => abi-struct(g, t),
+        }
+    }
+
+    set-abi-type: func(g: Gen, t: Type) -> string {
+        let how = crossing(t);
+        if how == "enum" { return tag-c(enum-values(t).len()); }
+        if how == "variant" { return abi-struct(g, t); }
+        abi-type(g, representation(t))
+    }
+
+    abi-struct: func(g: Gen, t: Type) -> string {
+        let n = "A_" + type-id(g, t);
+        if made-before(g, n) { return n; }
+        let fields = match t {
+            list-type(x) => "{abi-type(g, x)} *ptr; size_t len;",
+            fixed-list(x) => "{abi-type(g, x.item)} items[{x.len}];",
+            option-type(x) => "uint8_t tag; {abi-type(g, x)} value;",
+            result-type(r) => c"uint8_t tag; union { {abi-member(g, r.ok, "ok")}{abi-member(g, r.err, "err")}uint8_t none; } u;",
+            tuple-type(xs) => {
+                let parts: list<string> = [];
+                for i in 0..xs.len() { parts.push("{abi-type(g, xs[i])} f{i};"); }
+                parts.join(" ")
+            }
+            anon-record(r) => {
+                let parts: list<string> = [];
+                for i in 0..r.fields.len() {
+                    parts.push("{abi-type(g, r.types[i])} f_{mangle(r.fields[i])};");
+                }
+                if parts.len() == 0 { "uint8_t none;" } else { parts.join(" ") }
+            }
+            // a union of kinds: a variant's layout, a case for each kind
+            union-type(xs) => {
+                let ks = kinds(t);
+                let members: list<string> = [];
+                for i in 0..ks.len() { members.push(abi-member(g, ks[i], "c{i}")); }
+                c"{tag-c(ks.len())} tag; union { {members.join("")}uint8_t none; } u;"
+            }
+            named(tn) => {
+                if g.records.has(tn) {
+                    let r = g.records[tn];
+                    let parts: list<string> = [];
+                    for i in 0..r.fields.len() {
+                        parts.push("{abi-type(g, wit-field-types(g, tn)[i])} f_{mangle(r.fields[i])};");
+                    }
+                    parts.join(" ")
+                } else {
+                    let v = g.variants[tn];
+                    let members: list<string> = [];
+                    for k in v.cases {
+                        if k.has-payload {
+                            members.push(
+                                abi-member(g, wit-payload(g, tn, k.name), "c_" + mangle(k.name))
+                            );
+                        }
+                    }
+                    c"{tag-c(v.cases.len())} tag; union { {members.join("")}uint8_t none; } u;"
+                }
+            }
+            _ => "",
+        };
+        g.value-decls.push(c"typedef struct { {fields} } {n};");
+        n
+    }
+
+    // a union's member for a payload ("" for none)
+    abi-member: func(g: Gen, t: Type, name: string) -> string {
+        match t {
+            unit-type => "",
+            _ => "{abi-type(g, t)} {name}; ",
+        }
+    }
+
+    // ================================================================ lowering and lifting
+
+    // ================================================================ lowering and lifting, as IR
+
+    // a value's canonical representation as an IR type (abi-type's C): a scalar's number, else its
+    // struct (a canonical-type)
+    abi-of: func(g: Gen, t: Type) -> Type {
+        match t {
+            num(n) => t,
+            bool-type => Type.num("u8"),
+            char-type => Type.num("u32"),
+            unit-type => Type.num("u8"),
+            stream-type(x) => Type.num("u32"),
+            future-type(x) => Type.num("u32"),
+            singleton(s) => set-abi-of(g, t),
+            range-type(r) => set-abi-of(g, t),
+            union-type(xs) => set-abi-of(g, t),
+            named(n) => {
+                let kind = named-kind(g, n);
+                if kind == "enum" { return tag-num(g.variants[n].cases.len()); }
+                if kind == "handle" { return Type.num("u32"); }
+                if kind == "flags" {
+                    let count = g.flags[n].flags.len();
+                    return Type.num(if count <= 8 { "u8" } else if count <= 16 { "u16" } else { "u32" });
+                }
+                Type.canonical-type(t)
+            }
+            _ => Type.canonical-type(t),
+        }
+    }
+
+    set-abi-of: func(g: Gen, t: Type) -> Type {
+        let how = crossing(t);
+        if how == "enum" { return tag-num(enum-values(t).len()); }
+        if how == "variant" { return Type.canonical-type(t); }
+        abi-of(g, representation(t))
+    }
+
+    // a tag's type, for n cases (tag-c's)
+    tag-num: func(n: s64) -> Type { Type.num(if n <= 256 { "u8" } else if n <= 65536 { "u16" } else { "u32" }) }
+
+    // a canonical struct's member (an lvalue): at's member (its C path) of type ty
+    abi-field: func(at: Node, member: list<string>, ty: Type) -> Node { load(at, member, false, ty, false) }
+
+    // item k of a canonical fixed list's items (an array, as the place at holds it), as a place
+    abi-item: func(at: Node, k: s64, item: Type) -> Node {
+        deref(element(address-of(abi-field(at, ["items",], Type.address-type)), int-const(k, Type.num("s64")), item), item)
+    }
+
+    // whether a payload has a member in its canonical union (a () has none: abi-member's)
+    has-member: func(t: Type) -> bool {
+        match t {
+            unit-type => false,
+            _ => true,
+        }
+    }
+
+    // statements lowering src's value (of type t) into dst (an lvalue of abi-of(t)), into out
+    lower-into: func(g: Gen, t: Type, dst: func() -> Node, src: func() -> Node, out: list<Node>) {
+        let usize = Type.num("usize");
+        match t {
+            bool-type => out.push(store(dst(), convert(Type.num("u8"), src()))),
+            unit-type => out.push(store(dst(), int-const(0, Type.num("u8")))),
+            num(n) => out.push(store(dst(), src())),
+            char-type => out.push(store(dst(), src())),
+            string-type => {
+                out.push(store(abi-field(dst(), ["ptr",], Type.address-type), convert(Type.address-type, load(src(), ["data",], false, Type.address-type, false))));
+                out.push(store(abi-field(dst(), ["len",], usize), convert(usize, load(src(), ["len",], false, Type.num("s64"), false))));
+            }
+            singleton(s) => set-lower-into(g, t, dst, src, out),
+            range-type(r) => set-lower-into(g, t, dst, src, out),
+            union-type(xs) => set-lower-into(g, t, dst, src, out),
+            // a yel stream or future given the host: a new pair, pumped (the call's task)
+            stream-type(x) => {
+                let k = site-stream(g, x.item);
+                let address = Type.address-type;
+                out.push(store(dst(), runtime-call("y_stream_to_host", [
+                    src(), site-func("y_sn_" + k, "uint64_t (*)(void)"), site-func("y_sw_" + k, "uint32_t (*)(uint32_t, const uint8_t *, size_t)"),
+                    site-func("y_slower_" + k, "void (*)(void *, void *, int32_t)"), site-func("y_sdw_" + k, "void (*)(uint32_t)"), size-of(abi-of(g, x.item)),
+                ], Type.num("u32"))));
+            }
+            future-type(x) => out.push(store(dst(), runtime-call("y_fpump_" + site-future(g, x), [src(),], Type.num("u32")))),
+            named(n) => {
+                let kind = named-kind(g, n);
+                if kind == "enum" || kind == "flags" || kind == "handle" { out.push(store(dst(), convert(abi-of(g, t), src()))); }
+                else { out.push(runtime-call(lower-fn(g, t), [address-of(dst()), src(),], Type.unit-type)); }
+            }
+            _ => out.push(runtime-call(lower-fn(g, t), [address-of(dst()), src(),], Type.unit-type)),
+        }
+    }
+
+    set-lower-into: func(g: Gen, t: Type, dst: func() -> Node, src: func() -> Node, out: list<Node>) {
+        let how = crossing(t);
+        if how == "enum" {
+            out.push(store(dst(), pure-call(enum-lower-fn(g, t), [src(),], tag-num(enum-values(t).len()))));
+            return;
+        }
+        if how == "variant" {
+            out.push(runtime-call(lower-fn(g, t), [address-of(dst()), src(),], Type.unit-type));
+            return;
+        }
+        lower-into(g, representation(t), dst, src, out);
+    }
+
+    // lower-into with the site's index at this part's (its streams' and futures' builtins)
+    lower-into-at: func(g: Gen, t: Type, dst: func() -> Node, src: func() -> Node, index: s64, out: list<Node>) {
+        let was = g.site-index;
+        g.site-index = index;
+        lower-into(g, t, dst, src, out);
+        g.site-index = was;
+    }
+
+    // a yel value of type t read from src (an lvalue of abi-of(t)): what the other side gave
+    // checked (a char a scalar value, a tag one of its type's)
+    lift-from: func(g: Gen, t: Type, src: func() -> Node) -> Node {
+        let u32 = Type.num("u32");
+        match t {
+            bool-type => bin("!=", Type.bool-type, src(), int-const(0, Type.num("u8"))),
+            string-type => runtime-call("y_abi_lift_str", [address-of(src()),], Type.string-type),
+            unit-type => unit-const(),
+            num(n) => src(),
+            char-type => pure-call("y_abi_char", [src(),], Type.char-type),
+            singleton(s) => set-lift-from(g, t, src),
+            range-type(r) => set-lift-from(g, t, src),
+            union-type(xs) => set-lift-from(g, t, src),
+            // the host's stream or future: read as it is (its items lifted)
+            stream-type(x) => {
+                let k = site-stream(g, x.item);
+                let address = Type.address-type;
+                runtime-call("y_stream_from_host", [
+                    src(), site-func("y_sr_" + k, "uint32_t (*)(uint32_t, uint8_t *, size_t)"), site-func("y_slift_" + k, "void (*)(ystream *, void *, int32_t)"),
+                    site-func("y_sdr_" + k, "void (*)(uint32_t)"), size-of(abi-of(g, x.item)), convert(Type.num("s64"), size-of(x.item)), scan-node(g, x.item),
+                ], t)
+            }
+            future-type(x) => runtime-call("y_fread_" + site-future(g, x), [src(),], t),
+            named(n) => {
+                let kind = named-kind(g, n);
+                if kind == "enum" {
+                    return convert(t, pure-call("y_abi_tag", [convert(u32, src()), int-const(g.variants[n].cases.len(), u32),], Type.num("s32")));
+                }
+                if kind == "flags" {
+                    // the declared flags' bits only (a host may set others)
+                    let mask: u64 = 0;
+                    for f in g.flags[n].flags { mask = mask * 2 + 1; }
+                    return bin("&", t, convert(t, src()), const(Constant.int(mask), t));
+                }
+                if kind == "handle" { return convert(t, src()); }
+                runtime-call(lift-fn(g, t), [address-of(src()),], t)
+            }
+            _ => runtime-call(lift-fn(g, t), [address-of(src()),], t),
+        }
+    }
+
+    set-lift-from: func(g: Gen, t: Type, src: func() -> Node) -> Node {
+        let how = crossing(t);
+        if how == "enum" { return pure-call(enum-lift-fn(g, t), [src(),], Type.string-type); }
+        if how == "variant" { return runtime-call(lift-fn(g, t), [address-of(src()),], representation(t)); }
+        pure-call(check-fn(g, t), [lift-from(g, representation(t), src),], representation(t))
+    }
+
+    lift-from-at: func(g: Gen, t: Type, src: func() -> Node, index: s64) -> Node {
+        let was = g.site-index;
+        g.site-index = index;
+        let out = lift-from(g, t, src);
+        g.site-index = was;
+        out
+    }
+
+    // the helper that lowers a yel value of type t into its canonical struct (y_lower_<id>(o, v): o
+    // its address), made once
+    lower-fn: func(g: Gen, t: Type) -> string {
+        let base = g.site-index;
+        let n = "y_lower_" + type-id(g, t) + site-suffix(g, t);
+        if made-before(g, n) { return n; }
+        let canonical = Type.canonical-type(t);
+        let _ = abi-type(g, t);
+        let f = helper-func(g, n, Type.unit-type, true);
+        let o = helper-local(f, Type.address-type, "o", true);
+        let v = helper-local(f, t, "v", true);
+        let bool = Type.bool-type;
+        let s64 = Type.num("s64");
+        let usize = Type.num("usize");
+        let dst = { -> deref(local(o, Type.address-type), canonical) };
+        let out = f.body;
+        // a member of the struct, and of the value (arrow: an object's), lowered at a site index
+        let part = { ty: Type, member: list<string>, from: list<string>, arrow: bool, index: s64, into: list<Node> ->
+            if has-member(ty) {
+                lower-into-at(g, ty, { -> abi-field(dst(), member, abi-of(g, ty)) }, { -> load(local(v, t), from, arrow, ty, false) }, index, into);
+            }
+        };
+        match t {
+            list-type(x) => {
+                let length = { -> load(local(v, t), ["len",], true, s64, false) };
+                out.push(store(abi-field(dst(), ["len",], usize), convert(usize, length())));
+                out.push(store(abi-field(dst(), ["ptr",], Type.address-type), runtime-call("y_abi_temp", [bin("*", usize, size-of(abi-of(g, x)), convert(usize, length())),], Type.address-type)));
+                let i = helper-local(f, s64, "i", false);
+                let item: list<Node> = [];
+                lower-into(g, x, { -> deref(element(abi-field(dst(), ["ptr",], Type.address-type), local(i, s64), abi-of(g, x)), abi-of(g, x)) }, { -> list-get(local(v, t), local(i, s64), c-type(g, x), x, false) }, item);
+                out.push(assign(i, int-const(0, s64)));
+                out.push(loop-stmt(some(bin("<", bool, local(i, s64), length())), some(assign(i, bin("+", s64, local(i, s64), int-const(1, s64)))), item, -1));
+            }
+            fixed-list(x) => {
+                for k in 0..x.len {
+                    lower-into(g, x.item, { -> abi-item(dst(), k, abi-of(g, x.item)) }, { -> list-get(local(v, t), int-const(k, s64), c-type(g, x.item), x.item, true) }, out);
+                }
+            }
+            option-type(x) => {
+                out.push(store(abi-field(dst(), ["tag",], Type.num("u8")), convert(Type.num("u8"), load(local(v, t), ["has",], false, bool, false))));
+                let some-body: list<Node> = [];
+                part(x, ["value",], ["value",], false, base, some-body);
+                out.push(if-stmt(load(local(v, t), ["has",], false, bool, false), some-body, []));
+            }
+            result-type(r) => {
+                out.push(store(abi-field(dst(), ["tag",], Type.num("u8")), convert(Type.num("u8"), load(local(v, t), ["is_err",], false, bool, false))));
+                let ok: list<Node> = [];
+                let err: list<Node> = [];
+                part(r.ok, ["u", "ok",], ["ok",], false, base, ok);
+                part(r.err, ["u", "err",], ["err",], false, base + handle-count(g, r.ok), err);
+                out.push(if-stmt(load(local(v, t), ["is_err",], false, bool, false), err, ok));
+            }
+            tuple-type(xs) => {
+                for i in 0..xs.len() { part(xs[i], ["f{i}",], ["f{i}",], false, base + handles-before(g, xs, i), out); }
+            }
+            anon-record(r) => {
+                for i in 0..r.fields.len() {
+                    let member = ["f_" + mangle(r.fields[i]),];
+                    part(r.types[i], member, member, false, base + handles-before(g, r.types, i), out);
+                }
+            }
+            union-type(xs) => {
+                let ks = kinds(t);
+                let tag = { -> load(local(v, t), ["tag",], false, Type.num("s32"), false) };
+                out.push(store(abi-field(dst(), ["tag",], tag-num(ks.len())), convert(tag-num(ks.len()), tag())));
+                for i in 0..ks.len() {
+                    let body: list<Node> = [];
+                    part(ks[i], ["u", "c{i}",], ["c{i}",], false, base + handles-before(g, ks, i), body);
+                    out.push(if-stmt(bin("==", bool, tag(), int-const(i, Type.num("s32"))), body, []));
+                }
+            }
+            named(tn) => {
+                if g.records.has(tn) {
+                    let r = g.records[tn];
+                    let types = wit-field-types(g, tn);
+                    for i in 0..r.fields.len() {
+                        let member = ["f_" + mangle(r.fields[i]),];
+                        part(types[i], member, member, true, base + handles-before(g, types, i), out);
+                    }
+                } else {
+                    let cases = g.variants[tn].cases;
+                    let tag = { -> load(local(v, t), ["tag",], true, Type.num("s32"), false) };
+                    out.push(store(abi-field(dst(), ["tag",], tag-num(cases.len())), convert(tag-num(cases.len()), tag())));
+                    for i in 0..cases.len() {
+                        let k = cases[i];
+                        if k.has-payload {
+                            let member = ["u", "c_" + mangle(k.name),];
+                            let body: list<Node> = [];
+                            part(wit-payload(g, tn, k.name), member, member, true, base + handles-before(g, case-payloads(g, tn), i), body);
+                            out.push(if-stmt(bin("==", bool, tag(), int-const(i, Type.num("s32"))), body, []));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        n
+    }
+
+    // the helper that lifts a canonical struct into a yel value (y_lift_<id>(in): in its address),
+    // the heap's objects rooted while it makes more, the host's buffers freed; made once
+    lift-fn: func(g: Gen, t: Type) -> string {
+        let base = g.site-index;
+        let n = "y_lift_" + type-id(g, t) + site-suffix(g, t);
+        if made-before(g, n) { return n; }
+        let canonical = Type.canonical-type(t);
+        let _ = abi-type(g, t);
+        let f = helper-func(g, n, t, false);
+        let input = helper-local(f, Type.address-type, "in", true);
+        let bool = Type.bool-type;
+        let s64 = Type.num("s64");
+        let s32 = Type.num("s32");
+        let src = { -> deref(local(input, Type.address-type), canonical) };
+        let member = { ty: Type, name: list<string>, index: s64 -> lift-from-at(g, ty, { -> abi-field(src(), name, abi-of(g, ty)) }, index) };
+        let out = f.body;
+        // a value struct: made in a local, field by field (each read before the next is made)
+        let made = { -> helper-local(f, t, "out", false) };
+        match t {
+            list-type(x) => {
+                let length = helper-local(f, s64, "n", false);
+                let l = helper-local(f, t, "l", false);
+                let i = helper-local(f, s64, "i", false);
+                let item = helper-local(f, x, "x", false);
+                out.push(assign(length, convert(s64, abi-field(src(), ["len",], Type.num("usize")))));
+                out.push(assign(l, runtime-call("y_list_new", [local(length, s64), size-of(x), scan-node(g, x),], t)));
+                let body: list<Node> = [
+                    assign(item, lift-from(g, x, { -> deref(element(abi-field(src(), ["ptr",], Type.address-type), local(i, s64), abi-of(g, x)), abi-of(g, x)) })),
+                    store(list-get(local(l, t), load(local(l, t), ["len",], true, s64, false), c-type(g, x), x, false), local(item, x)),
+                    store(load(local(l, t), ["len",], true, s64, true), bin("+", s64, load(local(l, t), ["len",], true, s64, false), int-const(1, s64))),
+                ];
+                out.push(assign(i, int-const(0, s64)));
+                out.push(loop-stmt(some(bin("<", bool, local(i, s64), local(length, s64))), some(assign(i, bin("+", s64, local(i, s64), int-const(1, s64)))), body, -1));
+                out.push(runtime-call("free", [abi-field(src(), ["ptr",], Type.address-type),], Type.unit-type));
+                out.push(return-stmt(local(l, t)));
+            }
+            option-type(x) => {
+                let r = made();
+                out.push(pure-call("y_abi_tag", [convert(Type.num("u32"), abi-field(src(), ["tag",], Type.num("u8"))), int-const(2, Type.num("u32")),], s32));
+                if has-member(x) {
+                    out.push(if-stmt(bin("!=", bool, abi-field(src(), ["tag",], Type.num("u8")), int-const(0, Type.num("u8"))), [
+                        store(load(local(r, t), ["has",], false, bool, true), bool-const(true)),
+                        store(load(local(r, t), ["value",], false, x, true), member(x, ["value",], base)),
+                    ], []));
+                } else {
+                    out.push(store(load(local(r, t), ["has",], false, bool, true), bin("!=", bool, abi-field(src(), ["tag",], Type.num("u8")), int-const(0, Type.num("u8")))));
+                }
+                out.push(return-stmt(local(r, t)));
+            }
+            result-type(sides) => {
+                let r = made();
+                let is-err = { -> load(local(r, t), ["is_err",], false, bool, false) };
+                out.push(store(load(local(r, t), ["is_err",], false, bool, true), bin("!=", bool, pure-call("y_abi_tag", [convert(Type.num("u32"), abi-field(src(), ["tag",], Type.num("u8"))), int-const(2, Type.num("u32")),], s32), int-const(0, s32))));
+                if has-member(sides.ok) {
+                    out.push(if-stmt(un("!", bool, is-err()), [store(load(local(r, t), ["ok",], false, sides.ok, true), member(sides.ok, ["u", "ok",], base)),], []));
+                }
+                if has-member(sides.err) {
+                    out.push(if-stmt(is-err(), [store(load(local(r, t), ["err",], false, sides.err, true), member(sides.err, ["u", "err",], base + handle-count(g, sides.ok))),], []));
+                }
+                out.push(return-stmt(local(r, t)));
+            }
+            tuple-type(xs) => {
+                let r = made();
+                for i in 0..xs.len() { out.push(store(load(local(r, t), ["f{i}",], false, xs[i], true), member(xs[i], ["f{i}",], base + handles-before(g, xs, i)))); }
+                out.push(return-stmt(local(r, t)));
+            }
+            anon-record(fields) => {
+                let r = made();
+                for i in 0..fields.fields.len() {
+                    let name = ["f_" + mangle(fields.fields[i]),];
+                    out.push(store(load(local(r, t), name, false, fields.types[i], true), member(fields.types[i], name, base + handles-before(g, fields.types, i))));
+                }
+                out.push(return-stmt(local(r, t)));
+            }
+            fixed-list(x) => {
+                let r = made();
+                for k in 0..x.len {
+                    out.push(store(list-get(local(r, t), int-const(k, s64), c-type(g, x.item), x.item, true), lift-from(g, x.item, { -> abi-item(src(), k, abi-of(g, x.item)) })));
+                }
+                out.push(return-stmt(local(r, t)));
+            }
+            // a union of kinds: the case's kind, its value checked to be one of the union's
+            union-type(xs) => {
+                let ks = kinds(t);
+                let r = made();
+                let tag = { -> abi-field(src(), ["tag",], tag-num(ks.len())) };
+                for i in 0..ks.len() {
+                    let part = kind-values(t, ks[i]);
+                    let value = { -> load(local(r, t), ["c{i}",], false, ks[i], false) };
+                    out.push(if-stmt(bin("==", bool, convert(s32, tag()), int-const(i, s32)), [
+                        store(load(local(r, t), ["tag",], false, s32, true), int-const(i, s32)),
+                        store(load(local(r, t), ["c{i}",], false, ks[i], true), member(ks[i], ["u", "c{i}",], base + handles-before(g, ks, i))),
+                        if-stmt(un("!", bool, member-node(g, part, value)), [runtime-call("y_abi_bad", [int-const(0, s32),], Type.never-type), halt-stmt(),], []),
+                        return-stmt(local(r, t)),
+                    ], []));
+                }
+                out.push(runtime-call("y_abi_bad", [int-const(1, s32),], Type.never-type));
+                out.push(halt-stmt());
+            }
+            named(tn) => {
+                if g.records.has(tn) {
+                    let r = g.records[tn];
+                    let types = wit-field-types(g, tn);
+                    let o = helper-local(f, t, "o", false);
+                    out.push(assign(o, alloc("R_" + mangle(name-text(tn)), name-text(tn), true, trace-fn(g, tn), t)));
+                    for i in 0..r.fields.len() {
+                        let name = ["f_" + mangle(r.fields[i]),];
+                        out.push(store(load(local(o, t), name, true, r.field-types[i], true), member(types[i], name, base + handles-before(g, types, i))));
+                    }
+                    out.push(return-stmt(local(o, t)));
+                } else {
+                    let v = g.variants[tn];
+                    let tag = { -> abi-field(src(), ["tag",], tag-num(v.cases.len())) };
+                    for i in 0..v.cases.len() {
+                        let k = v.cases[i];
+                        let test = bin("==", bool, convert(s32, tag()), int-const(i, s32));
+                        if k.has-payload {
+                            let o = helper-local(f, t, "o", false);
+                            let name = ["u", "c_" + mangle(k.name),];
+                            let payload = wit-payload(g, tn, k.name);
+                            let body: list<Node> = [assign(o, alloc("V_" + mangle(name-text(tn)), name-text(tn), false, trace-fn(g, tn), t)),];
+                            body.push(store(load(local(o, t), ["tag",], true, s32, true), int-const(i, s32)));
+                            if has-member(payload) {
+                                body.push(store(load(local(o, t), name, true, k.payload, true), member(payload, name, base + handles-before(g, case-payloads(g, tn), i))));
+                            }
+                            body.push(return-stmt(local(o, t)));
+                            out.push(if-stmt(test, body, []));
+                        } else {
+                            out.push(if-stmt(test, [return-stmt(const(Constant.case-value({ owner: name-text(tn), name: k.name, }), t)),], []));
+                        }
+                    }
+                    out.push(runtime-call("y_abi_bad", [int-const(2, s32),], Type.never-type));
+                    out.push(halt-stmt());
+                }
+            }
+            _ => {}
+        }
+        n
+    }
+
+    // a singleton type's or a range's value (its key: semtype's decimal, a char's code point, true
+    // or false), of type base
+    key-const: func(key: string, base: Type) -> Node {
+        match resolve(base) {
+            bool-type => { return bool-const(key == "true"); }
+            num(n) => { if !is-int(n) { return const(Constant.float(parse-f64(key)), base); } }
+            _ => {}
+        }
+        let negative = key.starts-with("-");
+        let digits = if negative { key.substring(1, key.len()) } else { key };
+        let value: u64 = 0;
+        for index in 0..digits.len() { value = value * 10 + ((digits.byte-at(index) - 48) as u64); }
+        const(Constant.int(if negative { 0 - value } else { value }), base)
+    }
+
+    // a C condition, as IR: x (held as t's representation) is one of t's values
+    member-node: func(g: Gen, t: Type, x: func() -> Node) -> Node {
+        let bool = Type.bool-type;
+        let yes = bool-const(true);
+        if !has-set-types(t) { return yes; }
+        let any = { parts: list<Node> ->
+            if parts.len() == 0 { return bool-const(false); }
+            let out = parts[0];
+            for k in 1..parts.len() { out = bin("||", bool, out, parts[k]); }
+            out
+        };
+        let all = { parts: list<Node> ->
+            if parts.len() == 0 { return yes; }
+            let out = parts[0];
+            for k in 1..parts.len() { out = bin("&&", bool, out, parts[k]); }
+            out
+        };
+        match t {
+            singleton(s) => {
+                if show-type(s.base) == "string" { return std-call(g, "yel:std/text.equal", [x(), text-const(s.key),], bool); }
+                bin("==", bool, x(), key-const(s.key, s.base))
+            }
+            range-type(r) => bin("&&", bool, bin(">=", bool, x(), key-const(r.lo, r.base)), bin("<=", bool, x(), key-const(r.hi, r.base))),
+            union-type(xs) => {
+                let ks = kinds(t);
+                let parts: list<Node> = [];
+                if ks.len() > 1 {
+                    for i in 0..ks.len() {
+                        let kind = ks[i];
+                        let member = { -> load(x(), ["c{i}",], false, kind, false) };
+                        parts.push(bin("&&", bool, bin("==", bool, load(x(), ["tag",], false, Type.num("s32"), false), int-const(i, Type.num("s32"))), member-node(g, kind-values(t, kind), member)));
+                    }
+                } else {
+                    for m in xs { parts.push(member-node(g, m, x)); }
+                }
+                any(parts)
+            }
+            option-type(y) => bin("||", bool, un("!", bool, load(x(), ["has",], false, bool, false)), member-node(g, y, { -> load(x(), ["value",], false, y, false) })),
+            result-type(r) => any([
+                bin("&&", bool, load(x(), ["is_err",], false, bool, false), member-node(g, r.err, { -> load(x(), ["err",], false, r.err, false) })),
+                bin("&&", bool, un("!", bool, load(x(), ["is_err",], false, bool, false)), member-node(g, r.ok, { -> load(x(), ["ok",], false, r.ok, false) })),
+            ]),
+            tuple-type(ys) => {
+                let parts: list<Node> = [];
+                for i in 0..ys.len() {
+                    let part = ys[i];
+                    parts.push(member-node(g, part, { -> load(x(), ["f{i}",], false, part, false) }));
+                }
+                all(parts)
+            }
+            _ => yes,
+        }
+    }
+
+    // ================================================================ flattening
+
+    field-members: func(names: list<string>) -> list<list<string>> {
+        let out: list<list<string>> = [];
+        for field in names { out.push(["f_" + mangle(field),]); }
+        out
+    }
+
+    // ================================================================ a call's arguments across
+
+    // ================================================================ flat values, as IR
+
+    // a core type as the IR's: i32 a usize (a pointer natively, 32 bits on wasm32), i64 a u64
+    core-type: func(flat: string) -> Type {
+        if flat == "i64" { return Type.num("u64"); }
+        if flat == "f32" || flat == "f64" { return Type.num(flat); }
+        Type.num("usize")
+    }
+
+    // statements moving a canonical value (value: an lvalue of abi-of(t)) into flat slots (u64
+    // locals, slots[at] on), or (into false) back out of them: each core value's bits,
+    // zero-extended
+    slots-ir: func(g: Gen, t: Type, value: func() -> Node, slots: list<s64>, at: s64, into: bool, out: list<Node>) {
+        let u64 = Type.num("u64");
+        let u32 = Type.num("u32");
+        let usize = Type.num("usize");
+        let slot = { k: s64 -> local(slots[k], u64) };
+        let put = { k: s64, v: Node -> out.push(assign(slots[k], v)); };
+        // a 32-bit value's (a number's, a tag's, a handle's)
+        let word = { held: Type ->
+            if into { put(at, convert(u64, convert(u32, value()))); }
+            else { out.push(store(value(), convert(held, convert(u32, slot(at))))); }
+        };
+        match t {
+            num(name) => {
+                if name == "f32" || name == "f64" {
+                    if into { put(at, pure-call("y_bits_" + name, [value(),], u64)); }
+                    else { out.push(store(value(), pure-call("y_" + name + "_of", [slot(at),], t))); }
+                } else if name == "s64" || name == "u64" {
+                    if into { put(at, convert(u64, value())); } else { out.push(store(value(), convert(t, slot(at)))); }
+                } else {
+                    word(t);
+                }
+            }
+            bool-type => word(Type.num("u8")),
+            char-type => word(u32),
+            string-type => pair-slots-ir(value, slots, at, into, out),
+            list-type(_) => pair-slots-ir(value, slots, at, into, out),
+            fixed-list(fixed) => {
+                let width = flat-types(g, fixed.item).len();
+                for index in 0..fixed.len {
+                    slots-ir(g, fixed.item, { -> abi-item(value(), index, abi-of(g, fixed.item)) }, slots, at + index * width, into, out);
+                }
+            }
+            unit-type => {}
+            tuple-type(parts) => {
+                let members: list<list<string>> = [];
+                for index in 0..parts.len() { members.push(["f{index}",]); }
+                fields-slots-ir(g, parts, members, value, slots, at, into, out);
+            }
+            option-type(inner) => cases-slots-ir(g, t, value, slots, at, 1, [inner,], [["value",],], into, out),
+            result-type(sides) => cases-slots-ir(g, t, value, slots, at, 0, [sides.ok, sides.err,], [["u", "ok",], ["u", "err",],], into, out),
+            stream-type(_) => word(u32),
+            future-type(_) => word(u32),
+            singleton(_) => set-slots-ir(g, t, value, slots, at, into, out),
+            range-type(_) => set-slots-ir(g, t, value, slots, at, into, out),
+            union-type(_) => set-slots-ir(g, t, value, slots, at, into, out),
+            anon-record(fields) => fields-slots-ir(g, fields.types, field-members(fields.fields), value, slots, at, into, out),
+            named(name) => {
+                let kind = named-kind(g, name);
+                if kind == "enum" || kind == "flags" || kind == "handle" { word(abi-of(g, t)); }
+                else if kind == "record" {
+                    fields-slots-ir(g, wit-field-types(g, name), field-members(g.records[name].fields), value, slots, at, into, out);
+                } else {
+                    let payloads: list<Type> = [];
+                    let members: list<list<string>> = [];
+                    for variant-case in g.variants[name].cases {
+                        payloads.push(if variant-case.has-payload { wit-payload(g, name, variant-case.name) } else { Type.unit-type });
+                        members.push(["u", "c_" + mangle(variant-case.name),]);
+                    }
+                    cases-slots-ir(g, t, value, slots, at, 0, payloads, members, into, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // a string's or list's two slots: its pointer and its length
+    pair-slots-ir: func(value: func() -> Node, slots: list<s64>, at: s64, into: bool, out: list<Node>) {
+        let u64 = Type.num("u64");
+        let usize = Type.num("usize");
+        if into {
+            out.push(assign(slots[at], convert(u64, convert(usize, abi-field(value(), ["ptr",], Type.address-type)))));
+            out.push(assign(slots[at + 1], convert(u64, abi-field(value(), ["len",], usize))));
+        } else {
+            out.push(store(abi-field(value(), ["ptr",], Type.address-type), convert(Type.address-type, convert(usize, local(slots[at], u64)))));
+            out.push(store(abi-field(value(), ["len",], usize), convert(usize, local(slots[at + 1], u64))));
+        }
+    }
+
+    // a record's (tuple's) fields, one after another
+    fields-slots-ir: func(g: Gen, parts: list<Type>, members: list<list<string>>, value: func() -> Node, slots: list<s64>, at: s64, into: bool, out: list<Node>) {
+        let slot = at;
+        for index in 0..parts.len() {
+            let part = parts[index];
+            let member = members[index];
+            slots-ir(g, part, { -> abi-field(value(), member, abi-of(g, part)) }, slots, slot, into, out);
+            slot += flat-types(g, part).len();
+        }
+    }
+
+    set-slots-ir: func(g: Gen, held: Type, value: func() -> Node, slots: list<s64>, at: s64, into: bool, out: list<Node>) {
+        let how = crossing(held);
+        if how == "enum" {
+            let u64 = Type.num("u64");
+            if into { out.push(assign(slots[at], convert(u64, convert(Type.num("u32"), value())))); }
+            else { out.push(store(value(), convert(abi-of(g, held), convert(Type.num("u32"), local(slots[at], u64))))); }
+        } else if how == "variant" {
+            let case-kinds = kinds(held);
+            let members: list<list<string>> = [];
+            for index in 0..case-kinds.len() { members.push(["u", "c{index}",]); }
+            cases-slots-ir(g, held, value, slots, at, 0, case-kinds, members, into, out);
+        } else {
+            slots-ir(g, representation(held), value, slots, at, into, out);
+        }
+    }
+
+    // a variant's (option's, result's) slots: its tag, then its case's payload; going in, the
+    // places the case leaves are zeroed
+    cases-slots-ir: func(g: Gen, held: Type, value: func() -> Node, slots: list<s64>, at: s64, first: s64, payloads: list<Type>, members: list<list<string>>, into: bool, out: list<Node>) {
+        let u64 = Type.num("u64");
+        let u32 = Type.num("u32");
+        let tag-type = match held {
+            option-type(_) => Type.num("u8"),
+            result-type(_) => Type.num("u8"),
+            named(n) => tag-num(g.variants[n].cases.len()),
+            _ => tag-num(payloads.len()),
+        };
+        let tag = { -> abi-field(value(), ["tag",], tag-type) };
+        if into {
+            out.push(assign(slots[at], convert(u64, tag())));
+            for slot in at + 1..at + flat-types(g, held).len() { out.push(assign(slots[slot], int-const(0, u64))); }
+        } else {
+            out.push(store(tag(), convert(tag-type, local(slots[at], u64))));
+        }
+        for index in 0..payloads.len() {
+            let payload = payloads[index];
+            if !has-member(payload) { continue; }
+            let member = members[index];
+            let body: list<Node> = [];
+            slots-ir(g, payload, { -> abi-field(value(), member, abi-of(g, payload)) }, slots, at + 1, into, body);
+            if body.len() > 0 { out.push(if-stmt(bin("==", Type.bool-type, convert(u32, tag()), int-const(first + index, u32)), body, [])); }
+        }
+    }
+
+    // a slot's bits as a core value of type flat, and a core value's as a slot's
+    from-slot-ir: func(flat: string, slot: Node) -> Node {
+        if flat == "i64" { return slot; }
+        if flat == "f32" || flat == "f64" { return pure-call("y_" + flat + "_of", [slot,], Type.num(flat)); }
+        convert(Type.num("usize"), slot)
+    }
+
+    to-slot-ir: func(flat: string, value: Node) -> Node {
+        let u64 = Type.num("u64");
+        if flat == "f32" || flat == "f64" { return pure-call("y_bits_" + flat, [value,], u64); }
+        convert(u64, value)
+    }
+
+    // ================================================================ core imports
+
+    // a core wasm func the component imports: its C (where the host's import is declared, or
+    // natively the runtime's C for it, yn_<name>: none, a build that stops), registered for the
+    // bitcode backend too
+    declare-core-import: func(g: Gen, c-name: string, module: string, name: string, params: list<Type>, result: Type, native: string, wasm-only: bool) {
+        if g.core-imports.has(c-name) { return; }
+        g.core-imports.set(c-name, { c-name: c-name, module: module, name: name, params: params, result: result, native: native, wasm-only: wasm-only, });
+        let cps: list<string> = [];
+        for p in params { cps.push(c-type(g, p)); }
+        let ps = if cps.len() == 0 { "void" } else { cps.join(", ") };
+        let ret = if is-unit-type(result) { "void" } else { c-type(g, result) };
+        let out = g.helper-protos;
+        out.push("#if defined(__wasm__)");
+        out.push("__attribute__((import_module(\"{c-escape(module)}\"), import_name(\"{c-escape(name)}\")))");
+        out.push("extern {ret} {c-name}({ps});");
+        if !wasm-only {
+            out.push("#elif defined(YN_{native.substring(3, native.len())})");
+            out.push("#define {c-name} {native}");
+            out.push("#else");
+            out.push("#error \"{c-escape(module)}#{c-escape(name)}: no native implementation (runtime/wasi-native.h): build it as a component\"");
+        }
+        out.push("#endif");
+    }
+
+    is-unit-type: func(t: Type) -> bool {
+        match t {
+            unit-type => true,
+            _ => false,
+        }
+    }
+
+    // ================================================================ a sync import's wrapper, as IR
+
+    // a WIT func's wrapper: the yel func a program calls (w_<key>), which lowers its arguments
+    // (flat, or past 16 into a struct the import reads), calls the import, and lifts its result
+    // (one flat value, or a struct it writes); natively std's host func for it, called as it is
+    import-wrapper-ir: func(g: Gen, x: Extern) {
+        let k = mangle(x.name);
+        let n = x.params.len();
+        let pts = x.param-types;
+        let rt = x.result;
+        let pflat = params-flat(g, pts);
+        let by-memory = pflat.len() > 16;
+        let rflat = flat-types(g, rt);
+        let usize = Type.num("usize");
+        let u64 = Type.num("u64");
+        let host = host-key(g, x);
+        if host != "" {
+            let native = helper-func(g, "w_" + k, rt, false);
+            native.build = "native";
+            let args: list<Node> = [];
+            for i in 0..n { args.push(local(helper-local(native, pts[i], "a{i}", true), pts[i])); }
+            native.body.push(return-stmt(call(host, g.funcs[host].c-name, args, rt, fx().call)));
+        }
+        // the core import
+        let core-params: list<Type> = [];
+        if by-memory { core-params.push(usize); } else { for flat in pflat { core-params.push(core-type(flat)); } }
+        if rflat.len() > 1 { core-params.push(usize); }
+        let core-result = if rflat.len() == 1 { core-type(rflat[0]) } else { Type.unit-type };
+        let imp = "y_imp_" + k;
+        declare-core-import(g, imp, x.wit-module, x.wit-name, core-params, core-result, "yn_" + k, host != "");
+        // the wrapper
+        let f = helper-func(g, "w_" + k, rt, false);
+        if host != "" { f.build = "wasi"; }
+        let a: list<s64> = [];
+        for i in 0..n { a.push(helper-local(f, pts[i], "a{i}", true)); }
+        let out = f.body;
+        // the host's exit never returns: what print left in libc's stdout buffer is written first
+        if x.wit-module.starts-with("wasi:cli/exit") { out.push(runtime-call("y_flush_stdout", [], Type.unit-type)); }
+        let args: list<Node> = [];
+        if by-memory {
+            let all = Type.tuple-type(pts);
+            let p = helper-local(f, Type.canonical-type(all), "p", false);
+            for i in 0..n {
+                set-site(g, x.wit-module, x.wit-name, pts, i);
+                let param = a[i];
+                let ty = pts[i];
+                lower-into(g, ty, { -> abi-field(local(p, Type.canonical-type(all)), ["f{i}",], abi-of(g, ty)) }, { -> local(param, ty) }, out);
+            }
+            args.push(convert(usize, address-of(local(p, Type.canonical-type(all)))));
+        } else if pflat.len() > 0 {
+            let slots: list<s64> = [];
+            for index in 0..pflat.len() { slots.push(helper-local(f, u64, "s{index}", false)); }
+            let slot = 0;
+            for i in 0..n {
+                set-site(g, x.wit-module, x.wit-name, pts, i);
+                let ty = pts[i];
+                let param = a[i];
+                let lowered = helper-local(f, abi-of(g, ty), "l{i}", false);
+                lower-into(g, ty, { -> local(lowered, abi-of(g, ty)) }, { -> local(param, ty) }, out);
+                slots-ir(g, ty, { -> local(lowered, abi-of(g, ty)) }, slots, slot, true, out);
+                slot += flat-types(g, ty).len();
+            }
+            for index in 0..pflat.len() { args.push(from-slot-ir(pflat[index], local(slots[index], u64))); }
+        }
+        set-site(g, x.wit-module, x.wit-name, pts, n);
+        if rflat.len() > 1 {
+            let ret = helper-local(f, Type.canonical-type(rt), "ret", false);
+            args.push(convert(usize, address-of(local(ret, Type.canonical-type(rt)))));
+            out.push(runtime-call(imp, args, Type.unit-type));
+            out.push(runtime-call("y_abi_free_temps", [], Type.unit-type));
+            out.push(return-stmt(lift-from(g, rt, { -> local(ret, Type.canonical-type(rt)) })));
+        } else if rflat.len() == 1 {
+            let c = helper-local(f, core-result, "c", false);
+            out.push(assign(c, runtime-call(imp, args, core-result)));
+            out.push(runtime-call("y_abi_free_temps", [], Type.unit-type));
+            let rs = [helper-local(f, u64, "rs0", false),];
+            out.push(assign(rs[0], to-slot-ir(rflat[0], local(c, core-result))));
+            let ret = helper-local(f, abi-of(g, rt), "ret", false);
+            slots-ir(g, rt, { -> local(ret, abi-of(g, rt)) }, rs, 0, false, out);
+            out.push(return-stmt(lift-from(g, rt, { -> local(ret, abi-of(g, rt)) })));
+        } else {
+            out.push(runtime-call(imp, args, Type.unit-type));
+            out.push(runtime-call("y_abi_free_temps", [], Type.unit-type));
+            out.push(return-stmt(unit-const()));
+        }
+    }
+
+    // ================================================================ imports
+
+    // the std func that gives a WIT import natively (std's host: yel, as Porffor's host/native), by
+    // its names: interface wasi:filesystem/types is module wasi-filesystem-types, func
+    // [method]descriptor.stat is descriptor-stat ([constructor]x x-new, [resource-drop]x
+    // x-drop); its key, or "" for none
+    host-key: func(g: Gen, x: Extern) -> string {
+        let iface = x.wit-module.substring(0, x.wit-module.find-byte(64).unwrap-or(x.wit-module.len()));
+        let module = iface.replace(":", "-").replace("/", "-");
+        let name = x.wit-name;
+        let bracket = name.find-byte(93).unwrap-or(-1);
+        let kind = if bracket > 0 { name.substring(1, bracket) } else { "" };
+        let rest = name.substring(bracket + 1, name.len()).replace(".", "-");
+        let func = if kind == "constructor" { rest + "-new" } else if kind == "resource-drop" { rest + "-drop" } else { rest };
+        let key = "yel:std/{module}.{func}";
+        if g.funcs.has(key) { key } else { "" }
+    }
+
+    // a WIT async func's wrapper (WASI 0.3), as IR: a future, as a yel async func's call is (its
+    // start s_<name>, its step u_<name>, its frame the task's). The import is called async-lowered
+    // ([async-lower]<name>: the params flat, past 4 a pointer to them all, and a pointer for the
+    // result); done at once, the result lifted, else the subtask waited for (the host's event wakes
+    // its task), then dropped and the result lifted. Natively a future from std's host (its start),
+    // or the runtime's C (wasi-native.h: yn_<name>, a timer for a clock's wait)
+    async-import-wrapper-ir: func(g: Gen, x: Extern) {
+        let k = mangle(x.name);
+        let n = x.params.len();
+        let pts = x.param-types;
+        let rt = x.result;
+        let pflat = params-flat(g, pts);
+        let by-memory = pflat.len() > 4;
+        let has-result = !is-unit-type(rt);
+        let usize = Type.num("usize");
+        let u64 = Type.num("u64");
+        let u32 = Type.num("u32");
+        let s32 = Type.num("s32");
+        let bool = Type.bool-type;
+        let future = Type.future-type(rt);
+        // natively
+        let host = host-key(g, x);
+        let native = helper-func(g, "s_" + k, future, false);
+        native.build = "native";
+        let given: list<Node> = [];
+        for i in 0..n { given.push(local(helper-local(native, pts[i], "a{i}", true), pts[i])); }
+        if host != "" {
+            let step = g.funcs[host].c-name;
+            native.body.push(return-stmt(call(host, "s" + step.substring(1, step.len()), given, future, fx().call)));
+        } else {
+            g.helper-protos.push("#if !defined(__wasm__) && !defined(YN_{k})");
+            g.helper-protos.push("#error \"{c-escape(x.wit-module)}#{c-escape(x.wit-name)}: no native implementation (runtime/wasi-native.h): build it as a component\"");
+            g.helper-protos.push("#endif");
+            native.body.push(return-stmt(runtime-call("yn_" + k, given, future)));
+        }
+        // the core import
+        let core-params: list<Type> = [];
+        if by-memory { core-params.push(usize); } else { for flat in pflat { core-params.push(core-type(flat)); } }
+        if has-result { core-params.push(usize); }
+        let imp = "y_imp_" + k;
+        declare-core-import(g, imp, x.wit-module, "[async-lower]" + x.wit-name, core-params, s32, "", true);
+        // the step
+        let f = helper-func(g, "u_" + k, rt, false);
+        f.build = "wasi";
+        f.async = true;
+        f.states = 1;
+        let a: list<s64> = [];
+        for i in 0..n { a.push(helper-local(f, pts[i], "a{i}", true)); }
+        let out = f.body;
+        let args: list<Node> = [];
+        if by-memory {
+            let all = Type.canonical-type(Type.tuple-type(pts));
+            let p = helper-local(f, all, "p", false);
+            for i in 0..n {
+                set-site(g, x.wit-module, x.wit-name, pts, i);
+                let ty = pts[i];
+                let param = a[i];
+                lower-into(g, ty, { -> abi-field(local(p, all), ["f{i}",], abi-of(g, ty)) }, { -> local(param, ty) }, out);
+            }
+            args.push(convert(usize, address-of(local(p, all))));
+        } else if pflat.len() > 0 {
+            let slots: list<s64> = [];
+            for index in 0..pflat.len() { slots.push(helper-local(f, u64, "s{index}", false)); }
+            let slot = 0;
+            for i in 0..n {
+                set-site(g, x.wit-module, x.wit-name, pts, i);
+                let ty = pts[i];
+                let param = a[i];
+                let lowered = helper-local(f, abi-of(g, ty), "l{i}", false);
+                lower-into(g, ty, { -> local(lowered, abi-of(g, ty)) }, { -> local(param, ty) }, out);
+                slots-ir(g, ty, { -> local(lowered, abi-of(g, ty)) }, slots, slot, true, out);
+                slot += flat-types(g, ty).len();
+            }
+            for index in 0..pflat.len() { args.push(from-slot-ir(pflat[index], local(slots[index], u64))); }
+        }
+        // the result, where the host writes it
+        let ret = helper-local(f, abi-of(g, rt), "ret", false);
+        if has-result { args.push(convert(usize, address-of(local(ret, abi-of(g, rt))))); }
+        set-site(g, x.wit-module, x.wit-name, pts, n);
+        let lifted = { -> if has-result { lift-from(g, rt, { -> local(ret, abi-of(g, rt)) }) } else { unit-const() } };
+        let status = helper-local(f, s32, "status", false);
+        out.push(assign(status, runtime-call(imp, args, s32)));
+        // returned at once (2: its result written)
+        out.push(if-stmt(bin("==", bool, bin("&", s32, local(status, s32), int-const(15, s32)), int-const(2, s32)), [return-stmt(lifted()),], []));
+        // else its subtask waited for: woken once the host's event comes
+        let sub = helper-local(f, u32, "sub", false);
+        out.push(assign(sub, bin(">>", u32, convert(u32, local(status, s32)), int-const(4, u32))));
+        out.push(runtime-call("y_async_host_wait", [local(sub, u32),], Type.unit-type));
+        out.push(loop-stmt(none, none, [
+            suspend-stmt(1),
+            resume-stmt(1),
+            if-stmt(runtime-call("y_async_host_done", [local(sub, u32),], bool), [break-stmt(-1),], []),
+        ], -1));
+        out.push(runtime-call("y_async_host_drop", [local(sub, u32),], Type.unit-type));
+        out.push(return-stmt(lifted()));
+    }
+
+}
+
+// ================================================================ exports
+
+module gen {
+    // a func of an exported module (`export module api`), as IR: the component's export
+    // <package>/<module>[@version]#<func> (y_exp_<name>), which lifts its arguments, calls it, and
+    // lowers its result; and its post-return (cabi_post_…), which frees what the result was
+    // lowered into and is a turn's end (the collector may run: nothing of the component is on the
+    // stack)
+    export-wrapper-ir: func(g: Gen, f: Func, iface: string) {
+        let k = mangle(f.name);
+        let fname = export-name(f.name);
+        let pts = g.wit-sigs[f.name].params;
+        let rt = g.wit-sigs[f.name].result;
+        let n = pts.len();
+        let pflat = params-flat(g, pts);
+        let by-memory = pflat.len() > 16;
+        let rflat = flat-types(g, rt);
+        let usize = Type.num("usize");
+        let u64 = Type.num("u64");
+        let address = Type.address-type;
+        let core-result = if rflat.len() == 1 { core-type(rflat[0]) } else if rflat.len() > 1 { usize } else { Type.unit-type };
+        let name = "{iface}#{fname}";
+        let e = helper-func(g, "y_exp_" + k, core-result, rflat.len() == 0);
+        e.export-name = name;
+        let p: list<s64> = [];
+        if by-memory { p.push(helper-local(e, usize, "p0", true)); }
+        else { for index in 0..pflat.len() { p.push(helper-local(e, core-type(pflat[index]), "p{index}", true)); } }
+        let out = e.body;
+        out.push(runtime-call("y_ready", [], Type.unit-type));
+        for n in globals-start(g) { out.push(n); }
+        let args = lift-export-args(g, e, iface, fname, pts, pflat, by-memory, p);
+        let key = if g.funcs.has(f.name) { f.name } else { "u_" + k };
+        let called = call(key, "u_" + k, args, rt, fx().call);
+        if is-unit-type(rt) {
+            out.push(called);
+            out.push(return-stmt(unit-const()));
+        } else {
+            let r = helper-local(e, rt, "r", false);
+            out.push(assign(r, called));
+            set-site(g, "[export]" + iface, fname, pts, n);
+            if rflat.len() > 1 {
+                let ret = helper-local(e, address, "ret", false);
+                out.push(assign(ret, runtime-call("y_abi_temp", [size-of(Type.canonical-type(rt)),], address)));
+                lower-into(g, rt, { -> deref(local(ret, address), Type.canonical-type(rt)) }, { -> local(r, rt) }, out);
+                out.push(return-stmt(convert(usize, local(ret, address))));
+            } else if rflat.len() == 1 {
+                let lowered = helper-local(e, abi-of(g, rt), "ar", false);
+                lower-into(g, rt, { -> local(lowered, abi-of(g, rt)) }, { -> local(r, rt) }, out);
+                let rs = [helper-local(e, u64, "rs0", false),];
+                slots-ir(g, rt, { -> local(lowered, abi-of(g, rt)) }, rs, 0, true, out);
+                out.push(return-stmt(from-slot-ir(rflat[0], local(rs[0], u64))));
+            } else {
+                out.push(return-stmt(unit-const()));
+            }
+        }
+        // the post-return
+        let post = helper-func(g, "y_post_" + k, Type.unit-type, true);
+        post.export-name = "cabi_post_" + name;
+        if rflat.len() > 0 { let _ = helper-local(post, core-result, "r", true); }
+        post.body.push(runtime-call("y_abi_free_temps", [], Type.unit-type));
+        post.body.push(runtime-call("y_turn_end", [], Type.unit-type));
+    }
+
+    // an exported async func (WIT's async func, lifted with a callback: WASI 0.3), as IR: the lift
+    // ([async-lift]<iface>#<name>) lifts its arguments, starts its call as a root (the executor
+    // runs its tasks), and has the runtime drive it (y_export_drive: EXIT once it is done, its
+    // result given by [task-return]<name>, else WAIT on its waitable set); the callback
+    // ([callback][async-lift]…) takes each event, wakes the task waiting for it, and drives them
+    // again. A component's only (wasi)
+    async-export-wrapper-ir: func(g: Gen, f: Func, iface: string) {
+        let k = mangle(f.name);
+        let fname = export-name(f.name);
+        let pts = g.wit-sigs[f.name].params;
+        let rt = g.wit-sigs[f.name].result;
+        let n = pts.len();
+        let pflat = params-flat(g, pts);
+        let by-memory = pflat.len() > 16;
+        let rflat = flat-types(g, rt);
+        let name = "{iface}#{fname}";
+        let usize = Type.num("usize");
+        let u64 = Type.num("u64");
+        let u32 = Type.num("u32");
+        let s32 = Type.num("s32");
+        let address = Type.address-type;
+        let root-type = Type.future-type(Type.unit-type);
+        // task.return: the result's flat values (past 16, a pointer to them)
+        let returned: list<Type> = [];
+        if rflat.len() > 16 { returned.push(usize); } else { for flat in rflat { returned.push(core-type(flat)); } }
+        let task-return = "y_tr_" + k;
+        declare-core-import(g, task-return, "[export]" + iface, "[task-return]" + fname, returned, Type.unit-type, "", true);
+        // its result given (the root done)
+        let fin = helper-func(g, "y_fin_" + k, Type.unit-type, true);
+        fin.build = "wasi";
+        let root = helper-local(fin, root-type, "root", true);
+        if is-unit-type(rt) {
+            fin.body.push(runtime-call(task-return, [], Type.unit-type));
+        } else {
+            let r = helper-local(fin, rt, "r", false);
+            fin.body.push(assign(r, pure-call(result-fn(g, represented(rt)), [local(root, root-type),], rt)));
+            let lowered = helper-local(fin, abi-of(g, rt), "ar", false);
+            set-site(g, "[export]" + iface, fname, pts, n);
+            lower-into(g, rt, { -> local(lowered, abi-of(g, rt)) }, { -> local(r, rt) }, fin.body);
+            if rflat.len() > 16 {
+                fin.body.push(runtime-call(task-return, [convert(usize, address-of(local(lowered, abi-of(g, rt)))),], Type.unit-type));
+            } else {
+                let slots: list<s64> = [];
+                for index in 0..rflat.len() { slots.push(helper-local(fin, u64, "s{index}", false)); }
+                slots-ir(g, rt, { -> local(lowered, abi-of(g, rt)) }, slots, 0, true, fin.body);
+                let values: list<Node> = [];
+                for index in 0..rflat.len() { values.push(from-slot-ir(rflat[index], local(slots[index], u64))); }
+                fin.body.push(runtime-call(task-return, values, Type.unit-type));
+            }
+        }
+        fin.body.push(runtime-call("y_abi_free_temps", [], Type.unit-type));
+        let run = g.funcs["yel:std/async.run-ready-of"].c-name;
+        let runner = func-ref("yel:std/async.run-ready-of", run, run, address);
+        // the lift
+        let e = helper-func(g, "y_exp_" + k, s32, false);
+        e.build = "wasi";
+        e.export-name = "[async-lift]" + name;
+        let p: list<s64> = [];
+        if by-memory { p.push(helper-local(e, usize, "p0", true)); }
+        else { for index in 0..pflat.len() { p.push(helper-local(e, core-type(pflat[index]), "p{index}", true)); } }
+        e.body.push(runtime-call("y_ready", [], Type.unit-type));
+        for n in globals-start(g) { e.body.push(n); }
+        let args = lift-export-args(g, e, iface, fname, pts, pflat, by-memory, p);
+        let started = helper-local(e, root-type, "root", false);
+        let key = if g.funcs.has(f.name) { f.name } else { "u_" + k };
+        e.body.push(assign(started, call(key, "s_" + k, args, root-type, fx().call)));
+        e.body.push(runtime-call("yel_async_spawn", [local(started, root-type),], root-type));
+        e.body.push(runtime-call("y_export_finish", [local(started, root-type), site-func("y_fin_" + k, "void (*)(y_async *)"),], Type.unit-type));
+        e.body.push(return-stmt(runtime-call("y_export_drive", [local(started, root-type), runner,], s32)));
+        // the callback
+        let cb = helper-func(g, "y_cb_" + k, s32, false);
+        cb.build = "wasi";
+        cb.export-name = "[callback][async-lift]" + name;
+        let event = helper-local(cb, s32, "event", true);
+        let waitable = helper-local(cb, s32, "waitable", true);
+        let code = helper-local(cb, s32, "code", true);
+        cb.body.push(runtime-call("y_ready", [], Type.unit-type));
+        for n in globals-start(g) { cb.body.push(n); }
+        let woken = runtime-call("y_async_host_event", [convert(u32, local(event, s32)), convert(u32, local(waitable, s32)), convert(u32, local(code, s32)),], root-type);
+        let runner-again = func-ref("yel:std/async.run-ready-of", run, run, address);
+        cb.body.push(return-stmt(runtime-call("y_export_drive", [woken, runner-again,], s32)));
+    }
+
+    // an export's arguments lifted into e's locals (from the struct p0 points to, else the flat
+    // values in params p), each rooted while the next is made (e's roots); their values
+    lift-export-args: func(g: Gen, e: IrFunc, iface: string, fname: string, pts: list<Type>, pflat: list<string>, by-memory: bool, p: list<s64>) -> list<Node> {
+        let usize = Type.num("usize");
+        let u64 = Type.num("u64");
+        let address = Type.address-type;
+        let out = e.body;
+        let args: list<Node> = [];
+        if by-memory {
+            let all = Type.canonical-type(Type.tuple-type(pts));
+            let pp = helper-local(e, address, "pp", false);
+            out.push(assign(pp, convert(address, local(p[0], usize))));
+            for i in 0..pts.len() {
+                let ty = pts[i];
+                set-site(g, "[export]" + iface, fname, pts, i);
+                let a = helper-local(e, ty, "a{i}", false);
+                out.push(assign(a, lift-from(g, ty, { -> abi-field(deref(local(pp, address), all), ["f{i}",], abi-of(g, ty)) })));
+                args.push(local(a, ty));
+            }
+            out.push(runtime-call("free", [local(pp, address),], Type.unit-type));
+        } else if pflat.len() > 0 {
+            let slots: list<s64> = [];
+            for index in 0..pflat.len() {
+                let s = helper-local(e, u64, "s{index}", false);
+                slots.push(s);
+                out.push(assign(s, to-slot-ir(pflat[index], local(p[index], core-type(pflat[index])))));
+            }
+            let at = 0;
+            for i in 0..pts.len() {
+                let ty = pts[i];
+                let lowered = helper-local(e, abi-of(g, ty), "l{i}", false);
+                slots-ir(g, ty, { -> local(lowered, abi-of(g, ty)) }, slots, at, false, out);
+                at += flat-types(g, ty).len();
+                set-site(g, "[export]" + iface, fname, pts, i);
+                let a = helper-local(e, ty, "a{i}", false);
+                out.push(assign(a, lift-from(g, ty, { -> local(lowered, abi-of(g, ty)) })));
+                args.push(local(a, ty));
+            }
+        }
+        args
+    }
+
+    // ================================================================ an exported module as WIT
+
+    // a yel name as WIT: kebab-case lower (TokenKind is token-kind), % before a WIT keyword
+    wit-ident: func(n: string) -> string {
+        let out: list<string> = [];
+        for i in 0..n.len() {
+            let c = n.byte-at(i);
+            if c >= 65 && c <= 90 {
+                if i > 0 && n.byte-at(i - 1) != 45 { out.push("-"); }
+                out.push(from-byte(c + 32));
+            } else {
+                out.push(from-byte(c));
+            }
+        }
+        let w = out.join("");
+        let keywords = [
+            "use", "type", "func", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32",
+            "f64",
+            "float32", "float64", "char", "record", "resource", "own", "borrow", "flags", "variant",
+            "enum", "bool",
+            "string", "option", "result", "future", "stream", "list", "as", "from", "static",
+            "interface", "tuple",
+            "import", "export", "world", "package", "constructor", "include", "with", "async",
+            "error-context",
+        ];
+        if contains(keywords, w) { "%" + w } else { w }
+    }
+
+    // a type as WIT (named: the name the interface gives it)
+    wit-of: func(g: Gen, t: Type) -> string {
+        match t {
+            num(n) => n,
+            bool-type => "bool",
+            char-type => "char",
+            string-type => "string",
+            buffer-type => {
+                diagnostics.fatal(g.context, diagnostics.error-at(g.file, buffer-crossing(g)))
+            }
+            list-type(x) => "list<{wit-of(g, x)}>",
+            func-type(f) => {
+                diagnostics.fatal(g.context, diagnostics.error-at(g.file, "a func value ({show-type(t)}) cannot cross a component's boundary: WIT has none"))
+            }
+            fixed-list(x) => "list<{wit-of(g, x.item)}, {x.len}>",
+            option-type(x) => "option<{wit-of(g, x)}>",
+            result-type(r) => {
+                let ok = match r.ok {
+                    unit-type => "_",
+                    _ => wit-of(g, r.ok),
+                };
+                match r.err {
+                    unit-type => if ok == "_" { "result" } else { "result<{ok}>" },
+                    _ => "result<{ok}, {wit-of(g, r.err)}>",
+                }
+            }
+            tuple-type(xs) => {
+                let parts: list<string> = [];
+                for x in xs { parts.push(wit-of(g, x)); }
+                "tuple<{parts.join(", ")}>"
+            }
+            named(n) => wit-ident(base-name(name-text(n))),
+            singleton(s) => set-wit(g, t),
+            stream-type(x) => match x.item {
+                unit-type => "stream",
+                _ => "stream<{wit-of(g, x.item)}>",
+            },
+            future-type(x) => match x {
+                unit-type => "future",
+                _ => "future<{wit-of(g, x)}>",
+            },
+            range-type(r) => set-wit(g, t),
+            union-type(xs) => set-wit(g, t),
+            anon-record(r) => set-ident(g, t),
+            _ => "_",
+        }
+    }
+
+    set-wit: func(g: Gen, t: Type) -> string {
+        if crossing(t) == "checked" { return wit-of(g, representation(t)); }
+        set-ident(g, t)
+    }
+
+    // the named types a type needs (itself and what is inside), into out (once each)
+    named-types: func(g: Gen, t: Type, out: list<string>) {
+        match t {
+            list-type(x) => named-types(g, x, out),
+            fixed-list(x) => named-types(g, x.item, out),
+            option-type(x) => named-types(g, x, out),
+            result-type(r) => {
+                named-types(g, r.ok, out);
+                named-types(g, r.err, out);
+            }
+            tuple-type(xs) => { for x in xs { named-types(g, x, out); } }
+            // an alias of a literal or union type: its enum or variant (and its kinds' types)
+            singleton(s) => set-named-types(g, t, out),
+            stream-type(x) => named-types(g, x.item, out),
+            future-type(x) => named-types(g, x, out),
+            range-type(r) => set-named-types(g, t, out),
+            union-type(xs) => set-named-types(g, t, out),
+            // an anonymous record's alias: a WIT record (and its fields' types)
+            anon-record(r) => {
+                let k = g.set-names[show-type(t)];
+                if contains(out, k) { return; }
+                out.push(k);
+                for x in r.types { named-types(g, x, out); }
+            }
+            named(n) => {
+                if contains(out, name-text(n)) { return; }
+                out.push(name-text(n));
+                if g.records.has(n) {
+                    for x in wit-field-types(g, n) {
+                        named-types(g, x, out);
+                    }
+                }
+                if g.variants.has(n) {
+                    for k in g.variants[n].cases {
+                        named-types(g, wit-payload(g, n, k.name), out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    set-named-types: func(g: Gen, t: Type, out: list<string>) {
+        let how = crossing(t);
+        if how == "checked" {
+            named-types(g, representation(t), out);
+            return;
+        }
+        let k = g.set-names[show-type(t)];
+        if contains(out, k) { return; }
+        out.push(k);
+        if how == "variant" { for x in kinds(t) { named-types(g, x, out); } }
+    }
+
+    // an exported module's WIT interface: its funcs, and the types they need (a WIT interface's
+    // by use, a yel one defined in it)
+    wit-interface: func(g: Gen, m: string, funcs: list<Func>, out: list<string>) {
+        let types: list<string> = [];
+        for f in funcs {
+            for t in g.wit-sigs[f.name].params { named-types(g, t, types); }
+            named-types(g, g.wit-sigs[f.name].result, types);
+        }
+        out.push(c"interface {wit-ident(m)} {");
+        for n in types {
+            let type-name = intern(n);
+            if find-byte(n, 58).unwrap-or(-1) > 0 {
+                // a WIT interface's type: used from it
+                let dot = n.len() - base-name(n).len() - 1;
+                let iface = n.substring(0, dot);
+                let version = if g.wit-versions.has(iface) {
+                    "@" + g.wit-versions[iface]
+                } else {
+                    ""
+                };
+                out.push(c"  use {iface}{version}.{{wit-ident(base-name(n))}};");
+            } else if g.set-types.has(n) {
+                // a literal or union type's alias: an enum of its strings, a variant of its kinds
+                let t = g.set-types[n];
+                let fields: list<string> = [];
+                match t {
+                    anon-record(r) => {
+                        for i in 0..r.fields.len() {
+                            fields.push("{wit-ident(r.fields[i])}: {wit-of(g, r.types[i])}");
+                        }
+                    }
+                    _ => {}
+                }
+                if fields.len() > 0 {
+                    out.push(c"  record {wit-ident(base-name(n))} { {fields.join(", ")} }");
+                } else if crossing(t) == "enum" {
+                    let cases: list<string> = [];
+                    for v in enum-values(t) { cases.push(wit-ident(v)); }
+                    out.push(c"  enum {wit-ident(base-name(n))} { {cases.join(", ")} }");
+                } else {
+                    let cases: list<string> = [];
+                    for k in kinds(t) { cases.push("{kind-case(k)}({wit-of(g, k)})"); }
+                    out.push(c"  variant {wit-ident(base-name(n))} { {cases.join(", ")} }");
+                }
+            } else if g.records.has(type-name) {
+                let r = g.records[type-name];
+                let fields: list<string> = [];
+                for i in 0..r.fields.len() {
+                    fields.push("{wit-ident(r.fields[i])}: {wit-of(g, wit-field-types(g, type-name)[i])}");
+                }
+                out.push(c"  record {wit-ident(base-name(n))} { {fields.join(", ")} }");
+            } else if g.flags.has(type-name) {
+                let names: list<string> = [];
+                for x in g.flags[type-name].flags { names.push(wit-ident(x)); }
+                out.push(c"  flags {wit-ident(base-name(n))} { {names.join(", ")} }");
+            } else {
+                let v = g.variants[type-name];
+                let cases: list<string> = [];
+                for k in v.cases {
+                    if k.has-payload {
+                        cases.push("{wit-ident(k.name)}({wit-of(g, wit-payload(g, type-name, k.name))})");
+                    } else {
+                        cases.push(wit-ident(k.name));
+                    }
+                }
+                let kind = if is-enum(g, type-name) { "enum" } else { "variant" };
+                out.push(c"  {kind} {wit-ident(base-name(n))} { {cases.join(", ")} }");
+            }
+        }
+        // WIT gives an interface's types and funcs one set of names
+        let type-names: list<string> = [];
+        for n in types { type-names.push(wit-ident(base-name(n))); }
+        for f in funcs {
+            let fname = wit-ident(base-name(f.name));
+            if contains(type-names, fname) {
+                let d = diagnostics.error(f.span, "func {base-name(f.name)} has the name of a type of module {m}", "");
+                diagnostics.note(d, "WIT gives an interface's types and funcs one set of names");
+                diagnostics.fatal(g.context, d);
+            }
+        }
+        for f in funcs {
+            let params: list<string> = [];
+            let sig = g.wit-sigs[f.name];
+            for i in 0..f.params.len() {
+                params.push("{wit-ident(f.params[i])}: {wit-of(g, sig.params[i])}");
+            }
+            let result = match sig.result {
+                unit-type => "",
+                _ => " -> {wit-of(g, sig.result)}",
+            };
+            let kind = if f.is-async { "async func" } else { "func" };
+            out.push("  {wit-ident(base-name(f.name))}: {kind}({params.join(", ")}){result};");
+        }
+        out.push(c"}");
+        out.push("");
+    }
+}

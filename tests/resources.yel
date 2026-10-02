@@ -1,0 +1,47 @@
+// WIT resources: a handle (u32) the host owns. A static func or constructor is called on the type
+// (types.tcp-socket.create(...)), a method on a handle (s.bind(...)), and drop gives it back.
+// Natively the runtime's C keeps the handles (runtime/wasi-native.h); in a component, the host.
+
+from "wasi:sockets" include types;
+from "wasi:filesystem" include preopens;
+from "wasi:cli" include terminal-stdout;
+
+main: func(argv: list<string>) -> s32 {
+    match types.tcp-socket.create(types.ip-address-family.ipv4) {
+        ok(s) => {
+            print("family: {s.get-address-family()}\n");
+            print("listening: {s.get-is-listening()}\n");
+            let loopback = types.ip-socket-address.ipv4({ port: 0, address: (127, 0, 0, 1), });
+            match s.bind(loopback) {
+                ok => print("bound\n"),
+                err(e) => print("bind: {e}\n"),
+            }
+            match s.get-local-address() {
+                ok(a) => {
+                    match a {
+                        ipv4(v4) => print("local: {v4.address}, a port chosen: {v4.port > 0}\n"),
+                        ipv6(v6) => print("local: ipv6\n"),
+                    }
+                }
+                err(e) => print("local: {e}\n"),
+            }
+            s.drop();
+        }
+        err(e) => print("no socket: {e}\n"),
+    }
+    // the handles are values: a list of them, each dropped
+    let dirs = preopens.get-directories();
+    for d in dirs {
+        print("preopen: {d.1}\n");
+        d.0.drop();
+    }
+    // stdout is not a terminal where the tests run
+    match terminal-stdout.get-terminal-stdout() {
+        some(t) => {
+            print("stdout: a terminal\n");
+            t.drop();
+        }
+        none => print("stdout: not a terminal\n"),
+    }
+    0
+}

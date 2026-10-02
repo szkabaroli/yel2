@@ -1,0 +1,141 @@
+// Maps: values by keys of any type (K: equal as == says, hashed to match), in the order they were
+// set, as JS's Map and Rust's HashMap: map.new(), m.has(k), m.get(k) (an option), m[k] (a panic
+// where it has none), m.set(k, v), m.remove(k), m.keys(), m.values(), m.len(); sets (set.yel) are maps whose values are (). The table is here, over memory.yel's
+// intrinsics: entries in the order they were made, and an index (open addressing) from a key's
+// hash to its entry. The runtime only makes a map's memory.
+
+module map {
+    // a new map, empty (map.new())
+    new: func<K, V>() -> map<K, V> { memory.new-map(8) }
+
+    // whether m has key
+    has: func<K, V>(m: map<K, V> & readonly, key: K) -> bool { find-entry(m, key) >= 0 }
+
+    // key's value (m[key]): a panic where m has none
+    at: func<K, V>(m: map<K, V> & readonly, key: K) -> V {
+        let entry = find-entry(m, key);
+        if entry < 0 { panic("no key in the map: {key:?}"); }
+        memory.value-at(m, entry)
+    }
+
+    // key's value; none where m has none
+    get: func<K, V>(m: map<K, V> & readonly, key: K) -> option<V> {
+        let entry = find-entry(m, key);
+        if entry < 0 { none } else { some(memory.value-at(m, entry)) }
+    }
+
+    // key's value, or otherwise where m has none
+    get-or: func<K, V>(m: map<K, V> & readonly, key: K, otherwise: V) -> V {
+        let entry = find-entry(m, key);
+        if entry < 0 { otherwise } else { memory.value-at(m, entry) }
+    }
+
+    // key's value set (added where it is new): m[key] = value
+    set: func<K, V>(m: map<K, V>, key: K, value: V) {
+        let entry = insert-entry(m, key);
+        memory.set-value(m, entry, value);
+    }
+
+    // key taken out; whether m had it (the index made again)
+    remove: func<K, V>(m: map<K, V>, key: K) -> bool {
+        let entry = find-entry(m, key);
+        if entry < 0 { return false; }
+        memory.set-entry-hash(m, entry, 0);
+        memory.clear-entry(m, entry);
+        memory.set-map-length(m, memory.map-length(m) - 1);
+        reindex(m);
+        true
+    }
+
+    // m's keys, in the order they were first set
+    keys: func<K, V>(m: map<K, V> & readonly) -> list<K> {
+        let out: list<K> = [];
+        for entry in 0..memory.entry-count(m) {
+            if memory.entry-hash(m, entry) != 0 { out.push(memory.key-at(m, entry)); }
+        }
+        out
+    }
+
+    // m's values, in the order their keys were first set
+    values: func<K, V>(m: map<K, V> & readonly) -> list<V> {
+        let out: list<V> = [];
+        for entry in 0..memory.entry-count(m) {
+            if memory.entry-hash(m, entry) != 0 { out.push(memory.value-at(m, entry)); }
+        }
+        out
+    }
+
+    // how many keys m has
+    len: func<K, V>(m: map<K, V> & readonly) -> s64 { memory.map-length(m) }
+
+    // the entry that holds key (-1 for none): from the slot its hash picks, the next ones in turn
+    find-entry: func<K, V>(m: map<K, V> & readonly, key: K) -> s64 {
+        let hash = memory.key-hash(m, key);
+        let mask = memory.index-room(m) - 1;
+        let slot = (hash & (mask as u64)) as s64;
+        loop {
+            let entry = memory.index-entry(m, slot) - 1;
+            if entry < 0 { return -1; }
+            if memory.entry-hash(m, entry) == hash && memory.key-at(m, entry) == key { return entry; }
+            slot = (slot + 1) & mask;
+        }
+        -1
+    }
+
+    // key's entry, made (its value zeroed) where m has none
+    insert-entry: func<K, V>(m: map<K, V>, key: K) -> s64 {
+        let found = find-entry(m, key);
+        if found >= 0 { return found; }
+        make-room(m);
+        let entry = memory.entry-count(m);
+        let hash = memory.key-hash(m, key);
+        memory.set-entry-count(m, entry + 1);
+        memory.set-map-length(m, memory.map-length(m) + 1);
+        memory.set-entry-hash(m, entry, hash);
+        memory.set-key(m, entry, key);
+        place(m, entry, hash);
+        entry
+    }
+
+    // room for one more entry: the removed ones dropped, or twice the room (a new table, the
+    // entries added to it in order, taken as m's)
+    make-room: func<K, V>(m: map<K, V>) {
+        let room = memory.entry-room(m);
+        if memory.entry-count(m) < room { return; }
+        let grown: map<K, V> = memory.new-map(if memory.map-length(m) * 2 >= room { room * 2 } else { room });
+        for entry in 0..memory.entry-count(m) {
+            let hash = memory.entry-hash(m, entry);
+            if hash != 0 {
+                let moved = memory.entry-count(grown);
+                memory.set-entry-count(grown, moved + 1);
+                memory.set-entry-hash(grown, moved, hash);
+                memory.set-key(grown, moved, memory.key-at(m, entry));
+                memory.set-value(grown, moved, memory.value-at(m, entry));
+                place(grown, moved, hash);
+            }
+        }
+        memory.adopt(m, grown);
+    }
+
+    // an entry put in the index: in the first empty slot from the one its hash picks
+    place: func<K, V>(m: map<K, V>, entry: s64, hash: u64) {
+        let mask = memory.index-room(m) - 1;
+        let slot = (hash & (mask as u64)) as s64;
+        loop {
+            if memory.index-entry(m, slot) == 0 {
+                memory.set-index-entry(m, slot, entry + 1);
+                return;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    // the index made again for the entries still there
+    reindex: func<K, V>(m: map<K, V>) {
+        memory.clear-index(m);
+        for entry in 0..memory.entry-count(m) {
+            let hash = memory.entry-hash(m, entry);
+            if hash != 0 { place(m, entry, hash); }
+        }
+    }
+}

@@ -1,0 +1,146 @@
+// a component of exports only: each func called by the host (wasmtime --invoke), its arguments
+// lifted and its result lowered through the canonical ABI
+
+package test:component@0.1.0;
+
+from "wasi:clocks" include monotonic-clock;
+
+export module api {
+    record Point { x: s32, y: s32, }
+
+    enum Dir { north, south, }
+
+    variant Shape { dot, circle(f64), rect(Point), }
+
+    flags Access { read, write, }
+
+    shift: func(p: Point, by: s32) -> Point { { x: p.x + by, y: p.y + by, } }
+
+    turn: func(d: Dir) -> Dir {
+        match d {
+            north => Dir.south,
+            south => Dir.north,
+        }
+    }
+
+    area: func(s: Shape) -> f64 {
+        match s {
+            dot => 0.0,
+            circle(r) => 3.0 * r * r,
+            rect(p) => -1.0,
+        }
+    }
+
+    grow: func(s: Shape) -> Shape {
+        match s {
+            circle(r) => Shape.circle(r * 2.0),
+            let other => other,
+        }
+    }
+
+    grant: func(a: Access) -> Access { a | Access.read }
+
+    greet: func(name: string, times: u8) -> string {
+        let parts: list<string> = [];
+        for i in 0..times { parts.push("hi {name}"); }
+        parts.join(", ")
+    }
+
+    lengths: func(words: list<string>) -> list<tuple<string, s32>> {
+        let out: list<tuple<string, s32>> = [];
+        for w in words { out.push((w, w.len() as s32)); }
+        out
+    }
+
+    divide: func(a: s64, b: s64) -> result<s64, string> {
+        if b == 0 { err("division by zero") } else { ok(a / b) }
+    }
+
+    first: func(xs: list<s32>) -> option<s32> {
+        if xs.len() == 0 { none } else { some(xs[0]) }
+    }
+
+    // literal and union types: an alias of string literals crosses as a WIT enum, of kinds as a
+    // WIT variant (a case each), of integer literals as their type (checked when lifted)
+    type method = "get" | "post" | "put";
+
+    type value = s32 | string | bool;
+
+    type level = 1 | 2 | 3;
+
+    // globals: made before the export's code runs (each call a new instance: its first)
+    let visits: s32 = 40;
+    let names: list<string>;
+
+    tally: func(name: string) -> s32 {
+        names.push(name);
+        visits += 1;
+        visits + names.len() as s32
+    }
+
+    // a range crosses as its type, checked when lifted
+    type percent = 0..=100;
+
+    half: func(p: percent) -> percent {
+        match (p / 2) as? percent {
+            some(let h) => h,
+            none => 0,
+        }
+    }
+
+    // an alias of an anonymous record crosses as a WIT record
+    type span = { start: s32, end: s32, label: method };
+
+    next-method: func(m: method) -> method {
+        match m {
+            "get" => "post",
+            "post" => "put",
+            "put" => "get",
+        }
+    }
+
+    describe: func(v: value) -> string {
+        match v {
+            let n: s32 => "the number {n}",
+            let s: string => "the string {s}",
+            let b: bool => "the bool {b}",
+        }
+    }
+
+    bump: func(v: value) -> value { if v is s32 { v + 1 } else { v } }
+
+    methods: func(ms: list<method>) -> option<method> {
+        if ms.len() == 0 {
+            none
+        } else {
+            some(ms[ms.len() - 1])
+        }
+    }
+
+    // async exports (WASI 0.3): lifted with a callback, the host's clock waited for, two calls at
+    // once in one
+    nap: async func(ms: u64) -> u64 {
+        wait monotonic-clock.wait-for(ms * 1000000);
+        ms
+    }
+
+    both-naps: async func(a: u64, b: u64) -> string {
+        let fa = start nap(a);
+        let fb = start nap(b);
+        let first = wait fa | fb;
+        let all = wait { x: fa, y: fb };
+        "first {first}, then {all.x} and {all.y}"
+    }
+
+    widen: func(s: span, by: s32) -> span {
+        { start: s.start - by, end: s.end + by, label: s.label, }
+    }
+
+    raise: func(l: level) -> level {
+        match l {
+            1 => 2,
+            2 => 3,
+            3 => 3,
+        }
+    }
+}

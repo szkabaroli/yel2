@@ -1,0 +1,108 @@
+// Porffor's bench/indirect.js: calls with 0 to 16 arguments, 10 million each, direct and through a
+// func value; each func's body a barrier (black-box, as Porffor's asm volatile) so none is
+// optimized away. JS's run passes 16 arguments to any func; yel's are typed, so each arity has its
+// own run
+
+from "wasi:clocks" include monotonic-clock;
+
+ms: func(t: u64) -> f64 { (monotonic-clock.now() - t) as f64 / 1000000.0 }
+
+zero: func() { black-box(0); }
+
+single: func(a: s32) { black-box(0); }
+
+two: func(a: s32, b: s32) { black-box(0); }
+
+four: func(a: s32, b: s32, c: s32, d: s32) { black-box(0); }
+
+eight: func(a: s32, b: s32, c: s32, d: s32, e: s32, f: s32, g: s32, h: s32) { black-box(0); }
+
+sixteen: func(
+    a: s32,
+    b: s32,
+    c: s32,
+    d: s32,
+    e: s32,
+    f: s32,
+    g: s32,
+    h: s32,
+    i: s32,
+    j: s32,
+    k: s32,
+    l: s32,
+    m: s32,
+    n: s32,
+    o: s32,
+    p: s32,
+) {
+    black-box(0);
+}
+
+run-zero: func(f: func()) {
+    for i in 0..10000000 { f(); }
+}
+
+run-single: func(f: func(s32)) {
+    for i in 0..10000000 { f(i); }
+}
+
+run-two: func(f: func(s32, s32)) {
+    for i in 0..10000000 { f(i, i); }
+}
+
+run-four: func(f: func(s32, s32, s32, s32)) {
+    for i in 0..10000000 { f(i, i, i, i); }
+}
+
+run-eight: func(f: func(s32, s32, s32, s32, s32, s32, s32, s32)) {
+    for i in 0..10000000 { f(i, i, i, i, i, i, i, i); }
+}
+
+run-sixteen: func(
+    f: func(s32, s32, s32, s32, s32, s32, s32, s32, s32, s32, s32, s32, s32, s32, s32, s32)
+) {
+    for i in 0..10000000 { f(i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i); }
+}
+
+main: func() {
+    print("argcount,direct,indirect\n");
+    let t0 = monotonic-clock.now();
+    for i in 0..10000000 {}
+    print("-1,{ms(t0)},0\n");
+    let d0 = monotonic-clock.now();
+    for i in 0..10000000 { zero(); }
+    let direct0 = ms(d0);
+    let r0 = monotonic-clock.now();
+    run-zero(zero);
+    print("0,{direct0},{ms(r0)}\n");
+    let d1 = monotonic-clock.now();
+    for i in 0..10000000 { single(i); }
+    let direct1 = ms(d1);
+    let r1 = monotonic-clock.now();
+    run-single(single);
+    print("1,{direct1},{ms(r1)}\n");
+    let d2 = monotonic-clock.now();
+    for i in 0..10000000 { two(i, i); }
+    let direct2 = ms(d2);
+    let r2 = monotonic-clock.now();
+    run-two(two);
+    print("2,{direct2},{ms(r2)}\n");
+    let d4 = monotonic-clock.now();
+    for i in 0..10000000 { four(i, i, i, i); }
+    let direct4 = ms(d4);
+    let r4 = monotonic-clock.now();
+    run-four(four);
+    print("4,{direct4},{ms(r4)}\n");
+    let d8 = monotonic-clock.now();
+    for i in 0..10000000 { eight(i, i, i, i, i, i, i, i); }
+    let direct8 = ms(d8);
+    let r8 = monotonic-clock.now();
+    run-eight(eight);
+    print("8,{direct8},{ms(r8)}\n");
+    let d16 = monotonic-clock.now();
+    for i in 0..10000000 { sixteen(i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i); }
+    let direct16 = ms(d16);
+    let r16 = monotonic-clock.now();
+    run-sixteen(sixteen);
+    print("16,{direct16},{ms(r16)}\n");
+}

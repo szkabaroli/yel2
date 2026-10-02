@@ -1,0 +1,5 @@
+// error: 4:13: first is generic: a generic func is not a value yet
+first: func<T>(xs: list<T>) -> T { xs[0] }
+main: func() {
+    let f = first;
+}

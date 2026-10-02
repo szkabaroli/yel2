@@ -1,0 +1,6 @@
+// error: 5:35: readonly is wanted here: pick may give back a value another name has (make it in the func, or give back one no one else has)
+pick: func(xs: list<s32>) -> list<s32> { xs }
+main: func() {
+    let open: list<s32> = [1,];
+    let r: list<s32> & readonly = pick(open);
+}

@@ -1,0 +1,30 @@
+record Point { x: s32, y: s32, name: string, }
+variant Shape { circle(s64), square(Point), none, }
+
+area: func(s: Shape) -> s64 {
+    match s {
+        circle(r) => r * r * 3,
+        square(p) => (p.x * p.y) as s64,
+        none => 0,
+    }
+}
+
+first: func(xs: list<s64>) -> option<s64> {
+    if xs.len() == 0 { return none; }
+    some(xs[0])
+}
+
+main: func() -> s32 {
+    let p: Point = { x: 3, y: 4, name: "p", };
+    p.x = 5;
+    let shapes = [Shape.circle(2), Shape.square(p), Shape.none,];
+    let total = 0;
+    for s in shapes { total += area(s); }
+    let pair = (total, p.name);
+    match first([7, 8,]) {
+        some(v) => print("first {v}\n"),
+        none => print("none\n"),
+    }
+    print("{pair.0} {pair.1}\n");
+    0
+}

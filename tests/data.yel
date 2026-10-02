@@ -1,0 +1,74 @@
+// records, variants, enums and match
+
+record Point {
+    x: s32,
+    y: s32,
+}
+
+record Counter { name: string, values: list<s32>, }
+
+enum Color { red, green, blue, }
+
+variant Shape {
+    dot,
+    circle(s32),
+    rect(Point),
+}
+
+area: func(s: Shape) -> s32 {
+    match s {
+        dot => 0,
+        circle(r) => 3 * r * r,
+        rect(corner) => corner.x * corner.y,
+    }
+}
+
+color-name: func(c: Color) -> string {
+    match c {
+        red => "red",
+        green => "green",
+        let other => "not red or green: {other}",
+    }
+}
+
+first-even: func(xs: list<s32>) -> option<s32> {
+    for x in xs {
+        if x % 2 == 0 { return some(x); }
+    }
+    none
+}
+
+describe: func(o: option<s32>) -> string {
+    match o {
+        some(v) => "some {v}",
+        none => "nothing",
+    }
+}
+
+main: func(argv: list<string>) -> s32 {
+    let p: Point = { x: 3, y: 4, };
+    print("p = {p}, p.x + p.y = {p.x + p.y}\n");
+    p.x = 10;
+    p.y += 1;
+    print("moved: {p}\n");
+
+    let shapes = [Shape.dot, Shape.circle(2), Shape.rect({ x: 5, y: 6, }),];
+    for s in shapes { print("{s}: {area(s)}\n"); }
+
+    print("{color-name(Color.red)} {color-name(Color.green)} {color-name(Color.blue)}\n");
+    print("{describe(first-even([1, 3, 8, 5,]))} / {describe(first-even([1, 3,]))}\n");
+
+    let flag = true;
+    let word = match flag {
+        true => "yes",
+        false => "no",
+    };
+    print("{word}\n");
+
+    // a record holding a list, changed through the record
+    let counter: Counter = { name: "hits", values: [], };
+    for i in 0..3 { counter.values.push(i * i); }
+    print("{counter.name}: {counter.values}\n");
+    print("{Shape.circle(1) == Shape.circle(1)} {Shape.circle(1) == Shape.circle(2)} {Color.red == Color.blue}\n");
+    0
+}

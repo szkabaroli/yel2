@@ -1,0 +1,8 @@
+// error: 4:5: the match has no arm for false: add one, or a _ arm
+main: func() -> s32 {
+    let b = true;
+    match b {
+        true => 1,
+        false if b => 0,
+    }
+}

@@ -1,0 +1,11 @@
+// error: 10:16: live is given argument 1 of show readonly, and argument 2 may write it
+show: func(xs: list<s32> & readonly, ys: list<s32>) {
+    let n = xs.len();
+    ys.push(2);
+    print("readonly xs had {n}, now {xs.len()}\n");
+}
+
+main: func() {
+    let live: list<s32> = [1,];
+    show(live, live);
+}

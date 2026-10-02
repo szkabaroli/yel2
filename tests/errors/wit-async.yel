@@ -1,0 +1,6 @@
+// error: 4:5: wait-for is async: wait wait-for(…) for its result, or start wait-for(…) for a future
+from "wasi:clocks" include monotonic-clock;
+main: func() -> s32 {
+    monotonic-clock.wait-for(10);
+    0
+}
