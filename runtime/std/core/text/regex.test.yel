@@ -1,0 +1,65 @@
+// std's regex, tested (yelc test runtime/std/core): regex literals compiled with the program, and
+// what is done with them: test, find (a match's text, place and groups, by number and by name),
+// find-all, replace ($& $1 $<name> $$), replace-each, split; matched by code point
+
+from "std:testing" include expect;
+
+module regex-tests {
+    @(test) tests-and-finds: func() {
+        expect.holds(/\d+/.test("a12b"));
+        expect.holds(!/\d+/.test("abc"));
+
+        let found = expect.some(/(\d{4})-(\d\d)/.find("on 2026-10-05"));
+        expect.equal(found.text, "2026-10");
+        expect.equal((found.start, found.end), (3, 10));
+        expect.equal(found.groups, [some("2026"), some("10"),]);
+        expect.none(/x/.find("abc"));
+    }
+
+    @(test) names-its-groups: func() {
+        let found = expect.some(/(?<year>\d{4})-(?<month>\d\d)(-(?<day>\d\d))?/.find("2026-10"));
+        expect.equal(regex.group(found, "year"), some("2026"));
+        expect.equal(regex.group(found, "month"), some("10"));
+        // a group that took no part, and a name it has not
+        expect.none(regex.group(found, "day"));
+        expect.none(regex.group(found, "week"));
+    }
+
+    @(test) finds-each: func() {
+        expect.equal(/\w+/.find-all("hi there, you").map({ m -> m.text }), ["hi", "there", "you",]);
+        // an empty match: the next search a code point on
+        expect.equal(/x*/.find-all("ab").map({ m -> m.start }), [0, 1, 2,]);
+    }
+
+    @(test) replaces: func() {
+        expect.equal(/o/.replace("foo", "0"), "f0o");
+        expect.equal(/o/.replace-all("foo boo", "0"), "f00 b00");
+        expect.equal(/(\w+)@(\w+)/.replace("ada@yel", "$2 at $1, $&, $$"), "yel at ada, ada@yel, $");
+        expect.equal(/(?<word>\w+)/.replace-all("a b", "[$<word>]"), "[a] [b]");
+        expect.equal(/\d+/.replace-each("1 and 22", { m -> "{m.text.len()}" }), "1 and 2");
+    }
+
+    @(test) splits: func() {
+        expect.equal(/\s*,\s*/.split("a , b,c"), ["a", "b", "c",]);
+        expect.equal(/\s+/.split("a  b c"), ["a", "b", "c",]);
+        expect.equal(/x/.split("abc"), ["abc",]);
+    }
+
+    @(test) takes-flags: func() {
+        expect.holds(/hello/i.test("Say HELLO"));
+        expect.equal(/^\w+$/m.find-all("one\ntwo").map({ m -> m.text }), ["one", "two",]);
+        expect.holds(!/a.b/.test("a\nb"));
+        expect.holds(/a.b/s.test("a\nb"));
+    }
+
+    // a code point, however many bytes: . and a class take one
+    @(test) matches-code-points: func() {
+        expect.equal(expect.some(/./.find("😀a")).text, "😀");
+        expect.equal(expect.some(/[é-ü]+/.find("aéöü b")).text, "éöü");
+        expect.equal(expect.some(/\u{1F600}/.find("x😀y")).start, 1);
+    }
+
+    @(test) shows-as-written: func() {
+        expect.equal("{/a+b/i}", "/a+b/i");
+    }
+}

@@ -1,0 +1,46 @@
+// @(context): a global each task has its own value of (an async context's, as TC39's AsyncContext
+// and Node's AsyncLocalStorage carry one): set in a task, it stays that task's across its waits,
+// whatever the others set meanwhile; a task started takes its starter's as it is then. std's
+// reactive keeps its owner so: a task started under an owner adds its cleanups to that owner, even
+// after a wait
+
+@(context) let request: string = "none";
+
+// sets its own, then waits while the others run
+handle: async func(name: string, ms: s64) -> string {
+    request = name;
+    wait async.sleep(ms);
+    "{name} sees {request}"
+}
+
+// what it was started with
+inherits: async func() -> string {
+    wait async.sleep(1);
+    "the child sees {request}"
+}
+
+// a task started under an owner: its cleanup the owner's, though added after a wait
+background: async func() {
+    wait async.sleep(1);
+    reactive.on-cleanup({ -> print("cleanup of a task started under the owner\n"); });
+}
+
+main: async func() -> s32 {
+    request = "main";
+    let first = start handle("first", 20);
+    let second = start handle("second", 5);
+    request = "parent";
+    let child = start inherits();
+    request = "main again";
+    print("{wait second}\n");
+    print("{wait first}\n");
+    print("{wait child}\n");
+    print("main sees {request}\n");
+
+    let owner = reactive.new-owner();
+    reactive.within(owner, { -> let _ = start background(); });
+    wait async.sleep(10);
+    reactive.dispose(owner);
+    print("disposed\n");
+    0
+}

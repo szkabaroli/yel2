@@ -1,0 +1,46 @@
+// std's format, tested (yelc test runtime/std/core): interpolation specs ("{x:>8}", "{n:08x}",
+// "{f:.2}", "{x:?}") and a type's display func
+
+from "std:testing" include expect;
+
+module format-tests {
+    resource point { x: s32, y: s32, }
+
+    variant shape { circle(f64), square(f64), }
+
+    // how "{p}" shows a point; inside it, "{p}" would be the point's own text
+    display: func(p: point) -> string { "({p.x}, {p.y})" }
+
+    describe: func<T>(value: T) -> string { to-string(value) }
+
+    @(test) shows-by-a-display-func: func() {
+        let p: point = { x: 1, y: -2, };
+        expect.equal("{p} {p:?} {describe(p)}", "(1, -2) \{x: 1, y: -2\} (1, -2)");
+        expect.equal("{shape.circle(1.5)} {shape.circle(1.5):?}", "circle(1.5) circle(1.5)");
+        expect.equal("[{p:>10}]", "[   (1, -2)]");
+    }
+
+    @(test) aligns-text: func() {
+        let name = "yel";
+        expect.equal("[{name}] [{name:?}] [{name:>6}]", "[yel] [\"yel\"] [   yel]");
+        expect.equal("[{name:*^7}] [{name:<5}|] [{"é":.>3}]", "[**yel**] [yel  |] [..é]");
+    }
+
+    @(test) writes-integers: func() {
+        let n: s32 = 255;
+        expect.equal("[{n}] [{n:x}] [{n:X}] [{n:b}] [{n:o}]", "[255] [ff] [FF] [11111111] [377]");
+        expect.equal("[{n:08}] [{n:6}] [{-n:08x}]", "[00000255] [   255] [-00000ff]");
+    }
+
+    @(test) writes-floats: func() {
+        let f = 3.14159;
+        expect.equal("[{f:.2}] [{f:8.3}] [{f:<8.1}|] [{f:08.2}] [{2.5:.0}]", "[3.14] [   3.142] [3.1     |] [00003.14] [2]");
+    }
+
+    @(test) shows-as-written: func() {
+        let n: s32 = 255;
+        expect.equal("[{'c'}] [{'c':?}] [{[1, 2,]:?}] [{some(n):?}]", "[c] ['c'] [[1, 2]] [some(255)]");
+        // a colon inside brackets or a string is the expression's
+        expect.equal("[{["a:b",][0]}]", "[a:b]");
+    }
+}

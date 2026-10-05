@@ -6,7 +6,7 @@
 // the func being built: its IR, the statements being added (the innermost body's), and each yel
 // name's place, scope by scope; the environments it holds (innermost last); the func a closure is
 // made in (whose captured names it reaches through environments); how many closures it has made
-record Codegen {
+resource Codegen {
     g: Gen,
     f: IrFunc,
     out: list<Node>,
@@ -19,19 +19,19 @@ record Codegen {
 }
 
 // a yel name's place: a local (its index), or (env) a field of an environment (a captured binding)
-record Var { local: s64, env: option<Env>, field: string, ty: Type, }
+resource Var { local: s64, env: option<Env>, field: string, ty: Type, }
 
 // an environment: the record the closures made in one unit (a func's, a closure's or a for's body;
 // a for's, one each turn) share, holding its captured bindings and (up) the environment around it,
 // as Porffor's EnvAlloc; rec: the record's key, its fields known once the unit is built
-record Env { rec: string, up: option<Env>, fields: list<string>, types: list<Type>, }
+resource Env { rec: string, up: option<Env>, fields: list<string>, types: list<Type>, }
 
 // an environment a func holds in a local: one it made (up-value: its up, to store), or (a
 // closure's) the one it was made in, its first param
 // what a match arm's pattern binds: a name, its value
-record PatternBinding { name: string, value: Node, mark: Mark, }
+resource PatternBinding { name: string, value: Node, mark: Mark, }
 
-record EnvRef { env: Env, local: s64, up-value: option<Node>, }
+resource EnvRef { env: Env, local: s64, up-value: option<Node>, }
 
 module gen {
     new-local: func(l: Codegen, ty: Type, name: string) -> s64 {
@@ -291,8 +291,11 @@ module gen {
                     name: e.rec,
                     fields: e.fields,
                     field-types: e.types,
+                    value: false,
+                    observable: false,
+                    ignored: [],
                 };
-                g.records.set(intern(e.rec), decl);
+                g.symbols.records.set(intern(e.rec), decl);
                 g.env-decls.push(decl);
                 let ty = Type.named(intern(e.rec));
                 let out = [
@@ -323,7 +326,7 @@ module gen {
     // whether the expression names a variant, enum or flags type (Type in Type.case), not a local
     is-type: func(l: Codegen, e: Expr) -> bool {
         match e.kind {
-            name(n) => (l.g.variants.has(n) || l.g.flags.has(n)) && !is-local(l, name-text(n)),
+            name(n) => (l.g.symbols.variants.has(n) || l.g.symbols.flags.has(n)) && !is-local(l, name-text(n)),
             _ => false,
         }
     }
@@ -332,6 +335,7 @@ module gen {
     codegen-func: func(g: Gen, f: Func, c-name: string) -> IrFunc {
         let fn: IrFunc = {
             key: f.name,
+            span: f.span,
             c-name: c-name,
             name: intern(c-name),
             params: [],
@@ -436,6 +440,7 @@ module gen {
         let c-name = "{l.f.c-name}__c{l.closures}";
         let fn: IrFunc = {
             key: c-name,
+            span: e.span,
             c-name: c-name,
             name: intern(c-name),
             params: [],
@@ -569,6 +574,8 @@ module gen {
             }
             bool-lit(b) => bool-const(b),
             unit => unit-const(),
+            // (the checker gave each its value)
+            directive(d) => panic("a directive #{d.name} not given its value"),
             str-lit(s) => text-const(s),
             name(n) => {
                 match lookup(l, n) {
@@ -579,7 +586,7 @@ module gen {
                 let t = expr-type(g, e);
                 // a func as a value (the checker named it by its key): its adapter, no environment
                 // a global (no local hides it: the checker named it by its key)
-                if g.globals.has(name-text(n)) { return bind(l, global-node(name-text(n), t)); }
+                if g.symbols.globals.has(name-text(n)) { return bind(l, global-node(name-text(n), t)); }
                 if g.funcs.has(name-text(n)) {
                     let c-name = g.funcs[name-text(n)].c-name;
                     let ft = func-typedef(g, t);
@@ -596,7 +603,7 @@ module gen {
                 let displayed: list<Expr> = [];
                 for part in parts {
                     match display-func(l, part.ty) {
-                        some(key) => displayed.push({ kind: ExprKind.call({ name: key, args: [part,], type-args: [], }), span: part.span, ty: Type.string-type, }),
+                        some(key) => displayed.push({ kind: ExprKind.call({ name: key, args: [part,], type-args: [], name-span: nowhere(), }), span: part.span, ty: Type.string-type, }),
                         none => displayed.push(part),
                     }
                 }
@@ -692,7 +699,7 @@ module gen {
                 let t = expr-type(g, e);
                 if is-type(l, f.target) {
                     let tn = expr-name(f.target);
-                    if g.flags.has(intern(tn)) { return const(Constant.int(flag-bit(g, tn, f.name)), t); }
+                    if g.symbols.flags.has(intern(tn)) { return const(Constant.int(flag-bit(g, tn, f.name)), t); }
                     return gen-case(l, e, f.name, none);
                 }
                 let base = gen-expr(l, f.target);
@@ -702,12 +709,23 @@ module gen {
                     // an anonymous record: a value, its field read where it is
                     anon-record(r) => { return load(base, ["f_{mangle(f.name)}",], false, t, false); }
                     named(tn) => {
-                        if g.flags.has(tn) {
+                        if g.symbols.flags.has(tn) {
                             let bits = bin("&", bt, base, const(Constant.int(flag-bit(g, name-text(tn), f.name)), bt));
                             return bin("!=", t, bits, int-const(0, bt));
                         }
                     }
                     _ => {}
+                }
+                // a field of an observable resource: observe told it is read (and a call that
+                // changes what it holds, told of that: call-node)
+                match observed-field(g, bt, f.name) {
+                    some(field) => {
+                        let object = pin(l, base);
+                        add(l, observe-call(g, "access", registrar-node(object), field));
+                        if changes-in-place(t) { g.observed-reads.set(e, { object: object, field: field, }); }
+                        return bind(l, load(again(object), ["f_{mangle(f.name)}",], true, t, true));
+                    }
+                    none => {}
                 }
                 bind(l, load(base, ["f_{mangle(f.name)}",], true, t, true))
             }
@@ -738,6 +756,12 @@ module gen {
                             values[k],
                         ),
                     );
+                }
+                // an observable resource's registrar, made with it
+                if g.symbols.records.has(rn) && g.symbols.records[rn].observable {
+                    let count = int-const(observed-count(g.symbols.records[rn]), Type.num("u32"));
+                    let registrar = temp(l, std-call(g, "yel:std/observe.registrar", [count,], observers-type()));
+                    add(l, store(load(d, ["f_" + mangle(observers-field()),], true, observers-type(), true), registrar));
                 }
                 d
             }
@@ -821,8 +845,8 @@ module gen {
             named(n) => n,
             _ => intern(""),
         };
-        if !g.variants.has(tn) { panic("{g.file}: {c}: its variant is not known"); }
-        let v = g.variants[tn];
+        if !g.symbols.variants.has(tn) { panic("{g.file}: {c}: its variant is not known"); }
+        let v = g.symbols.variants[tn];
         let k = case-index(v, c);
         if is-enum(g, tn) { return int-const(k, t); }
         match payload {
@@ -1061,14 +1085,78 @@ module gen {
             if g.wit-externs.has(n) { g.wit-used.set(n, true); }
             for a in type-arg-nodes(g, n, type-args) { prefix.push(a); }
         }
+        for a in args { let _ = g.observed-reads.remove(a); }
         let values = gen-operands(l, args);
         // an intrinsic may read an argument more than once: each a local or a constant
         let pinned = f.is-extern && is-template(f.c-name);
         for v in values { prefix.push(if pinned { pin(l, v) } else { v }); }
-        if f.is-extern { return runtime-call(f.c-name, prefix, ty); }
-        let c-name = if f.type-params.len() > 0 { instance(g, n, type-args) } else { f.c-name };
-        let key = if f.type-params.len() > 0 { c-name } else { n };
-        call(key, c-name, prefix, ty, fx().call)
+        // an observable resource's field given (a list, a map): observe told it changes, before
+        // the call, where the call may change it (gen.settle-observed: once the program's flow
+        // says which calls do)
+        let told: list<Node> = [];
+        let at: list<s64> = [];
+        for k in 0..args.len() {
+            match g.observed-reads.get(args[k]) {
+                some(read) => {
+                    let marker = observe-call(g, "will-set", registrar-node(again(read.object)), read.field);
+                    add(l, marker);
+                    told.push(marker);
+                    at.push(prefix.len() - args.len() + k);
+                }
+                none => {}
+            }
+        }
+        let made = if f.is-extern { runtime-call(f.c-name, prefix, ty) }
+        else {
+            let c-name = if f.type-params.len() > 0 { instance(g, n, type-args) } else { f.c-name };
+            let key = if f.type-params.len() > 0 { c-name } else { n };
+            call(key, c-name, prefix, ty, fx().call)
+        };
+        match made.kind {
+            call(c) => { for i in 0..told.len() { g.observed-writes.push({ marker: told[i], call: c, arg: at[i], }); } }
+            _ => {}
+        }
+        made
+    }
+
+    // ================================================================ observation
+
+    // a local's node again (a node is in one place in the tree)
+    again: func(n: Node) -> Node {
+        match n.kind {
+            local(i) => local(i, n.ty),
+            _ => n,
+        }
+    }
+
+    // an observable resource's registrar, of object (a local or a constant: read again)
+    registrar-node: func(object: Node) -> Node {
+        load(object, ["f_" + mangle(observers-field()),], true, observers-type(), false)
+    }
+
+    // std's observe told of a field (by its index) of the resource registrar is of: read
+    // (access), or about to change (will-set)
+    observe-call: func(g: Gen, which: string, registrar: Node, field: s64) -> Node {
+        std-call(g, "yel:std/observe." + which, [registrar, int-const(field, Type.num("u32")),], Type.unit-type)
+    }
+
+    // observe told a field of object (of type t) is about to change, where it is an observable
+    // resource's
+    will-set: func(l: Codegen, object: Node, t: Type, field: string) {
+        match observed-field(l.g, t, field) {
+            some(i) => add(l, observe-call(l.g, "will-set", registrar-node(again(object)), i)),
+            none => {}
+        }
+    }
+
+    // a value a call may change in place (a list's items, a map's): a field holding one changes
+    // with it
+    changes-in-place: func(t: Type) -> bool {
+        match without-readonly(t) {
+            list-type(_) => true,
+            map-type(_) => true,
+            _ => false,
+        }
     }
 
     // a call of an extern (by its key) the compiler writes: its type arguments first, then args
@@ -1091,6 +1179,51 @@ module gen {
             out.push(type-arg(arg.ty, arg.key));
         }
         out
+    }
+
+    // whether a type is held as a value (a record's, an anonymous record's, a tuple's): its fields
+    // set where it is, not through a pointer
+    is-value: func(t: Type) -> bool {
+        match t {
+            anon-record(_) => true,
+            tuple-type(_) => true,
+            _ => false,
+        }
+    }
+
+    // where a value is (the checker allows only these): a variable's place (its local, its field in
+    // an environment, a global), or a field of what holds it (a value's, in place; a resource's,
+    // through its pointer)
+    value-place: func(l: Codegen, e: Expr) -> Node {
+        let g = l.g;
+        let t = expr-type(g, e);
+        match e.kind {
+            name(n) => {
+                let v = lookup(l, n);
+                if found(v) { return var-place(l, binding(v)); }
+                if g.symbols.globals.has(name-text(n)) { return global-node(name-text(n), t); }
+                gen-expr(l, e)
+            }
+            field(f) => {
+                let bt = expr-type(g, f.target);
+                let path = [if is-tuple(bt) { "f{f.name}" } else { "f_{mangle(f.name)}" },];
+                if is-value(bt) { load(value-place(l, f.target), path, false, t, true) }
+                else {
+                    let object = pin(l, gen-expr(l, f.target));
+                    // (a part of a value in an observable resource's field: the field changes)
+                    will-set(l, object, bt, f.name);
+                    load(object, path, true, t, true)
+                }
+            }
+            _ => gen-expr(l, e),
+        }
+    }
+
+    is-tuple: func(t: Type) -> bool {
+        match t {
+            tuple-type(_) => true,
+            _ => false,
+        }
     }
 
     // a fixed-length list's length (a constant), its item (the index checked), or an item set in
@@ -1116,7 +1249,8 @@ module gen {
         let base = match args[0].kind {
             field(f) => {
                 if n == "~set" {
-                    let rec = gen-expr(l, f.target);
+                    let rec = pin(l, gen-expr(l, f.target));
+                    will-set(l, rec, expr-type(g, f.target), f.name);
                     load(rec, ["f_{mangle(f.name)}",], true, lt, true)
                 } else {
                     gen-expr(l, args[0])
@@ -1126,7 +1260,7 @@ module gen {
                 let fv = lookup(l, x);
                 if n == "~set" && found(fv) { var-place(l, binding(fv)) }
                 // a global's: set in it
-                else if n == "~set" && g.globals.has(name-text(x)) { global-node(name-text(x), lt) }
+                else if n == "~set" && g.symbols.globals.has(name-text(x)) { global-node(name-text(x), lt) }
                 else { gen-expr(l, args[0]) }
             }
             _ => gen-expr(l, args[0]),
@@ -1432,8 +1566,8 @@ module gen {
     // value is a call of an async func
     async-call: func(g: Gen, value: Expr) -> bool {
         match value.kind {
-            call(call) => g.async-funcs.has(call.name),
-            method(method) => g.async-funcs.has(method.name),
+            call(call) => async-func(g, call.name),
+            method(method) => async-func(g, method.name),
             _ => false,
         }
     }
@@ -1556,12 +1690,13 @@ module gen {
             case(pc) => case-test(l, pc.name, pc.sub, v, t, checks, binds),
             record(pr) => {
                 // a declared record's fields through its pointer, an anonymous one's in it
-                let shape: option<RecordInfo> = match t {
+                let shape: option<RecordShape> = match t {
                     named(rn) => some({
-                        fields: g.records[rn].fields,
-                        types: g.records[rn].field-types,
+                        fields: g.symbols.records[rn].fields,
+                        types: g.symbols.records[rn].field-types,
+                        value: g.symbols.records[rn].value,
                     }),
-                    anon-record(r) => some({ fields: r.fields, types: r.types, }),
+                    anon-record(r) => some({ fields: r.fields, types: r.types, value: true, }),
                     _ => none,
                 };
                 let arrow = match t {
@@ -1597,7 +1732,7 @@ module gen {
                                     rest-fields.push(r.fields[k]);
                                 }
                             }
-                            let rt = Type.anon-record({ fields: rest-fields, types: ts, });
+                            let rt = Type.anon-record({ fields: rest-fields, types: ts, name: "", });
                             binds.push({
                                 name: pr.rest,
                                 value: make(c-type(g, rt), names, parts, rt),
@@ -1674,7 +1809,7 @@ module gen {
             record(pr) => {
                 for i in 0..ks.len() {
                     let fields: list<string> = match ks[i] {
-                        named(n) => if g.records.has(n) { g.records[n].fields } else { [] },
+                        named(n) => if g.symbols.records.has(n) { g.symbols.records[n].fields } else { [] },
                         anon-record(r) => r.fields,
                         _ => [],
                     };
@@ -1706,7 +1841,7 @@ module gen {
                 option-type(x) => n == "none" || n == "some",
                 result-type(r) => n == "ok" || n == "err",
                 bool-type => n == "true" || n == "false",
-                named(vn) => g.variants.has(vn) && case-index(g.variants[vn], n) >= 0,
+                named(vn) => g.symbols.variants.has(vn) && case-index(g.symbols.variants[vn], n) >= 0,
                 _ => false,
             };
             if has { return i; }
@@ -1740,7 +1875,7 @@ module gen {
             }
             bool-type => checks.push(if n == "true" { v } else { un("!", bool-t, v) }),
             named(vn) => {
-                let dv = g.variants[vn];
+                let dv = g.symbols.variants[vn];
                 let k = case-index(dv, n);
                 let s32-t = Type.num("s32");
                 if is-enum(g, vn) { checks.push(bin("==", bool-t, v, int-const(k, t))); }
@@ -1799,8 +1934,8 @@ module gen {
                     let at = expr-type(g, a.value);
                     let named = lookup(l, a.name);
                     // a global's (no local hides it: the checker named it by its key)
-                    if !found(named) && g.globals.has(name-text(a.name)) {
-                        let gt = gen-type(g, g.globals[name-text(a.name)].ty);
+                    if !found(named) && g.symbols.globals.has(name-text(a.name)) {
+                        let gt = gen-type(g, g.symbols.globals[name-text(a.name)].ty);
                         if a.op == "=" { add(l, store(global-node(name-text(a.name), gt), bind(l, gen-expr(l, a.value)))); }
                         else {
                             let now = temp(l, global-node(name-text(a.name), gt));
@@ -1819,14 +1954,31 @@ module gen {
                 }
                 assign-field(a) => {
                     let at = expr-type(g, a.value);
+                    let path = ["f_{mangle(a.name)}",];
+                    // a record's (a value's) field: set where the record is (its local, a global, the
+                    // field of what holds it)
+                    if is-value(expr-type(g, a.target)) {
+                        let place = load(value-place(l, a.target), path, false, at, true);
+                        if a.op == "=" { add(l, store(place, bind(l, gen-expr(l, a.value)))); }
+                        else {
+                            let cur = temp(l, place);
+                            let v = gen-expr(l, a.value);
+                            add(l, store(place, bind(l, arith(at, from-byte(a.op.byte-at(0)), cur, v, at))));
+                        }
+                        continue;
+                    }
+                    let tt = expr-type(g, a.target);
                     if a.op == "=" {
                         let sides = gen-operands(l, [a.target, a.value,]);
-                        add(l, store(load(sides[0], ["f_{mangle(a.name)}",], true, at, true), sides[1]));
+                        let object = pin(l, sides[0]);
+                        will-set(l, object, tt, a.name);
+                        add(l, store(load(object, ["f_{mangle(a.name)}",], true, at, true), sides[1]));
                     } else {
                         let target = temp(l, gen-expr(l, a.target));
                         let place = load(target, ["f_{mangle(a.name)}",], true, at, true);
                         let cur = temp(l, place);
                         let v = gen-expr(l, a.value);
+                        will-set(l, target, tt, a.name);
                         add(l, store(place, arith(at, from-byte(a.op.byte-at(0)), cur, v, at)));
                     }
                 }

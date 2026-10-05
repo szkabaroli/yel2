@@ -1,0 +1,249 @@
+// Regular expressions, as JavaScript's: a literal /pattern/flags (flags i: letters in either case,
+// m: ^ and $ at each line, s: . a line break too) is compiled with the program, as Porffor compiles
+// one: the compiler reads the pattern (a bad one is an error where it is written) and makes a
+// matcher of it, a func of its own whose states are the pattern's (a backtracking machine: a choice
+// kept, gone back to where what follows fails). Its value is a regex: the pattern, its flags, its
+// groups' count and names, and that matcher. Matched by code point (a string's UTF-8: . and a class
+// take one, however many bytes it is).
+//
+//   /\d+/.test("a12")                      true
+//   /(?<year>\d{4})-(\d\d)/.find("2026-10")  some(a match: its groups "2026", "10")
+//   /\s+/.split("a  b c")                  ["a", "b", "c"]
+//   /o/.replace-all("foo", "0")            "f00"
+
+// a regex literal's value (the compiler's: what it makes of /pattern/flags): its groups' count
+// (the whole match the first), the matcher's slots (two for each group, then its loops'), each
+// group's name ("" for none), and the matcher: whether the pattern matches text from start, each
+// group's start and end put in slots (-1: a group that took no part)
+record regex {
+    pattern: string,
+    flags: string,
+    groups: s64,
+    slots: s64,
+    names: list<string>,
+    matcher: func(string, s64, list<s64>) -> bool,
+}
+
+// a match: the text matched, where (start, and end just past it), and each group's text after the
+// whole match's (none: a group that took no part), by number and by name
+record regex-match {
+    text: string,
+    start: s64,
+    end: s64,
+    groups: list<option<string>>,
+    names: list<string>,
+}
+
+module regex {
+    // a regex as written: /pattern/flags
+    display: func(r: regex) -> string { "/{r.pattern}/{r.flags}" }
+
+    // the value of a literal (the compiler's call)
+    compiled: func(
+        pattern: string,
+        flags: string,
+        groups: s64,
+        slots: s64,
+        names: list<string>,
+        matcher: func(string, s64, list<s64>) -> bool,
+    ) -> regex {
+        { pattern: pattern, flags: flags, groups: groups, slots: slots, names: names, matcher: matcher, }
+    }
+
+    // whether r matches somewhere in text
+    test: func(r: regex, text: string) -> bool { search(r, text, 0).is-some() }
+
+    // r's first match in text
+    find: func(r: regex, text: string) -> option<regex-match> {
+        match search(r, text, 0) {
+            some(slots) => some(made(r, text, slots)),
+            none => none,
+        }
+    }
+
+    // each of r's matches in text, one after another (past an empty one, from the next code point)
+    find-all: func(r: regex, text: string) -> list<regex-match> {
+        let found: list<regex-match> = [];
+        let from = 0;
+        loop {
+            if from > text.len() { break; }
+            match search(r, text, from) {
+                some(slots) => {
+                    found.push(made(r, text, slots));
+                    from = if slots[1] > slots[0] { slots[1] } else { slots[1] + step(text, slots[1]) };
+                }
+                none => { break; }
+            }
+        }
+        found
+    }
+
+    // a match's group by its name ((?<name>...)): none for a name it has not, or a group that took
+    // no part
+    group: func(m: regex-match, name: string) -> option<string> {
+        let index = m.names.index-of(name);
+        if index < 1 || index > m.groups.len() { return none; }
+        m.groups[index - 1]
+    }
+
+    // text with r's first match made with (in with: $& the match, $1 a group's text, $<name> a
+    // named group's, $$ a $)
+    replace: func(r: regex, text: string, with: string) -> string { replaced(r, text, with, false) }
+
+    // text with each of r's matches made with (as replace's with)
+    replace-all: func(r: regex, text: string, with: string) -> string { replaced(r, text, with, true) }
+
+    // text with each of r's matches made what made says of it
+    replace-each: func(r: regex, text: string, made-of: func(regex-match) -> string) -> string {
+        let out = buffer(text.len());
+        let last = 0;
+        for m in find-all(r, text) {
+            out.push(text.slice(last, m.start));
+            out.push(made-of(m));
+            last = m.end;
+        }
+        out.push(text.slice(last, text.len()));
+        out.to-string()
+    }
+
+    // text cut at each of r's matches (an empty match at the start or the end cuts nothing)
+    split: func(r: regex, text: string) -> list<string> {
+        let parts: list<string> = [];
+        let last = 0;
+        for m in find-all(r, text) {
+            if m.end == m.start && (m.start == 0 || m.start == text.len()) { continue; }
+            parts.push(text.slice(last, m.start));
+            last = m.end;
+        }
+        parts.push(text.slice(last, text.len()));
+        parts
+    }
+
+    // ---- what a matcher calls
+
+    // the code point at at, and its length in bytes: (code << 3) | length (a byte no UTF-8 starts
+    // with: itself, one byte)
+    next-code: func(text: string, at: s64) -> s64 {
+        let first = text.byte-at(at);
+        if first < 128 { return (first << 3) | 1; }
+        let length = if first >= 240 { 4 } else if first >= 224 { 3 } else if first >= 192 { 2 } else { 1 };
+        if length == 1 || at + length > text.len() { return (first << 3) | 1; }
+        let code = first & (if length == 2 { 31 } else if length == 3 { 15 } else { 7 });
+        for index in 1..length { code = (code << 6) | (text.byte-at(at + index) & 63); }
+        (code << 3) | length
+    }
+
+    // the length in bytes of the code point at at
+    step: func(text: string, at: s64) -> s64 {
+        if at >= text.len() { return 1; }
+        next-code(text, at) & 7
+    }
+
+    // whether at is between a word's character and another's (\b): one side a word's, the other not
+    boundary: func(text: string, at: s64) -> bool { word-before(text, at) != word-at(text, at) }
+
+    @(private) word-at: func(text: string, at: s64) -> bool { at < text.len() && is-word(text.byte-at(at)) }
+
+    @(private) word-before: func(text: string, at: s64) -> bool { at > 0 && is-word(text.byte-at(at - 1)) }
+
+    @(private) is-word: func(b: s64) -> bool { (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95 }
+
+    // ---- searching
+
+    // r's first match in text from from on: its slots
+    @(private) search: func(r: regex, text: string, from: s64) -> option<list<s64>> {
+        let matcher = r.matcher;
+        let at = from;
+        loop {
+            if at > text.len() { return none; }
+            let slots: list<s64> = [];
+            for index in 0..r.slots { slots.push(-1); }
+            if matcher(text, at, slots) { return some(slots); }
+            if at == text.len() { return none; }
+            at += step(text, at);
+        }
+    }
+
+    // a match of slots
+    @(private) made: func(r: regex, text: string, slots: list<s64>) -> regex-match {
+        let groups: list<option<string>> = [];
+        for index in 1..r.groups {
+            let start = slots[index * 2];
+            let end = slots[index * 2 + 1];
+            groups.push(if start < 0 || end < 0 { none } else { some(text.slice(start, end)) });
+        }
+        { text: text.slice(slots[0], slots[1]), start: slots[0], end: slots[1], groups: groups, names: r.names, }
+    }
+
+    // text with r's first match (or each) made with: $& $1 $<name> $$ read in with
+    @(private) replaced: func(r: regex, text: string, with: string, every: bool) -> string {
+        let out = buffer(text.len());
+        let last = 0;
+        let matches = if every { find-all(r, text) } else {
+            match find(r, text) {
+                some(m) => [m,],
+                none => [],
+            }
+        };
+        for m in matches {
+            out.push(text.slice(last, m.start));
+            out.push(expanded(m, with));
+            last = m.end;
+        }
+        out.push(text.slice(last, text.len()));
+        out.to-string()
+    }
+
+    // with, its $ references made a match's text
+    @(private) expanded: func(m: regex-match, with: string) -> string {
+        let out = buffer(with.len());
+        let index = 0;
+        loop {
+            if index >= with.len() { break; }
+            let b = with.byte-at(index);
+            if b != 36 || index + 1 >= with.len() {
+                out.push-byte(b);
+                index += 1;
+                continue;
+            }
+            let next = with.byte-at(index + 1);
+            if next == 36 {
+                out.push-byte(36);
+                index += 2;
+            } else if next == 38 {
+                out.push(m.text);
+                index += 2;
+            } else if next >= 48 && next <= 57 {
+                // $1..$99: the longest group number there is
+                let number = next - 48;
+                let end = index + 2;
+                if end < with.len() && with.byte-at(end) >= 48 && with.byte-at(end) <= 57 && number * 10 + with.byte-at(end) - 48 <= m.groups.len() {
+                    number = number * 10 + with.byte-at(end) - 48;
+                    end += 1;
+                }
+                if number >= 1 && number <= m.groups.len() {
+                    out.push(m.groups[number - 1].unwrap-or(""));
+                } else {
+                    out.push(with.slice(index, end));
+                }
+                index = end;
+            } else if next == 60 {
+                // $<name>
+                match with.find-from(">", index + 2) {
+                    some(close) => {
+                        out.push(group(m, with.slice(index + 2, close)).unwrap-or(""));
+                        index = close + 1;
+                    }
+                    none => {
+                        out.push-byte(36);
+                        index += 1;
+                    }
+                }
+            } else {
+                out.push-byte(36);
+                index += 1;
+            }
+        }
+        out.to-string()
+    }
+}

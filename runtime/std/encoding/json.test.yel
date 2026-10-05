@@ -1,0 +1,48 @@
+// std:encoding/json, tested (yelc test runtime/std/encoding): JSON read and written back the same
+// (members in their order, numbers as written), escapes undone and made again, an object's members
+// looked up, and where a parse stops
+
+package std:encoding@0.1.0;
+
+from "std:testing" include expect;
+
+module json-tests {
+    // text read, then written again (or where reading it stopped)
+    again: func(text: string) -> string {
+        match json.parse(text) {
+            ok(item) => json.write(item),
+            err(error) => "error: {error}",
+        }
+    }
+
+    @(test) writes-back-what-it-reads: func() {
+        expect.equal(again("  \{\"b\": [1, -2.5e3, true, false, null], \"a\": \{\}, \"c\": []\}  "), "\{\"b\":[1,-2.5e3,true,false,null],\"a\":\{\},\"c\":[]\}");
+        expect.equal(again("\"tab\\tquote\\\" slash\\/ e\\u00e9 smile\\ud83d\\ude00\""), "\"tab\\tquote\\\" slash/ eé smile😀\"");
+        // a member given twice: the last
+        expect.equal(again("\{\"x\": 1, \"x\": 2\}"), "\{\"x\":2\}");
+    }
+
+    @(test) tells-where-it-stops: func() {
+        expect.equal(again("[1, 2"), "error: expected ',' or ']' at byte 5");
+        expect.equal(again("\{\"a\" 1\}"), "error: expected ':' at byte 5");
+        expect.equal(again("nul"), "error: expected null at byte 0");
+        expect.equal(again("1 2"), "error: text after the value at byte 2");
+    }
+
+    @(test) looks-up-members: func() {
+        let message = expect.ok(json.parse("\{\"id\": 7, \"params\": \{\"position\": \{\"line\": 3\}\}, \"name\": \"hover\"\}"));
+        expect.equal(json.integer(json.member(message, "id")), some(7));
+        expect.equal(json.integer(json.path(message, ["params", "position", "line",])), some(3));
+        expect.equal(json.string-value(json.member(message, "name")), some("hover"));
+        expect.none(json.member(message, "missing"));
+    }
+
+    @(test) writes-what-it-is-given: func() {
+        let reply = json.object([
+            ("jsonrpc", json.value.text("2.0")),
+            ("id", json.value.number("7")),
+            ("result", json.value.array([])),
+        ]);
+        expect.equal(json.write(reply), "\{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":[]\}");
+    }
+}

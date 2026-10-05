@@ -1,0 +1,40 @@
+// Processes: a child that runs on from where its parent is (fork), how one ended (wait), and a
+// process's end as it is, no more of it run (end). What a child changes is its own: its memory is a
+// copy of its parent's at the fork. A target without processes (wasm) has no child: fork gives
+// none there.
+//
+// One of std's packages: from "std:process" include process; then process.fork(),
+// process.wait(child), process.end(0).
+
+package std:process@0.1.0;
+
+module process {
+    // a child of this process, which runs on from here as it does: none in the child itself,
+    // some(id) in the parent, err where none can be made (a target without processes, a system
+    // that refuses)
+    fork: func() -> result<option<s64>, string> {
+        let child = c-fork();
+        if child < 0 { return err("no child process (a target without processes, or the system refused one)"); }
+        ok(if child == 0 { none } else { some(child) })
+    }
+
+    // how a child ended, once it has (this waits for it): the code it ended with, or how a signal
+    // ended it
+    wait: func(child: s64) -> result<ended, string> {
+        let status = c-wait(child);
+        if status < 0 { return err("no such child: {child}"); }
+        ok(if status > 128 { ended.signal(status - 128) } else { ended.code(status) })
+    }
+
+    // the process ends with code: its output flushed, and nothing more of it run (no exit
+    // handlers: a child's end, once its work is done)
+    @c(name = "yel_process_end") end: extern func(code: s64) -> never;
+
+    // how a process ended: the code it ended with (0: it did what it was to), or the signal that
+    // ended it
+    variant ended { code(s64), signal(s64), }
+
+    @(private) @c(name = "yel_process_fork") c-fork: extern func() -> s64;
+
+    @(private) @c(name = "yel_process_wait") c-wait: extern func(child: s64) -> s64;
+}

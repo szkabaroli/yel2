@@ -4,7 +4,7 @@
 from "wasi:clocks" include monotonic-clock;
 
 // how many lines the program has written (bf.js's lines)
-record Out { lines: s32, }
+resource Out { lines: s32, }
 
 // whether the program is done: its first line written
 done: func(o: Out, x: s32) -> bool {

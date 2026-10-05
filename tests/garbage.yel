@@ -1,7 +1,7 @@
 // one long call that makes far more garbage than it keeps: the collector runs inside it (the case
 // a collector that waits for the stack to empty cannot handle)
 
-record Item { id: s32, label: string, parts: list<s32>, }
+resource Item { id: s32, label: string, parts: list<s32>, }
 
 main: func(argv: list<string>) -> s32 {
     let kept: list<Item> = [];

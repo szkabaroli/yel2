@@ -1,0 +1,113 @@
+// observable resources: each read of a field is std's observe.access, each write observe.will-set
+// (a field assigned, a part of a value in it, a list in it changed in place), so observe.track
+// knows what a run read and is told once when any of it changes; std's reactive makes effects of it
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+// reads in a helper are reads too
+label: func(p: Profile) -> string { "{p.name} #{p.id}" }
+
+// a func that only reads the list it is given (no change told), and one that writes it
+count: func(xs: list<string>) -> s64 { xs.len() }
+add: func(xs: list<string>, x: string) { xs.push(x); }
+
+main: func() {
+    let p: Profile = { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], };
+    print("{p:?}\n");
+
+    print("a run reads id and name (through a helper)\n");
+    let w = observe.track({ -> let _ = label(p); }, { -> print("  told: label\n"); });
+    p.at.x = 5;
+    print("  at.x changed, not read: nothing\n");
+    p.id += 1;
+    p.name = "grace";
+    print("  once only: the watch is done\n");
+    print("  changed since: {observe.changed(w)}\n");
+
+    print("an ignored field\n");
+    let _ = observe.track({ -> let _ = p.log.len(); p.log.push("x"); }, { ->
+        print("  told: log\n");
+    });
+    p.log.push("y");
+    print("  nothing\n");
+
+    print("a part of a value in a field\n");
+    let _ = observe.track({ -> let _ = p.at; }, { -> print("  told: at\n"); });
+    p.at.y = 3;
+
+    print("a list in a field: read, changed in place\n");
+    let _ = observe.track({ -> let _ = p.items; }, { -> print("  told: items\n"); });
+    print("  len: {p.items.len()}, count: {count(p.items)}\n");
+    p.items.push("one");
+    let _ = observe.track({ -> let _ = p.items; }, { -> print("  told: items again\n"); });
+    add(p.items, "two");
+    let _ = observe.track({ -> let _ = p.items; }, { -> print("  told: items set\n"); });
+    p.items[0] = "uno";
+    print("  {p.items}\n");
+
+    print("a condition: what is read is what this run read\n");
+    let flag: Profile = { id: 0, name: "", at: { x: 0, y: 0, }, items: [], log: [], };
+    let _ = observe.track({ -> if flag.id > 0 { let _ = p.name; } else { let _ = p.id; } }, { ->
+        print("  told: branch\n");
+    });
+    p.name = "not read";
+    print("  name not read: nothing\n");
+    p.id = 9;
+
+    print("untracked reads\n");
+    let _ = observe.track({ -> observe.untracked({ -> let _ = p.id; }); }, { ->
+        print("  told: untracked\n");
+    });
+    p.id = 10;
+    print("  nothing\n");
+
+    print("effects\n");
+    let o = reactive.new-owner();
+    reactive.within(o, { ->
+        let _ = reactive.effect({ ->
+            print("  effect: {p.name} {p.id}\n");
+            let shown = p.id;
+            { -> print("  cleanup: {shown}\n"); }
+        });
+    });
+    p.id = 11;
+    p.name = "lin";
+    print("  two changes, one run (at the flush)\n");
+    reactive.flush();
+    reactive.batch({ -> p.id = 12; p.id = 13; });
+    p.at.x = 1;
+    reactive.flush();
+    print("  at not read: no run\n");
+
+    print("an effect that makes one: the inner let go when the outer runs again\n");
+    let q: Profile = { id: 0, name: "q", at: { x: 0, y: 0, }, items: [], log: [], };
+    reactive.within(o, { ->
+        let _ = reactive.effect({ ->
+            let n = q.id;
+            let _ = reactive.effect({ ->
+                print("  inner {n}: {q.name}\n");
+                { -> print("  inner {n} let go\n"); }
+            });
+            { -> }
+        });
+    });
+    q.name = "r";
+    reactive.flush();
+    q.id = 1;
+    reactive.flush();
+
+    print("disposed\n");
+    reactive.dispose(o);
+    p.id = 14;
+    q.name = "s";
+    reactive.flush();
+    print("  nothing runs\n");
+}

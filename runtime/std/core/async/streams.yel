@@ -1,0 +1,110 @@
+// Streams: stream<T> (the reading end, WIT's) and writer<T> (the writing end), one stream of T
+// items, room for capacity of them (a writer with no room waits, as WIT's streams do). The
+// runtime's C holds a stream (runtime/yel.h, ystream: its items, whether it is closed, who waits to
+// read and to write); reading and writing are written here, over it. wait for x in s { … } is
+// read in turn until the writer closes it.
+
+module streams {
+    @c(name = "(y_stream_new((int64_t)sizeof($1), $2, (int64_t)($4)))") writer-new: extern func<T>(capacity: s64) -> writer<T>;
+    @c(name = "($4)") stream-of: extern func<T>(w: writer<T>) -> stream<T>;
+    @c(name = "(($4)->items)", gives = "s") stream-items: extern func<T>(s: stream<T>) -> list<T>;
+    @c(name = "(($4)->closed != 0)") stream-closed: extern func<T>(s: stream<T> & readonly) -> bool;
+    @c(name = "(($4)->items->len < ($4)->cap)") writer-room: extern func<T>(w: writer<T> & readonly) -> bool;
+    @c(name = "(yel_stream_park_reader($4), (yunit)0)") park-reader: extern func<T>(s: stream<T>);
+    @c(name = "(yel_stream_park_writer($4), (yunit)0)") park-writer: extern func<T>(w: writer<T>);
+    @c(name = "(y_wake(($4)->writer), ($4)->writer = NULL, (yunit)0)") wake-writer: extern func<T>(s: stream<T>);
+    @c(name = "(y_wake(($4)->reader), ($4)->reader = NULL, (yunit)0)") wake-reader: extern func<T>(w: writer<T>);
+    @c(name = "(*($1 *)y_list_take_first($4, &($1){ 0 }))") take-first: extern func<T>(xs: list<T>) -> T;
+
+    // a stream the host writes (WASI 0.3): read from its end into its items when they run out
+    @c(name = "(($4)->host != 0)") from-host: extern func<T>(s: stream<T> & readonly) -> bool;
+    @c(name = "(yel_stream_fill($4))", gives = "s") fill-from-host: extern func<T>(s: stream<T>) -> future<()>;
+
+    // the writer done: once its items are read, the stream is too (a read gives none)
+    @c(name = "yel_writer_close") close: extern func<T>(w: writer<T>);
+
+    // a stream no one reads any more: the host's end let go (the compiler's, where a local holding
+    // one is last used: compiler/ends.yel)
+    @c(name = "yel_stream_release") release-end: extern func<T>(s: stream<T>);
+
+    // a stream and its writer, room for capacity items
+    stream-pair: func<T>(capacity: s64) -> tuple<stream<T>, writer<T>> {
+        let w: writer<T> = writer-new(capacity);
+        (stream-of(w), w)
+    }
+
+    // the next item, or none once the writer closed it and all are read
+    read: async func<T>(s: stream<T>) -> option<T> {
+        loop {
+            let items = stream-items(s);
+            if items.len() > 0 {
+                let x = take-first(items);
+                wake-writer(s);
+                return some(x);
+            }
+            if stream-closed(s) { return none; }
+            if from-host(s) { wait fill-from-host(s); }
+            else {
+                park-reader(s);
+                wait park();
+            }
+        }
+    }
+
+    // an item written, once there is room
+    write: async func<T>(w: writer<T>, x: T) {
+        loop {
+            if writer-room(w) {
+                stream-items(stream-of(w)).push(x);
+                wake-reader(w);
+                return;
+            }
+            park-writer(w);
+            wait park();
+        }
+    }
+
+    // items written in turn, as many at once as there is room for (waiting only when there is
+    // none)
+    write-all: async func<T>(w: writer<T>, items: list<T> & readonly) {
+        let at = 0;
+        loop {
+            if at >= items.len() { return; }
+            if writer-room(w) {
+                let pending = stream-items(stream-of(w));
+                loop {
+                    if at >= items.len() || !writer-room(w) { break; }
+                    pending.push(items[at]);
+                    at += 1;
+                }
+                wake-reader(w);
+            } else {
+                park-writer(w);
+                wait park();
+            }
+        }
+    }
+
+    // the items there are now, up to count (waiting for one at least); empty once the writer
+    // closed it and all are read
+    read-some: async func<T>(s: stream<T>, count: s64) -> list<T> {
+        loop {
+            let items = stream-items(s);
+            if items.len() > 0 {
+                // the first ones taken at once: a block, not item by item
+                let taken = if items.len() < count { items.len() } else { count };
+                let block = items.slice(0, taken);
+                memory.remove-front(items, taken);
+                wake-writer(s);
+                return block;
+            }
+            if stream-closed(s) { return []; }
+            if from-host(s) { wait fill-from-host(s); }
+            else {
+                park-reader(s);
+                wait park();
+            }
+        }
+        []
+    }
+}

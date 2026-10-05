@@ -1,7 +1,7 @@
 // globals: let name: T; (its zero value) or let name: T = literal;. No code of the program runs
 // before main: a global starts as its literal, or zero (0, false, "", none, a collection made
 // empty, and a tuple or fixed-length list of such); a record is held in an option
-record Node { value: s64, next: option<Node>, }
+resource Node { value: s64, next: option<Node>, }
 
 let count: s64;
 let label: string = "start";

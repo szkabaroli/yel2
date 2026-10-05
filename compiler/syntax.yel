@@ -8,7 +8,9 @@
 record Span { source: s64, line: s64, col: s64, end-line: s64, end-col: s64, }
 
 // a file the compiler read: its path and its text (the program's sources, in the order read)
-record Source { path: string, text: string, }
+// origin: where what made it is written, for a source made, not read (a view's lowered yel: its
+// name's span), none for a file
+record Source { path: string, text: string, origin: option<Span>, }
 
 // indent: a multiline string's (the spaces taken off each of its lines), -1 for any other token
 record Token {
@@ -21,13 +23,40 @@ record Token {
     // its bytes in the source: from start to just before end (the formatter prints them as written)
     start: s64,
     end: s64,
+    // a name written %name (as WIT writes one): a name, though a keyword's word (%record, %in)
+    escaped: bool,
 }
 
 // comment: only when the lexer is asked to keep them (the formatter)
-enum TokenKind { id, int, float, char, str, op, eof, comment, }
+// (regex: a regex literal, /pattern/flags, as written)
+// (space: whitespace between tokens, as the syntax tree keeps it; the lexer makes none. A string
+// lexed whole (lexer.lex-file's) is pieces: string-start (its opening quote: ", c", """),
+// string-text (its text as written, escapes and all), interp-start ({), the interpolation's
+// expression's tokens, format-spec (after its :), interp-end (}), string-end (its closing quote))
+enum TokenKind {
+    id,
+    int,
+    float,
+    char,
+    str,
+    op,
+    eof,
+    comment,
+    regex,
+    space,
+    string-start,
+    string-text,
+    interp-start,
+    format-spec,
+    interp-end,
+    string-end,
+    // a character no token starts with, kept (lex-file's, inside an interpolation: told where the
+    // parser reads it)
+    unknown,
+}
 
 // ty: its type, which the checker sets
-record Expr { kind: ExprKind, span: Span, ty: Type, }
+resource Expr { kind: ExprKind, span: Span, ty: Type, }
 
 variant ExprKind {
     // an integer as written (0x, 0o and 0b prefixes kept), a float as written, a char's code point
@@ -68,25 +97,32 @@ variant ExprKind {
     start-expr(Expr),
     // wait f(x), wait fut, wait a | b (the first done), wait { a: x, b: y } (all of them)
     wait-expr(Wait),
+    // #name, #name(args): what the compiler knows, as Odin's directives (the checker gives its
+    // value): #file, #line, #column, #func, #location where it is written; as a parameter's
+    // default, #caller-location and #caller-expression(param) the call's
+    directive(Directive),
     unit,
 }
 
+// a directive: its name (no #) and its arguments
+resource Directive { name: string, args: list<Expr>, }
+
 record Apply { callee: Expr, args: list<Expr>, }
 
-record Cast { value: Expr, ty: Type, }
+resource Cast { value: Expr, ty: Type, }
 
-record Widen { value: Expr, ty: Type, }
+resource Widen { value: Expr, ty: Type, }
 
 // what a wait waits for: one (an async call or a future), any (the first of several done) or all
 // (each, as an anonymous record's fields)
 type wait-mode = "one" | "any" | "all";
 
-record Wait { mode: wait-mode, values: list<Expr>, fields: list<string>, }
+resource Wait { mode: wait-mode, values: list<Expr>, fields: list<string>, }
 
-record IsTest { value: Expr, ty: Type, pattern: option<Pattern>, }
+resource IsTest { value: Expr, ty: Type, pattern: option<Pattern>, }
 
 // a name narrowed (an is test held): its narrower type, its binding's mark
-record Narrowed { name: Name, ty: Type, mark: Mark, }
+resource Narrowed { name: Name, ty: Type, mark: Mark, }
 
 // the names narrowed where a condition holds (yes) and where it fails (no)
 record Narrowing { yes: list<Narrowed>, no: list<Narrowed>, }
@@ -95,7 +131,7 @@ record Split { yes: Type, no: Type, }
 
 // a closure literal: its params (each typed, or its type the wanted func's), its body; marks: its
 // params'; unit: its body's
-record Closure {
+resource Closure {
     params: list<string>,
     types: list<option<Type>>,
     body: Block,
@@ -106,35 +142,43 @@ record Closure {
 // a binding's (a let's, a for's variable, a match arm's, a param's): whether a closure captures it
 // (the checker sets it: a name read from a closure deeper than its binding), and the unit whose
 // environment then holds it
-// ty: its type, as the checker bound it (a readonly one never writes what it holds)
-record Mark { captured: bool, unit: Unit, ty: Type, }
+// ty: its type, as the checker bound it (a readonly one never writes what it holds); name: the name
+// it binds; span: where that name is written (a language server's go-to-definition)
+resource Mark { captured: bool, unit: Unit, ty: Type, name: string, span: Span, }
 
 // a func's, closure's or for's body: whether it has an environment (a record the closures made in
 // it share, holding its captured bindings; a for's, one each turn)
-record Unit { env: bool, }
+resource Unit { env: bool, }
+
+// a span in no source: what the compiler makes itself (a desugared call, its name written nowhere)
+nowhere: func() -> Span { { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, } }
+
+// name-span (a call's, a method's, a field's): where its name is written (nowhere for one the
+// compiler made); what a language server takes the name's use to be
 
 // type-args: a generic func's type arguments, which the checker sets
-record Call { name: string, args: list<Expr>, type-args: list<Type>, }
+resource Call { name: string, args: list<Expr>, type-args: list<Type>, name-span: Span, }
 
-record Method { target: Expr, name: string, args: list<Expr>, type-args: list<Type>, }
+resource Method { target: Expr, name: string, args: list<Expr>, type-args: list<Type>, name-span: Span, }
 
-record Field { target: Expr, name: string, }
+resource Field { target: Expr, name: string, name-span: Span, }
 
 record Binary { op: string, left: Expr, right: Expr, }
 
-record Unary { op: string, value: Expr, }
+resource Unary { op: string, value: Expr, }
 
 record IfElse { cond: Expr, then: Block, otherwise: option<Block>, }
 
 // each statement's span, for errors
-record Block { stmts: list<Stmt>, spans: list<Span>, }
+// span: from its { to its } (what a binding in it is visible in)
+record Block { stmts: list<Stmt>, spans: list<Span>, span: Span, }
 
-record FieldInit { name: string, value: Expr, }
+record FieldInit { name: string, value: Expr, name-span: Span, }
 
-record Match { value: Expr, arms: list<Arm>, }
+resource Match { value: Expr, arms: list<Arm>, }
 
 // a match's arm: its pattern, its guard (pattern if cond => …), its body
-record Arm { pattern: Pattern, guard: option<Expr>, body: Expr, span: Span, }
+resource Arm { pattern: Pattern, guard: option<Expr>, body: Expr, span: Span, }
 
 // a pattern: _; a literal; a name; a case and its payload's pattern; a record's fields' patterns;
 // a tuple's; alternatives (p | q, which bind nothing)
@@ -155,9 +199,9 @@ variant Pattern {
     member(MemberPattern),
 }
 
-record TypedPattern { ty: Type, sub: Pattern, test: option<Pattern>, }
+resource TypedPattern { ty: Type, sub: Pattern, test: option<Pattern>, }
 
-record MemberPattern { ty: Type, sub: Pattern, }
+resource MemberPattern { ty: Type, sub: Pattern, }
 
 // a name in a pattern: a case of the type matched there, else (binds: after let, or in a case's
 // parens) a binding, else a constant; the checker finds which (kind: "case", "bind" or "const", a
@@ -166,7 +210,7 @@ record MemberPattern { ty: Type, sub: Pattern, }
 // what a name in a pattern is, once checked ("": not yet)
 type pattern-name-kind = "" | "case" | "bind" | "const";
 
-record NamePattern {
+resource NamePattern {
     name: string,
     binds: bool,
     kind: pattern-name-kind,
@@ -177,14 +221,16 @@ record NamePattern {
 }
 
 // lo and hi: literals; inclusive for ..=
-record RangePattern { lo: Expr, hi: Expr, inclusive: bool, span: Span, }
+resource RangePattern { lo: Expr, hi: Expr, inclusive: bool, span: Span, }
 
-record CasePattern { name: string, sub: Pattern, span: Span, }
+resource CasePattern { name: string, sub: Pattern, span: Span, name-span: Span, }
 
 // a record's fields named, each with its pattern (the others: any value); rest: the name
 // (...rest) bound to the others, an anonymous record of them ("" for none)
-record RecordPattern {
+resource RecordPattern {
     fields: list<string>,
+    // where each field's name is written
+    field-spans: list<Span>,
     patterns: list<Pattern>,
     rest: string,
     rest-mark: Mark,
@@ -207,12 +253,12 @@ variant Stmt {
     continue-stmt,
 }
 
-record Let { name: string, ty: option<Type>, value: Expr, mark: Mark, }
+resource Let { name: string, ty: option<Type>, value: Expr, mark: Mark, }
 
-record LetPattern { pattern: Pattern, ty: option<Type>, value: Expr, }
+resource LetPattern { pattern: Pattern, ty: option<Type>, value: Expr, }
 
 // over a list (stop none), or a range start..stop (or ..= when inclusive)
-record For {
+resource For {
     name: string,
     start: Expr,
     stop: option<Expr>,
@@ -223,14 +269,14 @@ record For {
 }
 
 // a loop's body, and its turn's environment (when a closure captures a binding of it)
-record Loop { body: Block, unit: Unit, }
+resource Loop { body: Block, unit: Unit, }
 
-record Assign { name: Name, op: string, value: Expr, }
+resource Assign { name: Name, op: string, value: Expr, name-span: Span, }
 
-record AssignField { target: Expr, name: string, op: string, value: Expr, }
+resource AssignField { target: Expr, name: string, op: string, value: Expr, name-span: Span, }
 
 // an expression statement: the block's value when is-value (its last, written without `;`)
-record ExprStmt { value: Expr, is-value: bool, }
+resource ExprStmt { value: Expr, is-value: bool, }
 
 variant Decl {
     func-decl(Func),
@@ -251,15 +297,17 @@ variant Decl {
 // resolved: target, its names as keys (the checker's)
 // type name = T; (an alias: the same type as T), or type name = distinct T; (a type of its own,
 // held as T)
-record TypeDecl { span: Span, scope: Scope, name: string, target: Type, resolved: Type, distinct: bool, }
+resource TypeDecl { span: Span, scope: Scope, name: string, target: Type, resolved: Type, distinct: bool, }
 
-record ConstDecl { span: Span, scope: Scope, name: string, ty: option<Type>, value: Expr, }
+resource ConstDecl { span: Span, scope: Scope, name: string, ty: option<Type>, value: Expr, }
 
 // a global: a value of its own, there for the whole run, written and read by any func (a local of
 // the same name hides it). It starts as a literal, or as its type's zero value (none: what has one
 // is made of numbers, strings, options, collections made empty, and values of them), set before
 // the program's first code runs: no code of the program sets a global up
-record GlobalDecl { span: Span, scope: Scope, name: string, ty: Type, value: option<Expr>, }
+// context: @(context), an async context's (each task its own value; one started takes its
+// starter's, as it is then)
+resource GlobalDecl { span: Span, scope: Scope, name: string, ty: Type, value: option<Expr>, context: bool, }
 
 // packages and modules. A package is a directory of files (or one file), named by `package
 // ns:name;`; a module is one layer of names inside it (`module api { ... }`), which is what another
@@ -267,37 +315,66 @@ record GlobalDecl { span: Span, scope: Scope, name: string, ty: Type, value: opt
 // a key, unique in the program: its package's prefix ("" for the program's own, "ns:name/" for an
 // included one), its module and a dot (at a module's top), and its name: `lex`, `lexer.lex`,
 // `yel:ui/api.render`.
-// a module's: yel's own (""), exported (a WIT interface of yel funcs), or extern (a WIT
-// package's interface, which the host implements)
-type direction = "" | "export" | "extern";
+// a module's: yel's own (""), or extern (a WIT package's interface, which the host implements)
+type direction = "" | "extern";
 
-record Package {
+resource Package {
     id: string,
     version: string,
     prefix: string,
     dir: string,
     modules: map<string, direction>,
+    // the modules not everyone may name (@(private) module m { … }), by name
+    private-modules: map<string, Visibility>,
     state: s64,
 }
+
+// whether a func declared where sc is is one of the component's exports: the program is a reactor
+// (no main: a component of exports; a command's modules are its own), the func is the program's
+// own (its root package's, keyed without a prefix), in one of its modules, and visible (itself,
+// and its module: a private module's items are private). Each such module is a WIT interface the
+// component exports; @(private) keeps a module or a func in
+is-export: func(sc: Scope, reactor: bool) -> bool {
+    reactor && sc.pkg.prefix == "" && sc.module != "" && sc.private == "" && sc.pkg.modules[sc.module] != "extern"
+}
+
+// whether a program is a reactor: its root package has no func main
+is-reactor: func(decls: list<Decl>) -> bool {
+    for d in decls {
+        match d {
+            func-decl(f) => { if f.name == "main" && f.scope.pkg.prefix == "" { return false; } }
+            _ => {}
+        }
+    }
+    true
+}
+
+// who may name a declaration (or a module) not everyone may: "package", its package's files
+// (@(private)), or "file", its own file (@(private="file")); and where it is declared. Absent from
+// the program's table: whoever reaches it
+record Visibility { level: string, pkg: Package, file: string, span: Span, }
 
 // where a declaration is written: its package, its module ("" at the top level), its file, and the
 // file's includes (a name to a module's key) and what asked for them
 // build: the targets its file is built for, from a first line //+build native (or wasi), as Odin's
 // #+build: its funcs are checked everywhere and made only there ("" for every target)
-record Scope {
+resource Scope {
     pkg: Package,
     module: string,
     file: string,
     build: string,
     includes: map<string, string>,
     requests: list<Include>,
+    // who may name what is declared in it: "" anyone who reaches it, "package" its own package's
+    // files (@(private)), "file" its own file (@(private="file"))
+    private: string,
 }
 
 // from "<spec>" include <names> (each bound as its alias)
 record Include { spec: string, names: list<string>, aliases: list<string>, span: Span, }
 
 // a func's type parameters (func<T>), its parameters' names and types, and its result
-record Func {
+resource Func {
     span: Span,
     scope: Scope,
     name: string,
@@ -314,6 +391,10 @@ record Func {
     is-generator: bool,
     // the binding each name in its body is (the checker's): what an analysis keys a local by
     bindings: Bindings,
+    // each parameter's default (none: one must be given): a literal, or a # directive
+    defaults: list<option<Expr>>,
+    // @(test): one of the package's tests (yelc test runs it; another build leaves it out)
+    is-test: bool,
 }
 
 // which binding (its Mark: one for each let, pattern name, for, parameter) each name read and each
@@ -324,10 +405,10 @@ record Bindings { exprs: map<Expr, Mark>, assigns: map<Assign, Mark>, }
 // types cannot say. A name with $1, $2, ... in it is C written in place (an intrinsic, as Porffor's
 // Porffor.IR.*): $n the nth argument, a type parameter's three first (its C type, its scan, its
 // descriptor), then the values
-record CFunc { name: string, keeps: list<string>, gives: list<string>, }
+resource CFunc { name: string, keeps: list<string>, gives: list<string>, }
 
 // wit-module and wit-name: a WIT interface's func (a component's import), "" for a C one
-record Extern {
+resource Extern {
     span: Span,
     scope: Scope,
     name: string,
@@ -345,27 +426,85 @@ record Extern {
     // the ones its result is or holds (its own state: a stream's items)
     keeps: list<string>,
     gives: list<string>,
+    // each parameter's default (none: one must be given)
+    defaults: list<option<Expr>>,
 }
 
-record RecordDecl {
+resource RecordDecl {
     span: Span,
     scope: Scope,
     name: string,
     fields: list<string>,
     field-types: list<Type>,
+    // a record (a value: copied where it goes, equal by its fields), else a resource (one shared
+    // object: held by reference, its own identity)
+    value: bool,
+    // @(observable) resource: each read of a field is told std's observe (access), each write too
+    // (will-set), but for the fields marked @(ignored)
+    observable: bool,
+    ignored: list<string>,
 }
 
-record VariantDecl { span: Span, scope: Scope, name: string, cases: list<CaseDecl>, }
+resource VariantDecl { span: Span, scope: Scope, name: string, cases: list<CaseDecl>, }
 
 // a set of named bits: flags Name { a, b, }
-record FlagsDecl { span: Span, scope: Scope, name: string, flags: list<string>, }
+resource FlagsDecl { span: Span, scope: Scope, name: string, flags: list<string>, }
 
 // a WIT resource: its values are handles (u32), what its funcs take and give; a component's host
 // owns what each names
-record ResourceDecl { span: Span, scope: Scope, name: string, }
+resource ResourceDecl { span: Span, scope: Scope, name: string, }
+
+// the program's declarations by key, as the checker resolves them: the one table of them. The
+// checker fills it (its types resolved to their keys, a func's signature generalized); the
+// exhaustiveness check (semtype.yel), the generator and an analysis (a language server's) read it
+resource Symbols {
+    // each func's and extern's signature, by key
+    funcs: map<string, FuncSymbol>,
+    records: map<Name, RecordDecl>,
+    variants: map<Name, VariantDecl>,
+    flags: map<Name, FlagsDecl>,
+    // the WIT resources
+    resources: map<Name, ResourceDecl>,
+    consts: map<string, ConstDecl>,
+    globals: map<string, GlobalDecl>,
+    // the type aliases (type name = T;)
+    aliases: map<string, TypeDecl>,
+}
+
+// a func (or an extern) as the checker resolved its declaration: its type parameters, its
+// parameters' types (each type parameter's a param) and their names, its result; whether it is
+// async, whether an extern, the WIT interface it is a func of ("" for none: yel's own); where it
+// is declared
+resource FuncSymbol {
+    type-params: list<string>,
+    params: list<Type>,
+    names: list<string>,
+    // each parameter's default (none: one must be given), as declared
+    defaults: list<option<Expr>>,
+    result: Type,
+    is-async: bool,
+    is-extern: bool,
+    wit-module: string,
+    scope: Scope,
+    span: Span,
+}
+
+// a table with nothing in it yet
+symbols: func() -> Symbols {
+    {
+        funcs: map.new(),
+        records: map.new(),
+        variants: map.new(),
+        flags: map.new(),
+        resources: map.new(),
+        consts: map.new(),
+        globals: map.new(),
+        aliases: map.new(),
+    }
+}
 
 // payload unit-type when has-payload is false
-record CaseDecl { name: string, has-payload: bool, payload: Type, }
+resource CaseDecl { name: string, has-payload: bool, payload: Type, }
 
 // a type: WAVE's (the Component Model's values), with option and result built in
 variant Type {
@@ -438,7 +577,9 @@ record ResultType { ok: Type, err: Type, }
 // writer: the writing end (writer<T>), else the reading end (stream<T>)
 record StreamType { item: Type, writer: bool, }
 
-record AnonRecord { fields: list<string>, types: list<Type>, }
+// name: "" for an anonymous record; a record's key where the generator holds a record (a value)
+// as its fields (gen.gen-type: what crosses WIT is still that record)
+record AnonRecord { fields: list<string>, types: list<Type>, name: string, }
 
 // text: as written ("get", 3, 'a', true)
 record Singleton { base: Type, key: string, text: string, }
@@ -456,19 +597,20 @@ record FixedList { item: Type, len: s64, }
 record FuncType { params: list<Type>, result: Type, }
 
 // kind: 0 any type, 1 an integer's (an integer literal's, s32 unless settled), 2 a float's (f32)
-record TypeVar { id: s64, kind: s64, bound: option<Type>, }
+resource TypeVar { id: s64, kind: s64, bound: option<Type>, }
 
 node: func(kind: ExprKind, span: Span) -> Expr { { kind: kind, span: span, ty: Type.unit-type, } }
 
 // a scope of its own, in a package of its own (a file read alone: the prelude, an interpolation)
 blank-scope: func(file: string) -> Scope {
     {
-        pkg: { id: "", version: "", prefix: "", dir: "", modules: map.new(), state: 1, },
+        pkg: { id: "", version: "", prefix: "", dir: "", modules: map.new(), private-modules: map.new(), state: 1, },
         module: "",
         file: file,
         build: "",
         includes: map.new(),
         requests: [],
+        private: "",
     }
 }
 
@@ -500,5 +642,591 @@ is-str-lit: func(e: Expr) -> bool {
     match e.kind {
         str-lit(s) => true,
         _ => false,
+    }
+}
+
+// ---- the syntax tree, lossless (red-green: Roslyn's, and rust-analyzer's rowan)
+//
+// A file as written, every byte of it. Its green tree: nodes, each its kind, its children and its
+// width in bytes, and tokens, each its kind and its text; the whitespace and comments between
+// tokens are tokens of their own (trivia: space, comment), so a tree's text is its file's. A green
+// node knows no place (the same one may be anywhere: a later edit keeps the ones it did not
+// touch). A red node is one seen in place: its green node, its parent, and the byte it starts at,
+// made as a walk reaches it. The parser builds the green tree as it parses (an analysis's: a
+// language server's), each construct a node of its kind, what an error passes over an error node,
+// so a tree is whole however broken its file.
+
+// each node's kind: what the parser (grammar.yel) made of the tokens in it
+enum NodeKind {
+    source-file,
+    // what an error passed over (the tokens a construct could not take)
+    error,
+    // declarations: @(private, test) before one; @c(name = "…") before an extern
+    attribute,
+    c-attribute,
+    package-decl,
+    include-decl,
+    include-name,
+    module-decl,
+    func-decl,
+    type-params,
+    param-list,
+    param,
+    record-decl,
+    field-decl,
+    type-decl,
+    global-decl,
+    const-decl,
+    flags-decl,
+    flag,
+    variant-decl,
+    case-decl,
+    // a view: its fields, its element and what is in one
+    view-decl,
+    view-field,
+    view-element,
+    view-attribute,
+    view-handler,
+    view-if,
+    view-for,
+    view-text,
+    // types: a name (module.name), with its arguments (list<T>, result<T, E>, list<T, 3>), a
+    // func's, (), { field: T }, a literal's (a value: "get", 3, -1), a range's (1..=9), T &
+    // readonly, A | B
+    named-type,
+    type-args,
+    func-type,
+    unit-type,
+    record-type,
+    record-type-field,
+    literal-type,
+    range-type,
+    readonly-type,
+    union-type,
+    // patterns: _, let p, let n: T, a literal, lo..hi, { field: p, ...rest }, (a, b), (p),
+    // name(p), a name, p | q
+    wild-pattern,
+    let-pattern,
+    typed-pattern,
+    literal-pattern,
+    range-pattern,
+    record-pattern,
+    record-pattern-field,
+    rest-pattern,
+    tuple-pattern,
+    paren-pattern,
+    case-pattern,
+    name-pattern,
+    alt-pattern,
+    // statements
+    block,
+    let-stmt,
+    return-stmt,
+    wait-for-stmt,
+    loop-stmt,
+    for-stmt,
+    break-stmt,
+    continue-stmt,
+    assign-stmt,
+    expr-stmt,
+    // expressions
+    literal,
+    string-lit,
+    interpolation,
+    regex-lit,
+    directive,
+    unit-expr,
+    paren-expr,
+    tuple-expr,
+    list-expr,
+    if-expr,
+    closure,
+    closure-param,
+    record-expr,
+    record-field,
+    match-expr,
+    match-arm,
+    block-expr,
+    name-ref,
+    field-expr,
+    method-call-expr,
+    call-expr,
+    apply-expr,
+    index-expr,
+    arg-list,
+    binary-expr,
+    is-expr,
+    cast-expr,
+    try-cast-expr,
+    unary-expr,
+    yield-expr,
+    start-expr,
+    wait-expr,
+    wait-field,
+}
+
+record GreenToken { kind: TokenKind, text: string, }
+
+resource GreenNode { kind: NodeKind, width: s64, children: list<GreenChild>, }
+
+variant GreenChild {
+    node(GreenNode),
+    token(GreenToken),
+}
+
+// a node in place: its green node, its parent (none: the root), the byte it starts at, and which
+// child of its parent it is
+resource SyntaxNode { green: GreenNode, parent: option<SyntaxNode>, offset: s64, index: s64, }
+
+// a token in place: its green token, the node it is in, the byte it starts at, which child it is
+record SyntaxToken { green: GreenToken, parent: SyntaxNode, offset: s64, index: s64, }
+
+variant SyntaxElement {
+    node(SyntaxNode),
+    token(SyntaxToken),
+}
+
+// a tree being built: the file's text, how much of it the tree holds so far (the byte it is at),
+// and the nodes started and not yet finished, innermost last, each its kind and its children so far
+resource TreeBuilder { text: string, at: s64, open: list<OpenNode>, }
+
+resource OpenNode { kind: NodeKind, children: list<GreenChild>, }
+
+// where a builder was: how many nodes open, how many children the innermost had, and the byte it
+// was at (a node started at it later wraps what was built since; a rewind goes back to it)
+record TreeMark { depth: s64, count: s64, at: s64, }
+
+module tree {
+    // a builder of text's tree: its root (source-file) started
+    builder: func(text: string) -> TreeBuilder {
+        { text: text, at: 0, open: [{ kind: NodeKind.source-file, children: [], },], }
+    }
+
+    // a node of kind started: what is built from here is its
+    start: func(b: TreeBuilder, kind: NodeKind) {
+        b.open.push({ kind: kind, children: [], });
+    }
+
+    // the innermost node finished: a child of the one around it
+    finish: func(b: TreeBuilder) {
+        if b.open.len() < 2 { return; }
+        let done = b.open.pop();
+        b.open[b.open.len() - 1].children.push(GreenChild.node(made(done.kind, done.children)));
+    }
+
+    // where the builder is
+    mark: func(b: TreeBuilder) -> TreeMark {
+        { depth: b.open.len(), count: b.open[b.open.len() - 1].children.len(), at: b.at, }
+    }
+
+    // a node of kind started at mark: what was built since (the innermost node's children from
+    // there) its first children (a call around its callee, a binary around its left)
+    start-at: func(b: TreeBuilder, at: TreeMark, kind: NodeKind) {
+        if at.depth != b.open.len() {
+            start(b, kind);
+            return;
+        }
+        // (what was built since the mark, off the holder's end: nothing before it copied)
+        let holder = b.open[b.open.len() - 1];
+        let taken: list<GreenChild> = [];
+        for index in at.count..holder.children.len() { taken.push(holder.children[index]); }
+        for index in at.count..taken.len() + at.count { holder.children.pop(); }
+        b.open.push({ kind: kind, children: taken, });
+    }
+
+    // the builder back where it was at mark (a parse begun again from there): what was built
+    // since dropped
+    rewind: func(b: TreeBuilder, at: TreeMark) {
+        loop {
+            if b.open.len() <= at.depth { break; }
+            b.open.pop();
+        }
+        let holder = b.open[b.open.len() - 1];
+        loop {
+            if holder.children.len() <= at.count { break; }
+            holder.children.pop();
+        }
+        b.at = at.at;
+    }
+
+    // a token taken: the trivia before it (whitespace, comments), then its text, as the file has
+    // them (the end of the file's, none)
+    token: func(b: TreeBuilder, t: Token) {
+        if t.kind == TokenKind.eof || t.end <= t.start { return; }
+        trivia(b, t.start);
+        // (its text where that is its bytes, as most are: no copy made; a char's and %name's
+        // bytes are more than their text)
+        let bytes = if t.kind == TokenKind.char || t.escaped || t.text.len() != t.end - t.start { b.text.substring(t.start, t.end) } else { t.text };
+        add(b, t.kind, bytes);
+        b.at = t.end;
+    }
+
+    @(private) is-space: func(byte: s64) -> bool { byte == 32 || byte == 9 || byte == 10 || byte == 13 }
+
+    // the whitespace and comments up to byte end, each a token (and a character no token starts
+    // with, the lexer's error: unknown)
+    trivia: func(b: TreeBuilder, end: s64) {
+        let at = b.at;
+        loop {
+            if at >= end { break; }
+            let from = at;
+            if b.text.byte-at(at) == 47 && at + 1 < end && b.text.byte-at(at + 1) == 47 {
+                loop {
+                    if at >= end || b.text.byte-at(at) == 10 { break; }
+                    at += 1;
+                }
+                add(b, TokenKind.comment, b.text.substring(from, at));
+            } else if is-space(b.text.byte-at(at)) {
+                loop {
+                    if at >= end || !is-space(b.text.byte-at(at)) { break; }
+                    at += 1;
+                }
+                add(b, TokenKind.space, b.text.substring(from, at));
+            } else {
+                // (a character no token starts with: the lexer's error, kept as it is)
+                loop {
+                    if at >= end || is-space(b.text.byte-at(at)) || (b.text.byte-at(at) == 47 && at + 1 < end && b.text.byte-at(at + 1) == 47) { break; }
+                    at += 1;
+                }
+                add(b, TokenKind.unknown, b.text.substring(from, at));
+            }
+        }
+        if end > b.at { b.at = end; }
+    }
+
+    // the tree whole: what is left of the file (trivia) its root's, every node still open finished
+    finish-file: func(b: TreeBuilder) -> GreenNode {
+        trivia(b, b.text.len());
+        loop {
+            if b.open.len() < 2 { break; }
+            finish(b);
+        }
+        made(NodeKind.source-file, b.open[0].children)
+    }
+
+    @(private) add: func(b: TreeBuilder, kind: TokenKind, text: string) {
+        b.open[b.open.len() - 1].children.push(GreenChild.token({ kind: kind, text: text, }));
+    }
+
+    @(private) made: func(kind: NodeKind, children: list<GreenChild>) -> GreenNode {
+        let width = 0;
+        for child in children { width += child-width(child); }
+        { kind: kind, width: width, children: children, }
+    }
+
+    child-width: func(child: GreenChild) -> s64 {
+        match child {
+            node(n) => n.width,
+            token(t) => t.text.len(),
+        }
+    }
+
+    // ---- the green tree read
+
+    // a green node's text: its tokens', in order
+    green-text: func(n: GreenNode) -> string {
+        let out = buffer(n.width);
+        green-text-into(n, out);
+        out.to-string()
+    }
+
+    @(private) green-text-into: func(n: GreenNode, out: buffer) {
+        for child in n.children {
+            match child {
+                node(inner) => green-text-into(inner, out),
+                token(t) => out.push(t.text),
+            }
+        }
+    }
+
+    // ---- the red tree: nodes in place
+
+    // a file's tree, its root in place
+    root: func(green: GreenNode) -> SyntaxNode { { green: green, parent: none, offset: 0, index: 0, } }
+
+    kind: func(n: SyntaxNode) -> NodeKind { n.green.kind }
+
+    // the byte just past its end
+    end-offset: func(n: SyntaxNode) -> s64 { n.offset + n.green.width }
+
+    text: func(n: SyntaxNode) -> string { green-text(n.green) }
+
+    // its children, in place
+    children: func(n: SyntaxNode) -> list<SyntaxElement> {
+        let out: list<SyntaxElement> = [];
+        let at = n.offset;
+        for index in 0..n.green.children.len() {
+            let child = n.green.children[index];
+            match child {
+                node(inner) => out.push(SyntaxElement.node({ green: inner, parent: some(n), offset: at, index: index, })),
+                token(t) => out.push(SyntaxElement.token({ green: t, parent: n, offset: at, index: index, })),
+            }
+            at += child-width(child);
+        }
+        out
+    }
+
+    // its child nodes, in place (its tokens passed over: none made)
+    child-nodes: func(n: SyntaxNode) -> list<SyntaxNode> {
+        let out: list<SyntaxNode> = [];
+        let at = n.offset;
+        for index in 0..n.green.children.len() {
+            let child = n.green.children[index];
+            match child {
+                node(inner) => out.push({ green: inner, parent: some(n), offset: at, index: index, }),
+                token(t) => {}
+            }
+            at += child-width(child);
+        }
+        out
+    }
+
+    // its own tokens (trivia left out), in place (its child nodes passed over)
+    own-tokens: func(n: SyntaxNode) -> list<SyntaxToken> {
+        let out: list<SyntaxToken> = [];
+        let at = n.offset;
+        for index in 0..n.green.children.len() {
+            let child = n.green.children[index];
+            match child {
+                token(t) => { if !is-trivia(t.kind) { out.push({ green: t, parent: n, offset: at, index: index, }); } }
+                node(inner) => {}
+            }
+            at += child-width(child);
+        }
+        out
+    }
+
+    // whether one of its own tokens is the operator or word v
+    has-word: func(n: SyntaxNode, v: string) -> bool {
+        for child in n.green.children {
+            match child {
+                token(t) => { if (t.kind == TokenKind.op || t.kind == TokenKind.id) && t.text == v { return true; } }
+                node(inner) => {}
+            }
+        }
+        false
+    }
+
+    // its tokens (trivia left out), in place, its descendants' too, in order
+    tokens: func(n: SyntaxNode) -> list<SyntaxToken> {
+        let out: list<SyntaxToken> = [];
+        tokens-into(n, out);
+        out
+    }
+
+    @(private) tokens-into: func(n: SyntaxNode, out: list<SyntaxToken>) {
+        for child in children(n) {
+            match child {
+                node(inner) => tokens-into(inner, out),
+                token(t) => { if !is-trivia(t.green.kind) { out.push(t); } }
+            }
+        }
+    }
+
+    // its first token (trivia left out), its children's too: down its first edge
+    first-token: func(n: SyntaxNode) -> option<SyntaxToken> {
+        let at = n.offset;
+        for index in 0..n.green.children.len() {
+            let child = n.green.children[index];
+            match child {
+                token(t) => { if !is-trivia(t.kind) { return some({ green: t, parent: n, offset: at, index: index, }); } }
+                node(inner) => {
+                    if inner.width > 0 {
+                        match first-token({ green: inner, parent: some(n), offset: at, index: index, }) {
+                            some(t) => { return some(t); }
+                            none => {}
+                        }
+                    }
+                }
+            }
+            at += child-width(child);
+        }
+        none
+    }
+
+    // its last token (trivia left out): down its last edge
+    last-token: func(n: SyntaxNode) -> option<SyntaxToken> {
+        let at = end-offset(n);
+        let count = n.green.children.len();
+        for back in 0..count {
+            let index = count - 1 - back;
+            let child = n.green.children[index];
+            at -= child-width(child);
+            match child {
+                token(t) => { if !is-trivia(t.kind) { return some({ green: t, parent: n, offset: at, index: index, }); } }
+                node(inner) => {
+                    if inner.width > 0 {
+                        match last-token({ green: inner, parent: some(n), offset: at, index: index, }) {
+                            some(t) => { return some(t); }
+                            none => {}
+                        }
+                    }
+                }
+            }
+        }
+        none
+    }
+
+    // the first token (trivia left out) that starts at or past byte at: down the nodes that
+    // reach past it
+    token-from: func(n: SyntaxNode, at: s64) -> option<SyntaxToken> {
+        for child in children(n) {
+            match child {
+                token(t) => { if t.offset >= at && !is-trivia(t.green.kind) { return some(t); } }
+                node(inner) => {
+                    if end-offset(inner) > at {
+                        match token-from(inner, at) {
+                            some(t) => { return some(t); }
+                            none => {}
+                        }
+                    }
+                }
+            }
+        }
+        none
+    }
+
+    // the last token (trivia left out) that starts before byte at: down the last node starting
+    // before it
+    token-before: func(n: SyntaxNode, at: s64) -> option<SyntaxToken> {
+        let children = children(n);
+        for back in 0..children.len() {
+            match children[children.len() - 1 - back] {
+                token(t) => { if t.offset < at && !is-trivia(t.green.kind) { return some(t); } }
+                node(inner) => {
+                    if inner.offset < at {
+                        match token-before(inner, at) {
+                            some(t) => { return some(t); }
+                            none => {}
+                        }
+                    }
+                }
+            }
+        }
+        none
+    }
+
+    // the nodes it is in, innermost first
+    ancestors: func(n: SyntaxNode) -> list<SyntaxNode> {
+        let out: list<SyntaxNode> = [];
+        let at = n.parent;
+        loop {
+            match at {
+                some(p) => {
+                    out.push(p);
+                    at = p.parent;
+                }
+                none => { break; }
+            }
+        }
+        out
+    }
+
+    // it, then the nodes it is in, innermost first
+    self-and-ancestors: func(n: SyntaxNode) -> list<SyntaxNode> {
+        let out = [n,];
+        for a in ancestors(n) { out.push(a); }
+        out
+    }
+
+    is-trivia: func(kind: TokenKind) -> bool { kind == TokenKind.space || kind == TokenKind.comment || kind == TokenKind.unknown }
+
+    // the token (not trivia) offset is in or just past (a cursor at a name's end is at that name):
+    // the one that starts at offset first, else the one it ends: down the nodes around offset
+    token-at: func(n: SyntaxNode, offset: s64) -> option<SyntaxToken> {
+        let ending: option<SyntaxToken> = none;
+        let at = n.offset;
+        for index in 0..n.green.children.len() {
+            let child = n.green.children[index];
+            let width = child-width(child);
+            if at > offset { break; }
+            if at + width >= offset {
+                match child {
+                    token(t) => {
+                        if !is-trivia(t.kind) {
+                            let found: SyntaxToken = { green: t, parent: n, offset: at, index: index, };
+                            if offset < at + width { return some(found); }
+                            ending = some(found);
+                        }
+                    }
+                    node(inner) => {
+                        match token-at({ green: inner, parent: some(n), offset: at, index: index, }, offset) {
+                            some(t) => {
+                                if t.offset <= offset && offset < t.offset + t.green.text.len() { return some(t); }
+                                ending = some(t);
+                            }
+                            none => {}
+                        }
+                    }
+                }
+            }
+            at += width;
+        }
+        ending
+    }
+
+    // where each line of text starts (a byte): what a line and a column are found by
+    line-starts: func(text: string) -> list<s64> {
+        let out: list<s64> = [0,];
+        for index in 0..text.len() { if text.byte-at(index) == 10 { out.push(index + 1); } }
+        out
+    }
+
+    // the line and column of byte at, by the text's line starts
+    line-col: func(lines: list<s64>, at: s64) -> tuple<s64, s64> {
+        let low = 0;
+        let high = lines.len() - 1;
+        loop {
+            if low >= high { break; }
+            let middle = (low + high + 1) / 2;
+            if lines[middle] <= at { low = middle; } else { high = middle - 1; }
+        }
+        (low + 1, at - lines[low] + 1)
+    }
+
+    // the byte where line and col are, by the text's line starts (past its end: its end)
+    offset-at: func(lines: list<s64>, length: s64, line: s64, col: s64) -> s64 {
+        if line < 1 { return 0; }
+        if line > lines.len() { return length; }
+        let found = lines[line - 1] + col - 1;
+        if found > length { length } else { found }
+    }
+
+    // the innermost node that covers start to end
+    covering: func(n: SyntaxNode, start: s64, end: s64) -> SyntaxNode {
+        for inner in child-nodes(n) {
+            if inner.offset <= start && end <= end-offset(inner) && inner.green.width > 0 {
+                return covering(inner, start, end);
+            }
+        }
+        n
+    }
+
+    // ---- places: a byte offset as a line and a column (from 1, columns in bytes), and back
+
+    // the byte where line and col are in text (past its end: its end)
+    offset: func(text: string, line: s64, col: s64) -> s64 {
+        let at = 0;
+        for step in 1..line {
+            match text.find-from("\n", at) {
+                some(newline) => { at = newline + 1; }
+                none => { return text.len(); }
+            }
+        }
+        let found = at + col - 1;
+        if found > text.len() { text.len() } else { found }
+    }
+
+    // the line and column of byte at in text
+    place: func(text: string, at: s64) -> tuple<s64, s64> {
+        let line = 1;
+        let start = 0;
+        for index in 0..at {
+            if index < text.len() && text.byte-at(index) == 10 {
+                line += 1;
+                start = index + 1;
+            }
+        }
+        (line, at - start + 1)
     }
 }

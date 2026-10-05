@@ -15,7 +15,7 @@ fx: func() -> Fx { { read-mem: 1, write-mem: 2, call: 4, read-global: 8, write-l
 
 // span: where in the source it comes from (the expression or the statement codegen made it of;
 // line 0 for none yet), so what is found on the IR is said where the program is
-record Node { kind: Kind, ty: Type, fx: s64, span: Span, }
+resource Node { kind: Kind, ty: Type, fx: s64, span: Span, }
 
 variant Kind {
     // constants: a value known as it is written (Constant: a number, a static string, a case
@@ -117,31 +117,31 @@ variant Formatter {
 
 record RenderFormat { held: Type, display: bool, }
 
-record AssignNode { dest: s64, value: Node, }
+resource AssignNode { dest: s64, value: Node, }
 record BinNode { op: string, a: Node, b: Node, }
 record UnNode { op: string, a: Node, }
 // path: the members, outermost first (a case's payload: u, then its member); arrow: base is a
 // pointer (base->path), else a value (base.path)
-record LoadNode { base: Node, path: list<string>, arrow: bool, }
-record StoreNode { target: Node, value: Node, }
-record IfNode { test: Node, yes: list<Node>, no: list<Node>, }
+resource LoadNode { base: Node, path: list<string>, arrow: bool, }
+resource StoreNode { target: Node, value: Node, }
+resource IfNode { test: Node, yes: list<Node>, no: list<Node>, }
 // test before each turn (none: always), step after each, label (-1: none)
-record LoopNode { test: option<Node>, step: option<Node>, body: list<Node>, label: s64, }
-record BlockNode { body: list<Node>, label: s64, }
+resource LoopNode { test: option<Node>, step: option<Node>, body: list<Node>, label: s64, }
+resource BlockNode { body: list<Node>, label: s64, }
 // show: the C func that shows the value
-record UnreachableNode { value: Node, formatter: Formatter, }
+resource UnreachableNode { value: Node, formatter: Formatter, }
 // a func's C function: key and c-name the func's (what keeps it reached), c what is written (its
 // C name cast, or an adapter's)
 // name: the C name, interned (what the passes key a func by)
-record FuncRefNode { key: string, c-name: string, name: Name, c: string, }
+resource FuncRefNode { key: string, c-name: string, name: Name, c: string, }
 
 record CallRefNode { callee: Node, args: list<Node>, }
 
 // name: the C name, interned (what the passes key a callee by)
-record CallNode { key: string, c-name: string, name: Name, args: list<Node>, }
+resource CallNode { key: string, c-name: string, name: Name, args: list<Node>, }
 // ctype: the C struct (R_x, V_x); rec: the record or variant; is-record: a record's (only those
 // may go on the stack); trace: its trace func; stack: kept on the func's stack (escape.yel)
-record AllocNode { ctype: string, rec: string, is-record: bool, trace: string, stack: bool, }
+resource AllocNode { ctype: string, rec: string, is-record: bool, trace: string, stack: bool, }
 // ctype: the value struct's C type; fields: each part's designator ("" for none)
 record MakeNode { ctype: string, fields: list<string>, parts: list<Node>, }
 // fixed: a fixed-length list's (list.items[index]), else a list's heap items
@@ -151,13 +151,15 @@ record InterpNode { parts: list<Node>, formatters: list<Formatter>, }
 
 // a local: its type, and its yel name ("" for a temporary)
 // a local: its type, its C name's stem, and the binding it is (none: one codegen made)
-record IrLocal { ty: Type, name: string, binding: option<Mark>, }
+resource IrLocal { ty: Type, name: string, binding: option<Mark>, }
 
 // a func: its key and C name, its parameters (locals), its locals, its body, and its result's type;
 // labels: how many labels it has; rooted: which locals are live where it may collect (roots.yel
 // sets it; empty: all), so the collector must see them
-record IrFunc {
+resource IrFunc {
     key: string,
+    // where it is declared (a closure's: its literal; a helper's: nowhere): its debug info's
+    span: Span,
     c-name: string,
     // the C name, interned (what the passes key a func by)
     name: Name,

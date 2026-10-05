@@ -1,0 +1,95 @@
+// Numbers from text: an integer in decimal or another radix, signed (s64) or not (u64), and a
+// decimal float (f64). Each reads the whole text, a + or - before it allowed (but before an
+// unsigned one), and gives none for anything else: an empty text, a byte that is no digit,
+// whitespace, a number past its type's range (each type's bounds: integer.yel, s64.MAX). No prefix
+// (0x, 0b) is read: a radix says it.
+
+module number {
+    // a decimal integer
+    parse-int: func(text: string) -> option<s64> { parse-int-radix(text, 10) }
+
+    // an integer in radix (2 to 36: 0-9, then a-z or A-Z)
+    parse-int-radix: func(text: string, radix: s64) -> option<s64> {
+        if radix < 2 || radix > 36 { return none; }
+        let negative = text.byte-at(0) == 45;
+        let start = if negative || text.byte-at(0) == 43 { 1 } else { 0 };
+        if start >= text.len() { return none; }
+        // gathered negative, so s64's least fits: value * radix - digit stays at least it (its own
+        // bounds, not s64.MIN: the seed compiles std and reads no module's constant)
+        let least: s64 = -9223372036854775808;
+        let value: s64 = 0;
+        for index in start..text.len() {
+            let digit = match to-digit(text.byte-at(index), radix) {
+                some(found) => found,
+                none => { return none; }
+            };
+            // (a negative quotient rounds toward zero: up, the least value * radix may be)
+            if value < (least + digit) / radix { return none; }
+            value = value * radix - digit;
+        }
+        if negative { return some(value); }
+        if value == least { return none; }
+        some(-value)
+    }
+
+    // a decimal integer of no sign
+    parse-unsigned: func(text: string) -> option<u64> { parse-unsigned-radix(text, 10) }
+
+    // an integer of no sign in radix (2 to 36), a + before it allowed
+    parse-unsigned-radix: func(text: string, radix: s64) -> option<u64> {
+        if radix < 2 || radix > 36 { return none; }
+        let start = if text.byte-at(0) == 43 { 1 } else { 0 };
+        if start >= text.len() { return none; }
+        let most: u64 = 18446744073709551615;
+        let base = radix as u64;
+        let value: u64 = 0;
+        for index in start..text.len() {
+            let digit = match to-digit(text.byte-at(index), radix) {
+                some(found) => found as u64,
+                none => { return none; }
+            };
+            if value > (most - digit) / base { return none; }
+            value = value * base + digit;
+        }
+        some(value)
+    }
+
+    // a decimal float: digits, a point and digits after it (either side may be empty, not both),
+    // then an exponent (e or E, a sign, digits); or inf, infinity, nan in any case. Its value is
+    // the nearest f64 (C's strtod, given only what is checked here); one past f64's range is an
+    // infinity, as IEEE rounds it
+    parse-float: func(text: string) -> option<f64> {
+        let start = if text.byte-at(0) == 45 || text.byte-at(0) == 43 { 1 } else { 0 };
+        let word = text.substring(start, text.len()).to-lower();
+        if word == "inf" || word == "infinity" || word == "nan" { return some(parse-f64(text)); }
+        let at = start;
+        let whole = digits-from(text, at);
+        at += whole;
+        let fraction = 0;
+        if text.byte-at(at) == 46 {
+            at += 1;
+            fraction = digits-from(text, at);
+            at += fraction;
+        }
+        if whole + fraction == 0 { return none; }
+        if text.byte-at(at) == 101 || text.byte-at(at) == 69 {
+            at += 1;
+            if text.byte-at(at) == 45 || text.byte-at(at) == 43 { at += 1; }
+            let exponent = digits-from(text, at);
+            if exponent == 0 { return none; }
+            at += exponent;
+        }
+        if at != text.len() { return none; }
+        some(parse-f64(text))
+    }
+
+    // how many decimal digits text has from at on
+    @(private) digits-from: func(text: string, at: s64) -> s64 {
+        let end = at;
+        loop {
+            if !is-digit(text.byte-at(end)) { break; }
+            end += 1;
+        }
+        end - at
+    }
+}

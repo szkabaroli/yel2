@@ -1,43 +1,14 @@
-// The standard library (runtime/std): reached without an include, a program's own names first
-
-record Person { name: string, age: s32, }
-
-older: func(a: Person, b: Person) -> bool { a.age > b.age }
-
-is-long: func(s: string) -> bool { s.len() > 3 }
-
-shout: func(s: string) -> string { s.to-upper() + "!" }
+// The standard library (runtime/std): reached without an include, a program's own names first, and
+// one name for several of std's funcs, the first argument's type choosing. What std's funcs do is
+// tested beside them (yelc test runtime/std, runtime/std/encoding)
 
 // a program's own func of a std name is the one it calls
 repeat: func(s: string, n: s32) -> string { "(own repeat)" }
 
 main: func() {
-    let s = "  the quick brown fox  ";
-    print("[{s.trim()}] [{s.trim-start()}] [{s.trim-end()}]\n");
-    let words = s.trim().split(" ");
-    print("{words} {words.len()} {"a,,b".split(",")} {"".split(",")}\n");
-    print("{"hello".starts-with("he")} {"hello".ends-with("lo")} {"hello".contains("ell")}\n");
-    print("{"banana".find("an")} {"banana".find-last("an")} {"banana".find("x")}\n");
-    print("{"a-b-c".replace("-", " + ")} {"Mixed Case".to-lower()} {"7".pad-start(3, "0")}\n");
-    print("{"one\r\ntwo\nthree".lines()}\n");
     print("{repeat("ab", 3)}\n");
-    let xs = [5, 3, 9, 1, 4,];
-    print("{xs.contains(9)} {xs.index-of(4)} {xs.index-of(7)} {xs.slice(1, 3)} {xs.reverse()}\n");
-    let people: list<Person> = [
-        { name: "ada", age: 36, },
-        { name: "grace", age: 85, },
-        { name: "alan", age: 41, },
-        { name: "joan", age: 36, },
-    ];
-    people.sort(older);
-    print("{people.map(shout-name)}\n");
-    print("{words.filter(is-long)} {words.map(shout)} {words.any(is-long)} {words.all(is-long)}\n");
-    print("{"42".parse-int()} {"-9223372036854775808".parse-int()} {"9223372036854775808".parse-int()} {"4x".parse-int()}\n");
-    print("{is-digit(55)} {to-digit(102, 16)} {7 as s64 * 3000000000}\n");
     // one name for text and lists: the first argument's type chooses
     let letters = ["a", "b", "c",];
     print("{"abc".contains("b")} {letters.contains("b")} {contains("abc", "z")} {contains(letters, "z")}\n");
     print("{"hello".slice(1, 3)} {letters.slice(1, 3)} {"stressed".reverse()} {letters.reverse()}\n");
 }
-
-shout-name: func(p: Person) -> string { "{p.name.to-upper()} {p.age}" }

@@ -1,0 +1,24 @@
+{
+	"name": "tree-sitter-yel",
+	"version": "0.1.0",
+	"private": true,
+	"description": "yel2's grammar for Tree-sitter (Zed's highlighting, outline and indentation)",
+	"license": "MIT",
+	"main": "bindings/node",
+	"scripts": {
+		"generate": "tree-sitter generate",
+		"parse": "tree-sitter parse"
+	},
+	"devDependencies": {
+		"tree-sitter-cli": "^0.25.0"
+	},
+	"tree-sitter": [
+		{
+			"scope": "source.yel",
+			"file-types": [
+				"yel"
+			],
+			"highlights": "queries/highlights.scm"
+		}
+	]
+}

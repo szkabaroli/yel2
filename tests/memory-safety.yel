@@ -3,7 +3,7 @@
 // union's conversion let escape, a closure's environment not rooted, a directory's names made
 // while its list grew
 
-record P { name: string, n: s32, }
+resource P { name: string, n: s32, }
 type mix = s32 | P;
 
 // the race's loser (the sleep) leaves its timer naming this task, done long before it is due

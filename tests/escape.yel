@@ -1,7 +1,7 @@
 // escape analysis: records that never leave their func (add's and scale's, inlined into the loop)
 // stay on the stack; one kept past its loop's turn, or put in a list, stays on the heap
 
-record Vec { x: s32, y: s32, }
+resource Vec { x: s32, y: s32, }
 
 add: func(a: Vec, b: Vec) -> Vec { { x: a.x + b.x, y: a.y + b.y, } }
 

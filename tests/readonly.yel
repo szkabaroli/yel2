@@ -2,7 +2,7 @@
 // too). Funcs that only read take them (and mutable values) as they are: what each func does with
 // its parameters is worked out from its body, so nothing of this is checked when the program runs
 
-record Team { name: string, members: list<string>, }
+resource Team { name: string, members: list<string>, }
 
 type names = list<string> & readonly;
 
@@ -40,7 +40,7 @@ evens: func(n: s32) -> list<s32> {
 }
 
 // keeps what it is given: a value only it then has is fine
-record Shelf { items: list<string> & readonly, }
+resource Shelf { items: list<string> & readonly, }
 
 shelve: func(items: list<string> & readonly) -> Shelf { { items: items, } }
 

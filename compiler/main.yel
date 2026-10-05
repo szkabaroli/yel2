@@ -5,9 +5,12 @@
 //   yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none]
 //        [--wit <dir>]   (the component's WIT world, for wasm-component-ld --component-type <dir>)
 //        [--backend c|bitcode] [--triple <t>]   (bitcode: LLVM's, for clang, llvm.yel: integers and
-//        control so far)
+//        control so far) [-g]   (debug info: DWARF, as LLVM's metadata; bitcode only)
 //   yelc check <input.yel | package dir> [prelude.yel] [-I <dir>]...   (every error, as a compile
 //        finds it, lexer to readonly and moves; no C made)
+//   yelc test <input.yel | package dir> <output.c> [...]   (the package's @(test) funcs, and a
+//        runner of them: run, it runs each in a process of its own, those its arguments name if
+//        any, and tells which failed)
 //   yelc --fmt <file.yel | dir>...   (each file formatted in place, fmt.yel)
 //
 // This package is the compiler: its top level holds what every part shares (syntax.yel, types.yel,
@@ -25,21 +28,27 @@ main: async func(argv: list<string>) -> s64 {
     let mode = "size";
     // --wit <dir>: the component's WIT (its world, and the WIT packages it needs) written there
     let wit-out = "";
-    // --backend c (the default: C for runtime/yel.h) or bitcode (LLVM's, llvm.yel: a start); --triple:
-    // the bitcode's target (by default the one yelc runs on: its C calling convention is what the
-    // bitcode calls the runtime by)
+    // --backend c (the default: C for runtime/yel.h) or bitcode (LLVM's, llvm.yel: a start);
+    // --triple: the bitcode's target (by default the one yelc runs on: its C calling convention is
+    // what the bitcode calls the runtime by)
     let backend = "c";
     let triple = host-triple();
     let i = 0;
     let fmt = false;
-    // yelc check: the program's errors told, no C made
+    let debug = false;
+    // yelc check: the program's errors told, no C made; yelc test: the package's tests made a
+    // program (its runner: each test run in a process of its own)
     let check = argv.len() > 0 && argv[0] == "check";
-    if check { i = 1; }
+    let testing = argv.len() > 0 && argv[0] == "test";
+    if check || testing { i = 1; }
 
     for step in 0..argv.len() {
         if i < argv.len() {
             if argv[i] == "--fmt" {
                 fmt = true;
+                i += 1;
+            } else if argv[i] == "-g" {
+                debug = true;
                 i += 1;
             } else if argv[i] == "--backend" && i + 1 < argv.len() {
                 backend = argv[i + 1];
@@ -80,8 +89,9 @@ main: async func(argv: list<string>) -> s64 {
     }
 
     if positional.len() < (if check { 1 } else { 2 }) {
-        eprint("usage: yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none] [--wit <dir>]\n");
+        eprint("usage: yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none] [--wit <dir>] [--backend c|bitcode] [-g]\n");
         eprint("       yelc check <input.yel | package dir> [prelude.yel] [-I <dir>]...\n");
+        eprint("       yelc test <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... (the same options as a build)\n");
         return 2;
     }
 
@@ -91,67 +101,1428 @@ main: async func(argv: list<string>) -> s64 {
     let prelude-at = if check { 1 } else { 2 };
     if positional.len() > prelude-at { prelude = positional[prelude-at]; }
 
-    // WIT packages: beside the prelude (runtime/wit), then in each -I directory
-    let wit-dirs: list<string> = [packages.dir-name(prelude) + "/wit",];
-    for d in search {
-        wit-dirs.push(d);
-    }
-
     let context: Context = {
         sources: [],
         errors: [],
         input: input,
         mode: if check { "check" } else { mode },
         backend: backend,
+        debug: debug,
+        testing: testing,
+        test-exports: testing && (wit-out != "" || triple.starts-with("wasm32")),
         triple: triple,
+        overlays: map.new(),
+        exits: true,
+        type-names: [],
+        uses: [],
+        modules: [],
+        declarations: [],
+        members: [],
+        locals: [],
+        bodies: [],
+        trees: map.new(),
+        symbols: symbols(),
     };
-    let prog: Program = {
-        context: context,
-        decls: [],
-        packages: map.new(),
-        search: search,
-        prelude: map.new(),
-        wit-dirs: wit-dirs,
-        wit: map.new(),
-        wit-read: false,
-        wit-types: map.new(),
-        wit-done: map.new(),
-        root: blank-scope(input).pkg,
-    };
-    let prelude-source = wait diagnostics.read-source(prog.context, prelude);
-    parser.declarations(parser.parser(prog.context, prelude-source, prog.context.sources[prelude-source].text, 1, 1), prog.decls);
-
-    for d in prog.decls {
-        prog.prelude.set(decl-name(d), true);
-    }
-
-    // the standard library (runtime/std, beside the prelude): yel:std, written in yel over the
-    // prelude's externs, as Porffor's builtins are over its intrinsics. Every program reaches its
-    // names after its own and the prelude's
-    let std-dir = packages.dir-name(prelude) + "/std";
-    if wait diagnostics.is-dir(std-dir) { wait packages.load-package(prog, std-dir, "the standard library"); }
-
-    prog.root = wait packages.load-package(prog, input, "");
-    packages.key-decls(prog.decls);
-    // each phase goes on past an error to find the others; where it ends, any found are shown and
-    // the compiler stops (the checker never sees a file that did not parse, codegen never an error)
-    diagnostics.abort-if-errors(prog.context);
-
-    let sites = checker.check-program(prog.context, prog.decls, prog.prelude);
-    diagnostics.abort-if-errors(prog.context);
-
-    let world: World = { items: [], interfaces: [], };
-    // check: as far as the readonly and move checks (on the IR), then done
-    let c = gen.compile(prog.context, prog.decls, sites, world);
-    diagnostics.abort-if-errors(prog.context);
+    // (the errors found where a phase ends shown, and the compiler stopped: context.exits)
+    let compiled = wait analysis.compile(context, prelude, search, !check);
     if check { return 0; }
-    wait diagnostics.write-output(output, c);
-
+    wait diagnostics.write-output(output, compiled.output);
     if wit-out != "" {
-        wait write-world(prog, wit-out, world);
+        wait write-world(compiled.prog, wit-out, compiled.world);
+    }
+    0
+}
+
+// The compiler's front half as a library (a language server's): a program loaded, as yelc loads
+// one, and checked as yelc check checks it, its errors kept and given back, never shown, the
+// process never stopped
+module analysis {
+    // a place in a file: its path, and its first line and column and those just past its last
+    // (from 1; columns count bytes); line 0 for none in the file (an error about the whole of it)
+    record Place { path: string, line: s64, col: s64, end-line: s64, end-col: s64, }
+
+    // another place an error points at, and what it says there
+    record Related { place: Place, message: string, }
+
+    // an error found: its message and place, what it says there (label: "" for nothing), the other
+    // places that explain it, and its notes and helps
+    record Problem {
+        message: string,
+        place: Place,
+        label: string,
+        related: list<Related>,
+        notes: list<string>,
+        helps: list<string>,
     }
 
-    0
+    // what a check found: the problems, and the text of each file it read, by path (an overlay's,
+    // else the disk's: what the problems' places are in)
+    // what a check found: the problems; the text of each file it read, by path (an overlay's, else
+    // the disk's: what the places are in); and what each name it resolved names (the references,
+    // each to one of the targets)
+    record Checked {
+        problems: list<Problem>,
+        texts: map<string, string>,
+        targets: list<Target>,
+        references: list<Reference>,
+        // what completion reads (completions): each member written (what is before a dot), each
+        // local and where it is seen, each func's body and its scope; each declaration's target
+        // and kind by its key, the checker's table of the declarations (what x.f() takes, a
+        // record's fields, a type's cases), the builtins' keys, std's modules, and who may name
+        // what
+        members: list<Member>,
+        locals: list<Local>,
+        bodies: list<Body>,
+        by-key: map<string, s64>,
+        kinds: map<string, s64>,
+        symbols: Symbols,
+        builtins: list<string>,
+        std-modules: list<string>,
+        visibility: map<string, Visibility>,
+        // each file's syntax tree, by its path (what the outline and signature help read)
+        trees: map<string, GreenNode>,
+        // what it was checked from (a rename checks the program again, its edits made): the
+        // input, the prelude, the search directories and the overlays read in place of the disk
+        input: string,
+        prelude: string,
+        search: list<string>,
+        overlays: map<string, string>,
+        // its compile and context (a check as far as names: what check-flow goes on from)
+        compiled: Compiled,
+        context: Context,
+    }
+
+    // a member written, x.name, where its name is (zero-width after the dot where none is yet):
+    // what is before the dot, a value's type (ty), a module (its key), or a type (its key)
+    record Member { place: Place, ty: Type, module: string, type-key: string, }
+
+    // a local, where it is declared, and the place it is seen in to (its block's, its body's, its
+    // arm's)
+    record Local { name: string, place: Place, until: Place, signature: string, }
+
+    // a func's body and its scope: its package's prefix, its module, its file, its file's
+    // includes (a name to a module's key), and its package's modules
+    record Body { place: Place, prefix: string, module: string, file: string, includes: map<string, string>, modules: list<string>, }
+
+    // what completion offers: its label, its kind (LSP's CompletionItemKind), its declaration
+    // (detail) and its docs
+    record Completion { label: string, kind: s64, detail: string, docs: string, }
+
+    // what a name may name: its name; what holds it (container: its module or its type, as its
+    // key names them, "" for a local or a package's own top level); where it is declared (no path
+    // for what nothing declares); its declaration as yel writes it (signature); and the comment
+    // written above that declaration (docs, "" for none). A field's key is its record's and its
+    // name, R#name
+    record Target { name: string, container: string, place: Place, signature: string, docs: string, }
+
+    // a name where it is used, and the target it names (an index into Checked.targets)
+    record Reference { place: Place, target: s64, }
+
+    // whether the file at path declares a func main at its top level (a program of its own): it
+    // parsed, as context reads it (an overlay's text, else the disk's)
+    has-main: async func(context: Context, path: string) -> bool {
+        let source = wait diagnostics.read-source(context, path);
+        // (its syntax tree's: a func declared at its top named main, nothing lowered)
+        let root = tree.root(grammar.parse-file(context, source));
+        for n in tree.child-nodes(root) {
+            if tree.kind(n) != NodeKind.func-decl { continue; }
+            match lower.first-name(n) {
+                some(t) => { if lower.token-name(t) == "main" { return true; } }
+                none => {}
+            }
+        }
+        false
+    }
+
+    // a context for a check of input: the overlays' texts read in place of the disk's (an editor's
+    // unsaved buffers), each error kept
+    context: func(input: string, overlays: map<string, string>) -> Context {
+        {
+            sources: [],
+            errors: [],
+            input: input,
+            mode: "check",
+            backend: "c",
+            debug: false,
+            testing: false,
+            test-exports: false,
+            triple: host-triple(),
+            overlays: overlays,
+            exits: false,
+            type-names: [],
+            uses: [],
+            modules: [],
+            declarations: [],
+            members: [],
+            locals: [],
+            bodies: [],
+            trees: map.new(),
+            symbols: symbols(),
+        }
+    }
+
+    // the program read: the prelude, the standard library's core, then the input's package and
+    // what it includes, each declaration keyed. WIT packages are found beside the prelude
+    // (runtime/wit), then in each search directory (-I)
+    load: async func(context: Context, prelude: string, search: list<string>) -> Program {
+        let wit-dirs: list<string> = [packages.dir-name(prelude) + "/wit",];
+        for d in search {
+            wit-dirs.push(d);
+        }
+        let prog: Program = {
+            context: context,
+            decls: [],
+            packages: map.new(),
+            search: search,
+            library: packages.dir-name(prelude) + "/std",
+            prelude: map.new(),
+            wit-dirs: wit-dirs,
+            wit: map.new(),
+            wit-read: false,
+            wit-types: map.new(),
+            wit-done: map.new(),
+            root: blank-scope(context.input).pkg,
+            visibility: map.new(),
+        };
+        let prelude-source = wait diagnostics.read-source(prog.context, prelude);
+        lower.declarations(
+            lower.reader(prog.context, prelude-source),
+            prog.decls,
+        );
+
+        for d in prog.decls {
+            prog.prelude.set(decl-name(d), true);
+        }
+
+        // the standard library's core (runtime/std/core, beside the prelude, its files in the
+        // folders in it too: text, collections, numbers, async, reactive, runtime, host): yel:std,
+        // written in yel over the prelude's externs, as Porffor's builtins are over its
+        // intrinsics. Every program reaches its names after its own and the prelude's; the rest of
+        // the library (each other directory of runtime/std) only by an include
+        // (std:encoding/json)
+        let library = packages.core-dir(prog);
+        if wait diagnostics.is-source-dir(context, library) {
+            wait packages.load-package(prog, library, "the standard library");
+        }
+
+        // (the standard library's core itself, as the input: loaded once, as the library; its tests'
+        // runner a package of its own)
+        let input = packages.clean-path(context.input);
+        if input == library && prog.packages.has(library) {
+            prog.root = if context.testing { packages.empty-package(prog, library + "/yelc-tests") } else { prog.packages[library] };
+        } else {
+            prog.root = wait packages.load-package(prog, context.input, "");
+        }
+        if context.testing { wait packages.test-runner(prog, if input == library { library } else { prog.root.dir }); }
+        packages.key-decls(prog);
+        prog
+    }
+
+    // what a program's compile made, as far as it went: the program loaded, the effect sites the
+    // checker found, the program as IR (none where it did not get there), its output (C, or
+    // bitcode: "" where it was not emitted) and its component's world
+    // (loaded: how many errors were found once it was loaded, the parse's)
+    record Compiled { prog: Program, loaded: s64, sites: list<EffectSite>, lowered: option<Lowered>, output: string, world: World, }
+
+    // a program compiled, the one way every use of the compiler goes (a build, yelc check, yelc
+    // test, the language server, the compiler's tests): loaded (its packages read and parsed),
+    // checked, then made IR, its readonly and move checks run (lower-program), and, where emit
+    // asks, emitted as its backend says. A phase that finds errors is the last: where the context
+    // exits (yelc) they are shown and the compiler stops; else (an analysis) they are kept, and
+    // the checker still runs past the parse's (what parsed, what completion and hover read). A
+    // check makes nothing (mode check); it checks what it loaded, a package's tests among them,
+    // where a build leaves them out. Modes resolve and names: as far as the checker (what each
+    // name names; names keeps what an editor reads, check-flow runs the rest)
+    compile: async func(context: Context, prelude: string, search: list<string>, emit: bool) -> Compiled {
+        let world: World = { items: [], interfaces: [], };
+        let prog = wait load(context, prelude, search);
+        diagnostics.abort-if-errors(context);
+        let loaded = context.errors.len();
+        let sites = checker.check-program(context, prog.decls, prog.prelude, prog.visibility);
+        diagnostics.abort-if-errors(context);
+        // (resolve, names: as far as what each name names: a rename's check, a language server's
+        // first, its IR's checks run later: check-flow)
+        if context.errors.len() > 0 || context.mode == "resolve" || context.mode == "names" { return { prog: prog, loaded: loaded, sites: sites, lowered: none, output: "", world: world, }; }
+        let made = if context.testing || context.mode == "check" { prog.decls } else { prog.decls.filter({ d -> !is-test(d) }) };
+        let lowered = gen.lower-program(context, made, sites);
+        diagnostics.abort-if-errors(context);
+        if !lowered.made || !emit { return { prog: prog, loaded: loaded, sites: sites, lowered: some(lowered), output: "", world: world, }; }
+        let output = gen.emit(context, lowered, world);
+        diagnostics.abort-if-errors(context);
+        { prog: prog, loaded: loaded, sites: sites, lowered: some(lowered), output: output, world: world, }
+    }
+
+    // a program written in memory, as IR (what the compiler's tests read): text a file of its own
+    // at path (an overlay: nothing read from the disk for it), loaded as yelc loads one (the
+    // prelude, std's core), checked, and built as far as its releases (gen.lower-program), nothing
+    // optimized (mode none: each func as codegen and the passes before optimizing leave it). Else
+    // the problems that stopped it
+    lower: async func(path: string, text: string) -> result<Lowered, list<Problem>> {
+        let overlays: map<string, string> = map.new();
+        overlays.set(path, text);
+        let checking = context(path, overlays);
+        checking.mode = "none";
+        let compiled = wait compile(checking, "runtime/prelude.yel", [], false);
+        match compiled.lowered {
+            some(lowered) => if lowered.made && checking.errors.len() == 0 { ok(lowered) } else { err(problems(checking)) },
+            none => err(problems(checking)),
+        }
+    }
+
+    // the program checked, as yelc check checks it: loaded, then the checker, then the readonly
+    // and move checks (on the IR); each phase goes on past an error to find the others, and the
+    // first that finds any is the last run. The errors found (none: it checks)
+    check: async func(context: Context, prelude: string, search: list<string>) -> Checked {
+        let compiled = wait compile(context, prelude, search, false);
+        let prog = compiled.prog;
+        // (checked past a parse error too, what parsed: what is written so far, x. with no name
+        // yet, still names what completion offers; only the parse's errors are told)
+        let loaded = compiled.loaded;
+        if loaded > 0 { context.errors = context.errors.slice(0, loaded); }
+        let texts: map<string, string> = map.new();
+        for source in context.sources { texts.set(source.path, source.text); }
+        let trees-by-path: map<string, GreenNode> = map.new();
+        for index in context.trees.keys() { trees-by-path.set(context.sources[index].path, context.trees[index]); }
+        // (resolve: what names name, no more: a rename's check, which reads no signature, docs or
+        // what completion reads)
+        let resolving = context.mode == "resolve";
+        // the targets: every declaration (by its key), then each local a name was found to be
+        let targets: list<Target> = [];
+        let by-key: map<string, s64> = map.new();
+        // where each declaration's name is written, by its key (the parser's notes)
+        let names: map<string, Span> = map.new();
+        // (a name noted in a file wins over one noted in a source made, not read: a view's field
+        // where the view writes it, not where its lowered resource does)
+        for written in context.declarations {
+            let key = packages.item-key(written.scope, written.name);
+            let made = written.span.source >= 0 && context.sources[written.span.source].origin != none;
+            if !made || !names.has(key) { names.set(key, written.span); }
+        }
+        // each declaration, from the checker's table of them (its types resolved, a func's type
+        // parameters as such): a target by its key, and its kind (as completion tells it); a
+        // record's fields, a variant's cases and a flags' flags each a target of its own, T#name
+        let symbols = context.symbols;
+        let kinds: map<string, s64> = map.new();
+        let add = { key: string, kind: s64, target: Target ->
+            kinds.set(key, kind);
+            by-key.set(key, targets.len());
+            targets.push(target);
+        };
+        // (its name's place where the parser noted it, else span: a func's is its name's already)
+        let made = { key: string, span: Span, signature: string ->
+            let target: Target = {
+                name: base-name(key),
+                container: container(key),
+                place: span-place(context, names.get(key).unwrap-or(span)),
+                signature: signature,
+                docs: "",
+            };
+            target
+        };
+        let member = { owner: string, name: string, span: Span, signature: string, kind: s64 ->
+            let key = "{owner}#{name}";
+            add(key, kind, {
+                name: name,
+                container: owner,
+                place: span-place(context, names.get(key).unwrap-or(span)),
+                signature: signature,
+                docs: "",
+            });
+        };
+        // the builtins (the prelude's funcs and std's, named anywhere) and std's modules
+        let builtins: list<string> = [];
+        let std-modules: list<string> = [];
+        for key in symbols.funcs.keys() {
+            let sig = symbols.funcs[key];
+            let kind = "{if sig.is-extern { "extern " } else { "" }}{if sig.is-async { "async " } else { "" }}func";
+            add(key, 3, made(key, sig.span, if resolving { "" } else { signature(context, key, kind, sig) }));
+            let sc = sig.scope;
+            if sc.pkg.id == "yel:std" || prog.prelude.has(key) { builtins.push(key); }
+            if sc.pkg.id == "yel:std" && sc.module != "" && !std-modules.contains(sc.module) { std-modules.push(sc.module); }
+        }
+        for record in symbols.records.values() {
+            let fields: list<string> = [];
+            for index in 0..record.fields.len() { fields.push("{record.fields[index]}: {written-type(record.field-types[index])}"); }
+            let kind = if record.value { "record" } else { "resource" };
+            add(record.name, if record.value { 22 } else { 7 }, made(record.name, record.span, "{kind} {base-name(record.name)} \{ {fields.join(", ")}, \}"));
+            for index in 0..record.fields.len() {
+                member(record.name, record.fields[index], record.span, fields[index], 5);
+            }
+        }
+        for v in symbols.variants.values() {
+            let cases: list<string> = [];
+            for k in v.cases { cases.push(if k.has-payload { "{k.name}({written-type(k.payload)})" } else { k.name }); }
+            add(v.name, 13, made(v.name, v.span, "variant {base-name(v.name)} \{ {cases.join(", ")}, \}"));
+            for index in 0..v.cases.len() { member(v.name, v.cases[index].name, v.span, cases[index], 20); }
+        }
+        for fl in symbols.flags.values() {
+            add(fl.name, 13, made(fl.name, fl.span, "flags {base-name(fl.name)} \{ {fl.flags.join(", ")}, \}"));
+            for flag in fl.flags { member(fl.name, flag, fl.span, flag, 20); }
+        }
+        for r in symbols.resources.values() { add(r.name, 7, made(r.name, r.span, "resource {base-name(r.name)}")); }
+        for x in symbols.consts.values() {
+            add(x.name, 21, made(x.name, x.span, match x.ty {
+                some(t) => "const {base-name(x.name)}: {written-type(t)}",
+                none => "const {base-name(x.name)}",
+            }));
+        }
+        for x in symbols.globals.values() { add(x.name, 6, made(x.name, x.span, "let {base-name(x.name)}: {written-type(x.ty)}")); }
+        for x in symbols.aliases.values() {
+            add(x.name, 22, made(x.name, x.span, "type {base-name(x.name)} = {if x.distinct { "distinct " } else { "" }}{written-type(x.target)}"));
+        }
+        // each module (by its key: its package's prefix and its name)
+        for declared-module in context.modules {
+            let key = declared-module.scope.pkg.prefix + declared-module.name;
+            if by-key.has(key) { continue; }
+            kinds.set(key, 9);
+            by-key.set(key, targets.len());
+            let package = declared-module.scope.pkg.id;
+            targets.push({
+                name: declared-module.name,
+                container: package,
+                place: span-place(context, declared-module.span),
+                signature: "module {declared-module.name}",
+                docs: "",
+            });
+        }
+        let by-local: map<Mark, s64> = map.new();
+        let references: list<Reference> = [];
+        let seen: set<string> = set.new();
+        for found in context.uses {
+            let target = -1;
+            if found.key != "" {
+                target = by-key.get(found.key).unwrap-or(-1);
+                // what no declaration names: a built-in type, a structural type's field (made once)
+                if target < 0 {
+                    match unnamed(found, by-key, targets) {
+                        some(made) => {
+                            target = targets.len();
+                            by-key.set(found.key, target);
+                            targets.push(made);
+                        }
+                        none => {}
+                    }
+                }
+            } else {
+                match found.local {
+                    some(mark) => {
+                        if !by-local.has(mark) {
+                            by-local.set(mark, targets.len());
+                            let name = mark.name;
+                            targets.push({
+                                name: name,
+                                container: "",
+                                place: span-place(context, mark.span),
+                                signature: "let {name}: {written-type(settled-type(mark.ty))}",
+                                docs: "",
+                            });
+                        }
+                        target = by-local[mark];
+                    }
+                    none => {}
+                }
+            }
+            if target < 0 { continue; }
+            // (a use in a source made, not read, a view's lowered yel, is no reference: nothing in
+            // it is written where it would point)
+            if found.span.source >= 0 && context.sources[found.span.source].origin != none { continue; }
+            let place = span-place(context, found.span);
+            // (an expression checked twice gives its use twice)
+            let id = "{place.path}:{place.line}:{place.col}:{target}";
+            if seen.has(id) { continue; }
+            seen.add(id);
+            references.push({ place: place, target: target, });
+        }
+        // each declaration's docs (the comment written above it) and signature (its text as
+        // written), from its node in its file's tree (a local has neither)
+        let locals: set<s64> = set.new();
+        for index in by-local.values() { locals.add(index); }
+        // (each file's line starts, found once)
+        let line-tables: map<string, list<s64>> = map.new();
+        // (a field's, a case's, a flag's: documented only where it starts its line)
+        let members-at: set<s64> = set.new();
+        for key in by-key.keys() { if key.contains("#") { members-at.add(by-key[key]); } }
+        for index in 0..targets.len() {
+            if resolving { break; }
+            if locals.has(index) || targets[index].place.path == "" { continue; }
+            let target = targets[index];
+            // (its signature and docs its declaration's, as written; one with no node, as the
+            // checker resolved it)
+            match declared-node(context, target.place, line-tables) {
+                some(n) => {
+                    target.docs = docs(n, members-at.has(index));
+                    target.signature = written(n).text;
+                }
+                none => {}
+            }
+            targets[index] = target;
+        }
+        // what completion reads: the members written, the locals and the bodies, in places
+        let members: list<Member> = [];
+        if resolving { context.members = []; context.locals = []; context.bodies = []; }
+        for site in context.members {
+            members.push({ place: span-place(context, site.span), ty: site.ty, module: site.module, type-key: site.type-key, });
+        }
+        let locals: list<Local> = [];
+        for extent in context.locals {
+            let mark = extent.mark;
+            if mark.span.source < 0 || context.sources[mark.span.source].origin != none { continue; }
+            locals.push({
+                name: mark.name,
+                place: span-place(context, mark.span),
+                until: span-place(context, extent.until),
+                signature: "let {mark.name}: {written-type(settled-type(mark.ty))}",
+            });
+        }
+        let bodies: list<Body> = [];
+        for body in context.bodies {
+            if body.span.source < 0 || context.sources[body.span.source].origin != none { continue; }
+            let sc = body.scope;
+            bodies.push({
+                place: span-place(context, body.span),
+                prefix: sc.pkg.prefix,
+                module: sc.module,
+                file: sc.file,
+                includes: sc.includes,
+                modules: sc.pkg.modules.keys(),
+            });
+        }
+        {
+            problems: problems(context),
+            texts: texts,
+            targets: targets,
+            references: references,
+            members: members,
+            locals: locals,
+            bodies: bodies,
+            by-key: by-key,
+            kinds: kinds,
+            symbols: symbols,
+            builtins: builtins,
+            std-modules: std-modules,
+            visibility: prog.visibility,
+            trees: trees-by-path,
+            input: context.input,
+            prelude: prelude,
+            search: search,
+            overlays: context.overlays,
+            compiled: compiled,
+            context: context,
+        }
+    }
+
+    // what may be written at line and column of the file at path (columns from 1, in bytes): after
+    // a dot, what is before it has (a value's fields and the funcs that take it first, as x.f()
+    // calls them; a module's members; a type's cases and its funcs); else the names seen there
+    // (its locals, its module's and its package's, the builtins, the modules) and the keywords
+    completions: func(checked: Checked, path: string, line: s64, col: s64) -> list<Completion> {
+        let out: list<Completion> = [];
+        let labels: set<string> = set.new();
+        // (key: what it is, its target's signature and docs told; "" for none: a keyword's)
+        let offer = { label: string, kind: s64, key: string, detail: string ->
+            if label == "" || labels.has(label) { return; }
+            labels.add(label);
+            match checked.by-key.get(key) {
+                some(index) => {
+                    let target = checked.targets[index];
+                    out.push({ label: label, kind: kind, detail: target.signature, docs: target.docs, });
+                }
+                none => out.push({ label: label, kind: kind, detail: detail, docs: "", }),
+            }
+        };
+        let body = body-at(checked, path, line, col);
+        // what is before a dot here (the narrowest written here: checked twice gives one twice)
+        for site in checked.members {
+            let place = site.place;
+            if place.path != path || place.line != line || col < place.col || col > place.end-col { continue; }
+            if site.type-key != "" {
+                // its cases (a variant's, a flags'), then its funcs (a resource's: new, statics)
+                let owner = intern(site.type-key);
+                match checked.symbols.variants.get(owner) {
+                    some(v) => { for k in v.cases { offer(k.name, 20, "{site.type-key}#{k.name}", ""); } }
+                    none => {}
+                }
+                match checked.symbols.flags.get(owner) {
+                    some(fl) => { for flag in fl.flags { offer(flag, 20, "{site.type-key}#{flag}", ""); } }
+                    none => {}
+                }
+                for key in checked.symbols.funcs.keys() {
+                    if !key.starts-with(site.type-key + ".") { continue; }
+                    let rest = key.substring(site.type-key.len() + 1, key.len());
+                    if !rest.contains(".") && may-name(checked, body, key) { offer(rest, 3, key, ""); }
+                }
+            } else if site.module != "" {
+                for key in checked.by-key.keys() {
+                    if !key.starts-with(site.module + ".") { continue; }
+                    let rest = key.substring(site.module.len() + 1, key.len());
+                    if rest.contains(".") || rest.contains("#") || !may-name(checked, body, key) { continue; }
+                    offer(rest, checked.kinds.get(key).unwrap-or(3), key, "");
+                }
+            } else {
+                value-members(checked, body, site.ty, offer);
+            }
+            return out;
+        }
+        // the locals declared before here, and seen here (the latest of a name first)
+        for index in 0..checked.locals.len() {
+            let local = checked.locals[checked.locals.len() - 1 - index];
+            if local.place.path != path || !before(local.place.line, local.place.col, line, col) { continue; }
+            if !before(local.until.line, local.until.col, line, col) || before(local.until.end-line, local.until.end-col, line, col) { continue; }
+            if labels.has(local.name) { continue; }
+            labels.add(local.name);
+            out.push({ label: local.name, kind: 6, detail: local.signature, docs: "", });
+        }
+        match body {
+            some(scope) => {
+                // its module's, then its package's top level's
+                for key in checked.by-key.keys() {
+                    let own = if scope.module != "" && key.starts-with(scope.prefix + scope.module + ".") {
+                        key.substring(scope.prefix.len() + scope.module.len() + 1, key.len())
+                    } else if key.starts-with(scope.prefix) && checked.kinds.has(key) {
+                        key.substring(scope.prefix.len(), key.len())
+                    } else { "" };
+                    if own.contains(".") || own.contains("#") || own.contains("/") || own.contains(":") { continue; }
+                    if checked.kinds.get(key) == some(9) || checked.builtins.contains(key) || !may-name(checked, body, key) { continue; }
+                    offer(own, checked.kinds.get(key).unwrap-or(3), key, "");
+                }
+                // the modules it may name: its file's includes, its package's, std's
+                for name in scope.includes.keys() { offer(name, 9, scope.includes[name], ""); }
+                for name in scope.modules { offer(name, 9, scope.prefix + name, ""); }
+            }
+            none => {}
+        }
+        for name in checked.std-modules { offer(name, 9, "yel:std/" + name, ""); }
+        for key in checked.builtins {
+            if may-name(checked, body, key) { offer(base-name(key), 3, key, ""); }
+        }
+        // std's types, named anywhere (yel:std/T)
+        for key in checked.by-key.keys() {
+            if !key.starts-with("yel:std/") { continue; }
+            let rest = key.substring(8, key.len());
+            let kind = checked.kinds.get(key).unwrap-or(0);
+            if rest.contains(".") || rest.contains("#") || kind == 3 || kind == 9 || kind == 0 { continue; }
+            if may-name(checked, body, key) { offer(rest, kind, key, ""); }
+        }
+        for word in keywords() { offer(word, 14, "", ""); }
+        out
+    }
+
+    // the words yel takes as keywords (lexer's, and those it takes where they start what they
+    // name), as completion offers them
+    @(private) keywords: func() -> list<string> {
+        [
+        "if", "else", "match", "for", "in", "return", "break", "continue", "let", "as", "is", "true",
+        "false", "start", "wait", "yield", "module", "view", "from", "include", "extern", "async",
+        "loop", "const", "type", "readonly", "resource", "record", "variant", "enum", "flags",
+        ]
+    }
+
+    // what a value of type ty has after a dot: its record's fields (a tuple's, an anonymous
+    // record's), its resource's methods, and the funcs that take it first (its module's, its
+    // package's, the builtins': what x.f() calls)
+    @(private) value-members: func(checked: Checked, body: option<Body>, ty: Type, offer: func(string, s64, string, string)) {
+        let t = match resolve(settled-type(ty)) {
+            readonly-type(x) => resolve(x),
+            let other => other,
+        };
+        match t {
+            named(n) => {
+                match checked.symbols.records.get(n) {
+                    some(record) => { for field in record.fields { offer(field, 5, "{record.name}#{field}", ""); } }
+                    none => {}
+                }
+            }
+            tuple-type(items) => {
+                for index in 0..items.len() { offer("{index}", 5, "", "{index}: {written-type(settled-type(items[index]))}"); }
+            }
+            anon-record(a) => {
+                for index in 0..a.fields.len() { offer(a.fields[index], 5, "", "{a.fields[index]}: {written-type(settled-type(a.types[index]))}"); }
+            }
+            error-type => { return; }
+            var(_) => { return; }
+            _ => {}
+        }
+        let takes = { key: string ->
+            match checked.symbols.funcs.get(key) {
+                some(sig) => sig.params.len() > 0 && checker.could-fit(sig.params[0], t) && may-name(checked, body, key),
+                none => false,
+            }
+        };
+        match t {
+            named(n) => {
+                let owner = name-text(n) + ".";
+                for key in checked.symbols.funcs.keys() {
+                    if key.starts-with(owner) && takes(key) { offer(base-name(key), 2, key, ""); }
+                }
+            }
+            _ => {}
+        }
+        match body {
+            some(scope) => {
+                for key in checked.symbols.funcs.keys() {
+                    let own = if scope.module != "" && key.starts-with(scope.prefix + scope.module + ".") {
+                        key.substring(scope.prefix.len() + scope.module.len() + 1, key.len())
+                    } else if key.starts-with(scope.prefix) {
+                        key.substring(scope.prefix.len(), key.len())
+                    } else { "" };
+                    if own == "" || own.contains(".") || own.contains("/") || own.contains(":") { continue; }
+                    // (a builtin is offered after: the prelude's are keyed as a program's own are)
+                    if !checked.builtins.contains(key) && takes(key) { offer(own, 2, key, ""); }
+                }
+            }
+            none => {}
+        }
+        for key in checked.builtins {
+            if takes(key) { offer(base-name(key), 2, key, ""); }
+        }
+    }
+
+    // the scope of the func body line and column of path are in (the narrowest), if any
+    @(private) body-at: func(checked: Checked, path: string, line: s64, col: s64) -> option<Body> {
+        let found: option<Body> = none;
+        let lines = 0;
+        for body in checked.bodies {
+            let place = body.place;
+            if place.path != path || !before(place.line, place.col, line, col) || before(place.end-line, place.end-col, line, col) { continue; }
+            let span = place.end-line - place.line;
+            if found == none || span < lines {
+                found = some(body);
+                lines = span;
+            }
+        }
+        found
+    }
+
+    // whether what key names may be named from body (none: from anywhere): one private to its
+    // package from its package, one private to its file from its file
+    @(private) may-name: func(checked: Checked, body: option<Body>, key: string) -> bool {
+        match checked.visibility.get(key) {
+            some(v) => match body {
+                some(scope) => v.pkg.prefix == scope.prefix && (v.level != "file" || v.file == scope.file),
+                none => false,
+            },
+            none => true,
+        }
+    }
+
+    // whether line and column a are at or before b
+    @(private) before: func(line: s64, col: s64, other-line: s64, other-col: s64) -> bool {
+        line < other-line || line == other-line && col <= other-col
+    }
+
+
+    // a declaration's docs: the comment lines written just above it, each alone on its line
+    // (none between them blank), read from its file's syntax tree: the whitespace and comments
+    // before the declaration's node (past its attributes, which are its own). A member (a field,
+    // a case, a flag) has them only where it starts its line
+    @(private) docs: func(declared: SyntaxNode, member: bool) -> string {
+        // what is written before it, in its holder: whitespace and comments, back to code (past
+        // the declarations right above it that start with an attribute, @c(…) externs written one
+        // to a line: the comment above them is theirs too)
+        let before: list<GreenToken> = [];
+        match declared.parent {
+            some(holder) => {
+                let index = declared.index;
+                loop {
+                    if index == 0 { break; }
+                    index -= 1;
+                    match holder.green.children[index] {
+                        token(t) => {
+                            if !tree.is-trivia(t.kind) { break; }
+                            before.push(t);
+                        }
+                        node(n) => {
+                            let gap = if before.len() > 0 { before[before.len() - 1] } else { { kind: TokenKind.space, text: "", } };
+                            let commented = before.any({ t -> t.kind == TokenKind.comment });
+                            if commented || !declares(n.kind) || !starts-with-attribute(n) || gap.kind != TokenKind.space || newlines-in(gap.text) != 1 { break; }
+                            before = [];
+                        }
+                    }
+                }
+            }
+            none => {}
+        }
+        // (a member after another on its line: the comment above is its type's)
+        if member && before.len() > 0 && before[0].kind == TokenKind.space && !before[0].text.contains("\n") && before.len() < 2 {
+            return "";
+        }
+        let lines: list<string> = [];
+        let index = 0;
+        // the line break just before it, then each comment alone on the line above the last
+        loop {
+            if index + 1 >= before.len() { break; }
+            let gap = before[index];
+            let comment = before[index + 1];
+            if gap.kind != TokenKind.space || newlines-in(gap.text) != 1 || comment.kind != TokenKind.comment { break; }
+            // (alone on its line: what is before it starts a line)
+            let alone = index + 2 >= before.len() || before[index + 2].kind == TokenKind.space && before[index + 2].text.contains("\n");
+            if !alone { break; }
+            let written = comment.text.substring(2, comment.text.len());
+            lines.push(if written.starts-with(" ") { written.substring(1, written.len()) } else { written });
+            index += 2;
+        }
+        lines.reverse().join(from-byte(10))
+    }
+
+    // the problems a check as far as names (mode names) did not look for yet: its IR made and
+    // its readonly and move checks run, on the program it checked (none where it had errors,
+    // which stop a compile there): all its problems, those found before among them
+    check-flow: func(checked: Checked) -> list<Problem> {
+        let context = checked.context;
+        if context.errors.len() > 0 { return checked.problems; }
+        context.mode = "check";
+        let lowered = gen.lower-program(context, checked.compiled.prog.decls, checked.compiled.sites);
+        problems(context)
+    }
+
+    // ---- what an editor reads of a file's syntax tree: its outline, a call's signature
+
+    // a declaration in a file's outline: its name, its kind (LSP's SymbolKind), what it is (a
+    // func's signature, a field's type, as written), all it covers and where its name is, and the
+    // declarations in it (a module's, a record's fields, a variant's cases, a flags' flags, a
+    // view's fields)
+    resource Symbol { name: string, kind: s64, detail: string, range: Place, selection: Place, children: list<Symbol>, }
+
+    // the file at path's outline: its declarations, in the order written
+    outline: func(checked: Checked, path: string) -> list<Symbol> {
+        if !checked.trees.has(path) { return []; }
+        let text = checked.texts.get(path).unwrap-or("");
+        outline-of(tree.root(checked.trees[path]), path, tree.line-starts(text))
+    }
+
+    @(private) outline-of: func(n: SyntaxNode, path: string, lines: list<s64>) -> list<Symbol> {
+        let out: list<Symbol> = [];
+        for child in tree.child-nodes(n) {
+            let kind = tree.kind(child);
+            let symbol-kind = symbol-kind(child);
+            if symbol-kind == 0 { continue; }
+            let named = match symbol-name(child) {
+                some(t) => t,
+                none => { continue; }
+            };
+            let inner = if kind == NodeKind.module-decl || kind == NodeKind.record-decl || kind == NodeKind.variant-decl
+                || kind == NodeKind.flags-decl || kind == NodeKind.view-decl { outline-of(child, path, lines) } else { [] };
+            let shows = kind != NodeKind.module-decl && kind != NodeKind.record-decl && kind != NodeKind.variant-decl
+                && kind != NodeKind.flags-decl && kind != NodeKind.view-decl;
+            out.push({
+                name: lower.token-name(named),
+                kind: symbol-kind,
+                detail: if shows { written(child).text } else { "" },
+                range: offsets-place(path, lines, child.offset, tree.end-offset(child)),
+                selection: offsets-place(path, lines, named.offset, named.offset + named.green.text.len()),
+                children: inner,
+            });
+        }
+        out
+    }
+
+    // a declaration node's kind as LSP's SymbolKind (0: none, not a declaration)
+    @(private) symbol-kind: func(n: SyntaxNode) -> s64 {
+        let kind = tree.kind(n);
+        if kind == NodeKind.module-decl { return 2; }
+        if kind == NodeKind.func-decl { return 12; }
+        if kind == NodeKind.record-decl { return if tree.has-word(n, "record") { 23 } else { 5 }; }
+        if kind == NodeKind.view-decl { return 5; }
+        if kind == NodeKind.field-decl { return 8; }
+        if kind == NodeKind.view-field { return 7; }
+        if kind == NodeKind.variant-decl || kind == NodeKind.flags-decl { return 10; }
+        if kind == NodeKind.case-decl || kind == NodeKind.flag { return 22; }
+        if kind == NodeKind.type-decl { return 26; }
+        if kind == NodeKind.const-decl { return 14; }
+        if kind == NodeKind.global-decl { return 13; }
+        0
+    }
+
+    // a declaration node's name: its first own name that is no keyword of the declaration (a
+    // field's, the one before its :)
+    @(private) symbol-name: func(n: SyntaxNode) -> option<SyntaxToken> {
+        let own = tree.own-tokens(n);
+        for index in 0..own.len() {
+            let t = own[index];
+            if t.green.kind != TokenKind.id { continue; }
+            let word = t.green.text;
+            let keyword = word == "record" || word == "resource" || word == "variant" || word == "enum" || word == "flags"
+                || word == "type" || word == "let" || word == "const" || word == "module" || word == "view" || word == "extern"
+                || word == "ignored" || word == "private";
+            if !keyword { return some(t); }
+        }
+        none
+    }
+
+    // bytes start to end of a file's text as a place (lines: where its lines start)
+    offsets-place: func(path: string, lines: list<s64>, start: s64, end: s64) -> Place {
+        let (line, col) = tree.line-col(lines, start);
+        let (end-line, end-col) = tree.line-col(lines, end);
+        { path: path, line: line, col: col, end-line: end-line, end-col: end-col, }
+    }
+
+    // a call's signature, where the cursor is in its arguments: the callee's declaration as
+    // written (label), each parameter's place in it, and which the cursor is in
+    record SignatureHelp { label: string, params: list<tuple<s64, s64>>, active: s64, }
+
+    // the signature of the call whose arguments line and col (from 1, bytes) are in, at path:
+    // the innermost argument list around the cursor (past its ( and not past its ), one being
+    // written with none yet too), its callee's declaration as written, and the parameter the
+    // cursor is at (the commas before it; x.f(…) of a value: f's first parameter is x)
+    signature-help: func(checked: Checked, path: string, line: s64, col: s64) -> option<SignatureHelp> {
+        if !checked.trees.has(path) { return none; }
+        let text = checked.texts.get(path).unwrap-or("");
+        let at = tree.offset(text, line, col);
+        let root = tree.root(checked.trees[path]);
+        let before = match tree.token-before(root, at) {
+            some(t) => t,
+            none => { return none; }
+        };
+        for n in tree.self-and-ancestors(before.parent) {
+            if tree.kind(n) != NodeKind.arg-list { continue; }
+            let own = tree.own-tokens(n);
+            if own.len() == 0 || own[0].offset >= at { continue; }
+            let closed = own[own.len() - 1].green.text == ")" && own.len() > 1;
+            if closed && own[own.len() - 1].offset < at { continue; }
+            let call = match n.parent {
+                some(p) => p,
+                none => { return none; }
+            };
+            let named = callee-name(call);
+            let callee = match named {
+                some(t) => t,
+                none => { return none; }
+            };
+            let target = target-at(checked, path, text, callee);
+            if target < 0 { return none; }
+            let at-path = checked.targets[target].place.path;
+            let declared = match checked.trees.get(at-path) {
+                some(green) => {
+                    let text-there = checked.texts.get(at-path).unwrap-or("");
+                    declared-in(green, text-there, tree.line-starts(text-there), checked.targets[target].place)
+                }
+                none => none,
+            };
+            let shown = match declared {
+                some(d) => written(d),
+                none => { return none; }
+            };
+            let commas = own.filter({ t -> t.green.text == "," && t.offset < at }).len();
+            // (x.f(…) of a value, not a module's func: x is f's first parameter)
+            let receiver = tree.kind(call) == NodeKind.method-call-expr && !called-in-module(call, checked.targets[target]);
+            return some({ label: shown.text, params: shown.params, active: commas + if receiver { 1 } else { 0 }, });
+        }
+        none
+    }
+
+    // a call's callee's name token: f of f(…), its name after the . of x.f(…)
+    @(private) callee-name: func(call: SyntaxNode) -> option<SyntaxToken> {
+        let kind = tree.kind(call);
+        if kind == NodeKind.call-expr {
+            for inner in tree.child-nodes(call) { return tree.first-token(inner); }
+            return none;
+        }
+        if kind == NodeKind.method-call-expr {
+            let dot = false;
+            for t in tree.own-tokens(call) {
+                if t.green.text == "." { dot = true; }
+                else if dot && t.green.kind == TokenKind.id { return some(t); }
+            }
+        }
+        none
+    }
+
+    // the target the name token t (at path) names: the check's reference there
+    @(private) target-at: func(checked: Checked, path: string, text: string, t: SyntaxToken) -> s64 {
+        let (line, col) = tree.place(text, t.offset);
+        for reference in checked.references {
+            let place = reference.place;
+            if place.path == path && place.line == line && place.col <= col && col < place.end-col { return reference.target; }
+        }
+        -1
+    }
+
+    // whether x.f(…) is a module's func (x the module, as written): f's container is x
+    @(private) called-in-module: func(call: SyntaxNode, target: Target) -> bool {
+        let first = match tree.child-nodes(call).len() {
+            0 => { return false; }
+            _ => tree.child-nodes(call)[0],
+        };
+        if tree.kind(first) != NodeKind.name-ref { return false; }
+        let written = match tree.first-token(first) {
+            some(t) => lower.token-name(t),
+            none => { return false; }
+        };
+        target.container == written || target.container.ends-with("/" + written)
+    }
+
+    // ---- renaming
+
+    // the target of the name at line and col of path (-1: none): the narrowest reference there
+    // (a name inside a string's interpolation, not the string), else a declaration written there
+    target-at-position: func(checked: Checked, path: string, line: s64, col: s64) -> s64 {
+        let best = -1;
+        let width = 0;
+        for reference in checked.references {
+            let place = reference.place;
+            if place.path == path && place.line == line && col >= place.col && col < place.end-col {
+                if best < 0 || place.end-col - place.col < width {
+                    best = reference.target;
+                    width = place.end-col - place.col;
+                }
+            }
+        }
+        if best >= 0 { return best; }
+        for index in 0..checked.targets.len() {
+            let place = checked.targets[index].place;
+            if place.path == path && place.line == line && col >= place.col && col < place.end-col { return index; }
+        }
+        -1
+    }
+
+    // where the name at line and col of path may be renamed (its place there), or why not: a
+    // name declared outside the package checked (std's, the prelude's, a WIT interface's), or one
+    // nothing declares
+    rename-place: func(checked: Checked, path: string, line: s64, col: s64) -> result<Place, string> {
+        let target = target-at-position(checked, path, line, col);
+        if target < 0 { return err("there is no name here to rename"); }
+        let t = checked.targets[target];
+        if t.place.path == "" { return err("{t.name} is declared nowhere it could be renamed"); }
+        if !in-package(checked, t.place.path) { return err("{t.name} is declared outside this package ({t.place.path}): it is not renamed here"); }
+        for reference in checked.references {
+            let place = reference.place;
+            if reference.target == target && place.path == path && place.line == line && col >= place.col && col < place.end-col { return ok(place); }
+        }
+        ok(t.place)
+    }
+
+    // whether a file is the package checked's (its input's: the file, or one in its directory)
+    @(private) in-package: func(checked: Checked, path: string) -> bool {
+        let input = packages.clean-path(checked.input);
+        let at = packages.clean-path(path);
+        at == input || at.starts-with(input + "/")
+    }
+
+    // a name's edit: where it is written, and what it becomes
+    record Edit { place: Place, text: string, }
+
+    // the edits renaming the name at line and col of path to name: its declaration and each use
+    // of it, the new name written as a name (%name for a keyword's word). Or why not: what
+    // rename-place refuses, a name that is no name, or what the program would be with them made
+    // (checked again): an error it did not have (a name declared twice), or the new name naming
+    // other than it did (an outer name it would hide, or that would hide it)
+    rename: async func(checked: Checked, path: string, line: s64, col: s64, name: string) -> result<list<Edit>, string> {
+        match rename-place(checked, path, line, col) {
+            ok(_) => {}
+            err(why) => { return err(why); }
+        }
+        let target = target-at-position(checked, path, line, col);
+        let written = match name-written(name) {
+            some(w) => w,
+            none => { return err("{name} is not a name"); }
+        };
+        let declared = checked.targets[target].place;
+        let places: list<Place> = [declared,];
+        for reference in checked.references {
+            if reference.target == target && !places.contains(reference.place) { places.push(reference.place); }
+        }
+        let edits: list<Edit> = [];
+        for place in places { edits.push({ place: place, text: written, }); }
+        // the program with them made
+        let overlays: map<string, string> = map.new();
+        for key in checked.overlays.keys() { overlays.set(key, checked.overlays[key]); }
+        for file in edited-files(edits) { overlays.set(file, edited(checked.texts.get(file).unwrap-or(""), file, edits)); }
+        // (as far as what each name names: what a rename can change; the IR's checks see the
+        // same bindings where every name names what it did)
+        let resolving = context(checked.input, overlays);
+        resolving.mode = "resolve";
+        let after = wait check(resolving, checked.prelude, checked.search);
+        if after.problems.len() > checked.problems.len() {
+            let first = after.problems[after.problems.len() - 1];
+            for problem in after.problems {
+                if !checked.problems.any({ q -> q.message == problem.message }) {
+                    return err("renaming it to {name}: {problem.message}");
+                }
+            }
+            return err("renaming it to {name}: {first.message}");
+        }
+        // each place it is written, as the edits moved it: what it names there is it, at its
+        // declaration's new place, and nothing else is
+        let moved = places.map({ place -> moved-place(place, edits) });
+        let declared-after = moved-place(declared, edits);
+        let renamed = target-at-position(after, declared-after.path, declared-after.line, declared-after.col);
+        if renamed < 0 { return err("renaming it to {name} leaves its declaration naming nothing"); }
+        let named: list<Place> = [after.targets[renamed].place,];
+        for reference in after.references {
+            if reference.target == renamed && !named.contains(reference.place) { named.push(reference.place); }
+        }
+        for place in moved {
+            if !named.contains(place) { return err("renaming it to {name}: what is written at {place.path}:{place.line}:{place.col} would name something else"); }
+        }
+        for place in named {
+            if !moved.contains(place) { return err("renaming it to {name}: {place.path}:{place.line}:{place.col} would name it too"); }
+        }
+        ok(edits)
+    }
+
+    // a name as it is written: itself, or %name where it is a keyword's word; none where it is no
+    // one name
+    @(private) name-written: func(name: string) -> option<string> {
+        let bare = if name.starts-with("%") { name.substring(1, name.len()) } else { name };
+        if bare.len() == 0 || !is-alpha(bare.byte-at(0)) { return none; }
+        for index in 0..bare.len() {
+            let b = bare.byte-at(index);
+            if !(is-alpha(b) || is-digit(b) || b == 45 || b == 95) { return none; }
+        }
+        if bare.ends-with("-") { return none; }
+        some(if grammar.is-keyword(bare) { "%" + bare } else { bare })
+    }
+
+    // the files the edits are in
+    @(private) edited-files: func(edits: list<Edit>) -> list<string> {
+        let out: list<string> = [];
+        for e in edits { if !out.contains(e.place.path) { out.push(e.place.path); } }
+        out
+    }
+
+    // a file's text with the edits in it made (each a name, on one line)
+    @(private) edited: func(text: string, path: string, edits: list<Edit>) -> string {
+        let mine = edits.filter({ e -> e.place.path == path });
+        // (from the last to the first: each one's bytes where the text still has them)
+        mine.sort({ a, b -> a.place.line > b.place.line || a.place.line == b.place.line && a.place.col > b.place.col });
+        let out = text;
+        for e in mine {
+            let start = tree.offset(out, e.place.line, e.place.col);
+            let end = tree.offset(out, e.place.end-line, e.place.end-col);
+            out = out.substring(0, start) + e.text + out.substring(end, out.len());
+        }
+        out
+    }
+
+    // a place as the edits before it on its line move it
+    @(private) moved-place: func(place: Place, edits: list<Edit>) -> Place {
+        let shift = 0;
+        for e in edits {
+            if e.place.path == place.path && e.place.line == place.line && e.place.col < place.col {
+                shift += e.text.len() - (e.place.end-col - e.place.col);
+            }
+        }
+        let width = place.end-col - place.col;
+        let own = edits.filter({ e -> e.place == place });
+        let new-width = if own.len() > 0 { own[0].text.len() } else { width };
+        { path: place.path, line: place.line, col: place.col + shift, end-line: place.end-line, end-col: place.col + shift + new-width, }
+    }
+
+    // the node that declares the name written at place, in its file's syntax tree: the innermost
+    // node around that name that declares (a func, a type, a module, a field, a case, a flag, a
+    // parameter)
+    declared-node: func(context: Context, place: Place, lines: map<string, list<s64>>) -> option<SyntaxNode> {
+        let source = diagnostics.source-at(context.sources, place.path);
+        if source < 0 || !context.trees.has(source) { return none; }
+        if !lines.has(place.path) { lines.set(place.path, tree.line-starts(context.sources[source].text)); }
+        declared-in(context.trees[source], context.sources[source].text, lines[place.path], place)
+    }
+
+    // (in a file's tree, its text and where its lines start)
+    declared-in: func(green: GreenNode, text: string, lines: list<s64>, place: Place) -> option<SyntaxNode> {
+        let root = tree.root(green);
+        let named = match tree.token-at(root, tree.offset-at(lines, text.len(), place.line, place.col)) {
+            some(t) => t,
+            none => { return none; }
+        };
+        for n in tree.self-and-ancestors(named.parent) {
+            if declares(tree.kind(n)) { return some(n); }
+        }
+        none
+    }
+
+    // a declaration as hover and signature help show it: its own text, as written, on one line
+    // (each break and indent a space, none just inside a paren or a square bracket, a comma
+    // before a closing bracket left out): a func's from its name to its body (its attributes and its @c(…) left out), a
+    // module's and a view's to their {, any other's whole but its ;. Each parameter's place in
+    // that text (a func's: what signature help marks)
+    record Written { text: string, params: list<tuple<s64, s64>>, }
+
+    written: func(n: SyntaxNode) -> Written {
+        let kind = tree.kind(n);
+        let out = buffer(64);
+        let params: list<tuple<s64, s64>> = [];
+        let pieces: list<WrittenPiece> = [];
+        written-pieces(n, kind, true, false, pieces);
+        let index = 0;
+        for piece in pieces {
+            let t = piece.text;
+            // (no comma before a closing bracket)
+            if t == "," && index + 1 < pieces.len() && closes(pieces[index + 1].text) {
+                index += 1;
+                continue;
+            }
+            let tight = (index > 0 && (pieces[index - 1].text == "(" || pieces[index - 1].text == "[")) || t == ")" || t == "]";
+            if out.len() > 0 && piece.spaced && !tight && t != "," {
+                out.push(" ");
+            }
+            if piece.param-start { params.push((out.len(), out.len())); }
+            out.push(t);
+            if piece.param-end && params.len() > 0 {
+                let (start, _) = params[params.len() - 1];
+                params[params.len() - 1] = (start, out.len());
+            }
+            index += 1;
+        }
+        { text: out.to-string(), params: params, }
+    }
+
+    // a token of what a declaration shows: its text, whether whitespace came before it, and
+    // whether it starts or ends a parameter
+    @(private) record WrittenPiece { text: string, spaced: bool, param-start: bool, param-end: bool, }
+
+    @(private) written-pieces: func(n: SyntaxNode, top: NodeKind, outermost: bool, in-params: bool, out: list<WrittenPiece>) {
+        let spaced = false;
+        let children = tree.children(n);
+        for index in 0..children.len() {
+            match children[index] {
+                token(t) => {
+                    if t.green.kind == TokenKind.comment { continue; }
+                    if t.green.kind == TokenKind.space || t.green.kind == TokenKind.unknown {
+                        spaced = true;
+                        continue;
+                    }
+                    if outermost {
+                        // (where what it shows ends: a func's or a module's body, a ;)
+                        if t.green.text == ";" { return; }
+                        if t.green.text == "\{" && (top == NodeKind.module-decl || top == NodeKind.view-decl) { return; }
+                    }
+                    out.push({ text: t.green.text, spaced: spaced, param-start: false, param-end: false, });
+                    spaced = false;
+                }
+                node(inner) => {
+                    let kind = tree.kind(inner);
+                    if outermost && (kind == NodeKind.attribute || kind == NodeKind.c-attribute) {
+                        spaced = false;
+                        continue;
+                    }
+                    if outermost && kind == NodeKind.block && top == NodeKind.func-decl { return; }
+                    let from = out.len();
+                    let leading = spaced;
+                    written-pieces(inner, top, false, kind == NodeKind.param-list, out);
+                    if out.len() > from {
+                        let first = out[from];
+                        first.spaced = leading || first.spaced;
+                        if in-params && kind == NodeKind.param { first.param-start = true; }
+                        out[from] = first;
+                        if in-params && kind == NodeKind.param {
+                            let last = out[out.len() - 1];
+                            last.param-end = true;
+                            out[out.len() - 1] = last;
+                        }
+                    }
+                    spaced = false;
+                }
+            }
+        }
+    }
+
+    @(private) closes: func(t: string) -> bool { t == ")" || t == "]" || t == "\}" || t == ">" }
+
+    // whether a node declares what a target is: a declaration, a member of one, a module
+    @(private) declares: func(kind: NodeKind) -> bool {
+        kind == NodeKind.func-decl || kind == NodeKind.record-decl || kind == NodeKind.variant-decl || kind == NodeKind.flags-decl
+            || kind == NodeKind.type-decl || kind == NodeKind.const-decl || kind == NodeKind.global-decl || kind == NodeKind.module-decl
+            || kind == NodeKind.view-decl || kind == NodeKind.field-decl || kind == NodeKind.case-decl || kind == NodeKind.flag
+            || kind == NodeKind.view-field || kind == NodeKind.param
+    }
+
+    // whether a declaration's first token is an attribute's @
+    @(private) starts-with-attribute: func(n: GreenNode) -> bool {
+        for child in n.children {
+            match child {
+                token(t) => { if !tree.is-trivia(t.kind) { return t.text == "@"; } }
+                node(inner) => { return starts-with-attribute(inner); }
+            }
+        }
+        false
+    }
+
+    @(private) newlines-in: func(text: string) -> s64 {
+        let count = 0;
+        for index in 0..text.len() { if text.byte-at(index) == 10 { count += 1; } }
+        count
+    }
+
+    // the target of a use no declaration names: a built-in type (builtin:s32: its name, and the
+    // place of std's module of it where it has one: list's, text's for string, s32's), or a field
+    // of a tuple or an anonymous record (~T#f: its type, and no place, as nothing declares it)
+    @(private) unnamed: func(found: NameUse, by-key: map<string, s64>, targets: list<Target>) -> option<Target> {
+        let nowhere-place: Place = { path: "", line: 0, col: 0, end-line: 0, end-col: 0, };
+        // a literal: its type, then its value (as rust-analyzer tells one: an integer's in
+        // decimal, hex and binary; a float's with its bits; a char's, a string's as they are)
+        if found.key.starts-with("literal:") {
+            let kind = found.key.substring(8, found.key.find-from(":", 8).unwrap-or(found.key.len()));
+            let ty = settled-type(found.ty);
+            let value = literal-value(kind, found.text, ty);
+            return some({
+                name: "",
+                container: "",
+                place: nowhere-place,
+                signature: written-type(ty),
+                docs: if value == "" { "" } else { "value of literal: ` {value} `" },
+            });
+        }
+        // an option's or a result's case: as option<T> and result<T, E> are written
+        if found.key.starts-with("builtin:option#") || found.key.starts-with("builtin:result#") {
+            let hash = found.key.find-last("#").unwrap-or(0);
+            let case = found.key.substring(hash + 1, found.key.len());
+            let owner = found.key.substring(8, hash);
+            let signature = if case == "some" || case == "ok" { "{case}(T)" } else if case == "err" { "err(E)" } else { case };
+            return some({ name: case, container: if owner == "option" { "option<T>" } else { "result<T, E>" }, place: nowhere-place, signature: signature, docs: "", });
+        }
+        if found.key.starts-with("builtin:") {
+            let name = found.key.substring(8, found.key.len());
+            let module = if name == "string" { "text" } else if name == "stream" || name == "writer" { "streams" } else { name };
+            let place = match by-key.get("yel:std/" + module) {
+                some(index) => targets[index].place,
+                none => nowhere-place,
+            };
+            return some({ name: name, container: "", place: place, signature: name, docs: "", });
+        }
+        if found.key.starts-with("~") {
+            let hash = found.key.find-last("#").unwrap-or(0);
+            let field = found.key.substring(hash + 1, found.key.len());
+            let owner = found.key.substring(1, hash);
+            return some({ name: field, container: owner, place: nowhere-place, signature: "{field}: {written-type(settled-type(found.ty))}", docs: "", });
+        }
+        none
+    }
+
+    // a literal's value as told: an integer's decimal, hex and binary (its digits read in their
+    // radix, _ left out); a float's, and its bits (an f32's 32, else 64); a char's; a string's
+    // ("" for a bool, an interpolation: their type tells all)
+    @(private) literal-value: func(kind: string, text: string, ty: Type) -> string {
+        if kind == "int" {
+            let digits = text.replace("_", "");
+            let radix: u64 = 10;
+            let at = 0;
+            if digits.starts-with("0x") || digits.starts-with("0X") { radix = 16; at = 2; }
+            else if digits.starts-with("0o") { radix = 8; at = 2; }
+            else if digits.starts-with("0b") { radix = 2; at = 2; }
+            let value: u64 = 0;
+            for index in at..digits.len() {
+                match to-digit(digits.byte-at(index), radix as s64) {
+                    some(digit) => { value = value * radix + digit as u64; }
+                    none => {}
+                }
+            }
+            return "{value} (0x{radix-text(value, 16)}|0b{radix-text(value, 2)})";
+        }
+        if kind == "float" {
+            let value = parse-f64(text);
+            let bits = match ty {
+                num(n) => if n == "f32" { "0x{radix-text(f32-bits(value as f32), 16)}" } else { "0x{radix-text(f64-bits(value), 16)}" },
+                _ => "0x{radix-text(f64-bits(value), 16)}",
+            };
+            return "{text} (bits: {bits})";
+        }
+        if kind == "char" {
+            let code = parse-int(text).unwrap-or(0);
+            return "{code as char}";
+        }
+        if kind == "string" { return text; }
+        ""
+    }
+
+    // a number's digits in radix (2 or 16), hex upper-case, at least one
+    @(private) radix-text: func(value: u64, radix: u64) -> string {
+        if value == 0 { return "0"; }
+        let digits = "0123456789ABCDEF";
+        let out: list<string> = [];
+        let left = value;
+        loop {
+            if left == 0 { break; }
+            out.push(from-byte(digits.byte-at((left % radix) as s64)));
+            left = left / radix;
+        }
+        out.reverse().join("")
+    }
+
+    // what holds a key's item, as its key names it: a field's record (R of R#f), a module's member's
+    // module (m of m.f, pkg/m of pkg/m.f), a package's top-level item's package (pkg of pkg/f), or
+    // "" (a package's own top level: the program's)
+    @(private) container: func(key: string) -> string {
+        match key.find-last("#") {
+            some(hash) => { return key.substring(0, hash); }
+            none => {}
+        }
+        let slash = key.find-last("/").unwrap-or(-1);
+        match key.find-last(".") {
+            some(dot) => { if dot > slash { return key.substring(0, dot); } }
+            none => {}
+        }
+        if slash > 0 { key.substring(0, slash) } else { "" }
+    }
+
+    // a func's signature as it is written: name: func<T>(param: T, other: U = default) -> R (each
+    // default as its declaration writes it)
+    @(private) signature: func(context: Context, key: string, kind: string, sig: FuncSymbol) -> string {
+        let parts: list<string> = [];
+        for index in 0..sig.names.len() {
+            let ty = if index < sig.params.len() { written-type(settled-type(sig.params[index])) } else { "?" };
+            let given = if index < sig.defaults.len() {
+                match sig.defaults[index] {
+                    some(value) => " = " + diagnostics.span-text(context, value.span),
+                    none => "",
+                }
+            } else {
+                ""
+            };
+            parts.push("{sig.names[index]}: {ty}{given}");
+        }
+        let generic = if sig.type-params.len() > 0 { "<" + sig.type-params.join(", ") + ">" } else { "" };
+        let gives = match settled-type(sig.result) {
+            unit-type => "",
+            let t => " -> {written-type(t)}",
+        };
+        "{base-name(key)}: {kind}{generic}({parts.join(", ")}){gives}"
+    }
+
+    // a span as a place, in the file it was read from (one in a source made, not read, a view's
+    // lowered yel: the place of what made it, the view's name)
+    @(private) span-place: func(context: Context, span: Span) -> Place {
+        if span.source >= 0 {
+            match context.sources[span.source].origin {
+                some(origin) => { return span-place(context, origin); }
+                none => {}
+            }
+        }
+        let path = if span.source >= 0 { context.sources[span.source].path } else { "" };
+        { path: path, line: span.line, col: span.col, end-line: span.end-line, end-col: span.end-col, }
+    }
+
+    // the errors found so far, each as a problem (its places by their files' paths)
+    problems: func(context: Context) -> list<Problem> {
+        let out: list<Problem> = [];
+        for d in context.errors {
+            let found: Problem = {
+                message: d.message,
+                place: { path: d.path, line: 0, col: 0, end-line: 0, end-col: 0, },
+                label: "",
+                related: [],
+                notes: d.notes,
+                helps: d.helps,
+            };
+            for label in d.labels {
+                let place = place-of(context, d, label.span);
+                if label.primary {
+                    found.place = place;
+                    found.label = label.message;
+                } else {
+                    found.related.push({ place: place, message: label.message, });
+                }
+            }
+            out.push(found);
+        }
+        out
+    }
+
+    // a span as a place: in the file it was read from, else the one the diagnostic names
+    @(private) place-of: func(context: Context, d: Diagnostic, span: Span) -> Place {
+        let path = if span.source >= 0 { context.sources[span.source].path } else { d.path };
+        { path: path, line: span.line, col: span.col, end-line: span.end-line, end-col: span.end-col, }
+    }
 }
 
 // a file formatted in place (its name printed when that changed it), or each .yel file under a
@@ -160,13 +1531,37 @@ format-path: async func(path: string) {
     if wait diagnostics.is-dir(path) {
         for e in wait diagnostics.entries(path) {
             let p = path + "/" + e;
-            if wait diagnostics.is-dir(p) || e.len() > 4 && e.substring(e.len() - 4, e.len(),) == ".yel" {
+            if wait diagnostics.is-dir(p) || e.len() > 4 && e.substring(
+                e.len() - 4,
+                e.len(),
+            ) == ".yel" {
                 wait format-path(p);
             }
         }
         return;
     }
-    let context: Context = { sources: [], errors: [], input: path, mode: "", backend: "", triple: "", };
+    let context: Context = {
+        sources: [],
+        errors: [],
+        input: path,
+        mode: "",
+        backend: "",
+        debug: false,
+        testing: false,
+        test-exports: false,
+        triple: "",
+        overlays: map.new(),
+        exits: true,
+        type-names: [],
+        uses: [],
+        modules: [],
+        declarations: [],
+        members: [],
+        locals: [],
+        bodies: [],
+        trees: map.new(),
+        symbols: symbols(),
+    };
     let src = context.sources[wait diagnostics.read-source(context, path)].text;
     let out = fmt.format(src, path);
     if out != src {
@@ -183,7 +1578,10 @@ write-world: async func(prog: Program, dir: string, world: World) {
     for id in prog.wit.keys() {
         let wp = prog.wit[id];
         let base = wp.file.substring(packages.dir-name(wp.file).len() + 1, wp.file.len(),);
-        wait diagnostics.write-output(dir + "/deps/" + base, prog.context.sources[wait diagnostics.read-source(prog.context, wp.file)].text);
+        wait diagnostics.write-output(
+            dir + "/deps/" + base,
+            prog.context.sources[wait diagnostics.read-source(prog.context, wp.file)].text,
+        );
     }
     let root = prog.root;
     let id = if root.id == "" { "yel:app" } else { root.id };
@@ -196,6 +1594,14 @@ write-world: async func(prog: Program, dir: string, world: World) {
     lines.push("\}");
     lines.push("");
     wait diagnostics.write-output(dir + "/world.wit", lines.join(from-byte(10)));
+}
+
+// whether a declaration is a test (@(test))
+is-test: func(d: Decl) -> bool {
+    match d {
+        func-decl(f) => f.is-test,
+        _ => false,
+    }
 }
 
 decl-name: func(d: Decl) -> string {

@@ -1,7 +1,7 @@
 // anonymous records: a record by its fields, held by value; one set of fields is one type (in
 // any order), a literal with no record wanted is one, and ...rest gathers a record's other fields
 
-record Person { name: string, age: s32, city: string, }
+resource Person { name: string, age: s32, city: string, }
 
 type point = { x: s32, y: s32 };
 

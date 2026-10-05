@@ -4,7 +4,7 @@
 // syntax errors in several statements and funcs: each told, the parser going on past the
 // statement it is in (an unclosed ( left behind, the block's } still closing the block)
 
-record Point { x: s32, y: s32 }
+resource Point { x: s32, y: s32 }
 
 area: func(p: Point) -> s32 {
     let w = p.x * ;

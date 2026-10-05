@@ -1,0 +1,14 @@
+[package]
+name = "zed-yel"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Zed's extension for yel2: it starts yel-lsp"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"

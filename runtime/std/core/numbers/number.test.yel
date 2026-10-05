@@ -1,0 +1,84 @@
+// std's number, tested (yelc test runtime/std/core): integers read in decimal and other radixes, signed
+// and not, each to its type's bounds and refused one past them; decimal floats as their grammar has
+// them, and what is no number (empty, a sign alone, whitespace, a prefix) refused by each
+
+from "std:testing" include expect;
+
+module number-tests {
+    @(test) reads-integers: func() {
+        expect.equal(parse-int("0"), some(0));
+        expect.equal(parse-int("42"), some(42));
+        expect.equal(parse-int("+42"), some(42));
+        expect.equal(parse-int("-42"), some(-42));
+        expect.equal(parse-int("9223372036854775807"), some(s64.MAX));
+        expect.equal(parse-int("-9223372036854775808"), some(s64.MIN));
+    }
+
+    @(test) refuses-what-is-no-integer: func() {
+        for text in ["9223372036854775808", "-9223372036854775809", "", "-", "+", " 1", "1 ", "4x", "0x10", "--1",] {
+            expect.none(parse-int(text));
+        }
+    }
+
+    @(test) reads-unsigned: func() {
+        expect.equal(parse-unsigned("0"), some(0));
+        expect.equal(parse-unsigned("18446744073709551615"), some(u64.MAX));
+        expect.equal(parse-unsigned("+7"), some(7));
+        for text in ["18446744073709551616", "-7", "",] { expect.none(parse-unsigned(text)); }
+    }
+
+    @(test) reads-radixes: func() {
+        expect.equal(parse-int-radix("ff", 16), some(255));
+        expect.equal(parse-int-radix("-FF", 16), some(-255));
+        expect.equal(parse-int-radix("777", 8), some(511));
+        expect.equal(parse-int-radix("101", 2), some(5));
+        expect.equal(parse-int-radix("zz", 36), some(1295));
+        expect.equal(parse-int-radix("-8000000000000000", 16), some(s64.MIN));
+        expect.equal(parse-unsigned-radix("ffffffffffffffff", 16), some(u64.MAX));
+        // a digit past the radix, a radix out of 2..=36, one past the type's bounds
+        expect.none(parse-int-radix("102", 2));
+        expect.none(parse-int-radix("1", 1));
+        expect.none(parse-int-radix("1", 37));
+        expect.none(parse-int-radix("8000000000000000", 16));
+        expect.none(parse-unsigned-radix("10000000000000000", 16));
+    }
+
+    @(test) reads-floats: func() {
+        expect.equal(parse-float("0"), some(0.0));
+        expect.equal(parse-float("1.5"), some(1.5));
+        expect.equal(parse-float("-2.25"), some(-2.25));
+        expect.equal(parse-float("+3"), some(3.0));
+        expect.equal(parse-float(".5"), some(0.5));
+        expect.equal(parse-float("5."), some(5.0));
+        expect.equal(parse-float("1e3"), some(1000.0));
+        expect.equal(parse-float("1E-3"), some(0.001));
+        expect.equal(parse-float("2.5e+2"), some(250.0));
+        expect.equal(parse-float("4.9e-324"), some(4.9e-324));
+        expect.equal(parse-float("0.1"), some(0.1));
+        // past the largest, infinity; and the words for infinity and nan
+        expect.equal("{parse-float("1e400")} {parse-float("-1e400")}", "some(inf) some(-inf)");
+        expect.equal("{parse-float("inf")} {parse-float("-Infinity")} {parse-float("NaN")}", "some(inf) some(-inf) some(nan)");
+    }
+
+    @(test) refuses-what-is-no-float: func() {
+        for text in ["", ".", "-", "e3", "1e", "1e+", "1.2.3", " 1", "1 ", "0x1p3", "1_000", "infinit",] {
+            expect.none(parse-float(text));
+        }
+    }
+
+    // each integer type's bounds, of that type (an s8's fits where an s8 is wanted)
+    @(test) knows-each-types-bounds: func() {
+        let small: s8 = s8.MAX;
+        let byte: u8 = u8.MAX;
+        expect.equal("{s8.MIN} {small} {s16.MIN} {s16.MAX} {s32.MIN} {s32.MAX} {u8.MIN} {u64.MIN}", "-128 127 -32768 32767 -2147483648 2147483647 0 0");
+        expect.equal("{s64.MIN} {s64.MAX} {byte} {u16.MAX} {u32.MAX} {u64.MAX}", "-9223372036854775808 9223372036854775807 255 65535 4294967295 18446744073709551615");
+        expect.equal(parse-int("{s64.MAX}"), some(s64.MAX));
+        expect.equal(parse-unsigned("{u64.MAX}"), some(u64.MAX));
+    }
+
+    // a method call too: the first argument's type finds it
+    @(test) reads-as-a-method: func() {
+        expect.equal("12".parse-int(), some(12));
+        expect.equal("12".parse-float(), some(12.0));
+    }
+}

@@ -1,0 +1,65 @@
+// std's map and set, tested (yelc test runtime/std/core): values by keys of any type, equal as == says
+// (a declared resource or a list by itself, a string, a tuple or an option by its parts), in the
+// order they were set; a set (a map<T, ()>) holds each value once
+
+from "std:testing" include expect;
+
+module map-tests {
+    type id = distinct u32;
+
+    resource named { name: string, }
+
+    @(test) keeps-values-by-key: func() {
+        let ages: map<string, s32> = map.new();
+        ages.set("ada", 36);
+        ages.set("alan", 41);
+        ages.set("grace", 85);
+        ages.remove("alan");
+        expect.equal(ages.keys(), ["ada", "grace",]);
+        expect.equal(ages["grace"], 85);
+        expect.holds(!ages.has("alan"));
+        expect.equal(ages.len(), 2);
+    }
+
+    // what is removed leaves its place: the order of those left is the order they were set
+    @(test) keeps-the-order-set: func() {
+        let squares: map<s32, s32> = map.new();
+        for i in 0..50 { squares.set(i, i * i); }
+        for i in 0..40 { squares.remove(i); }
+        expect.equal(squares.keys(), [40, 41, 42, 43, 44, 45, 46, 47, 48, 49,]);
+        expect.equal(squares[45], 2025);
+    }
+
+    @(test) keys-by-value-or-identity: func() {
+        let pairs: map<tuple<string, s32>, string> = map.new();
+        pairs.set(("f", 1), "one");
+        pairs.set(("f", 2), "two");
+        expect.equal(pairs[("f", 2)], "two");
+        expect.holds(!pairs.has(("g", 1)));
+        let by-id: map<id, string> = map.new();
+        by-id.set(7 as id, "seven");
+        expect.equal(by-id[7 as id], "seven");
+        // a resource is its own key: another with the same fields is not it
+        let first: named = { name: "x", };
+        let second: named = { name: "x", };
+        let who: map<named, s32> = map.new();
+        who.set(first, 1);
+        expect.holds(who.has(first));
+        expect.holds(!who.has(second));
+    }
+
+    @(test) holds-each-value-once: func() {
+        let seen: set<string> = set.new();
+        for word in ["a", "b", "a", "c", "b",] { seen.add(word); }
+        seen.remove("c");
+        expect.equal(seen.values(), ["a", "b",]);
+        expect.holds(seen.has("a"));
+        expect.holds(!seen.has("c"));
+        expect.equal(seen.len(), 2);
+        let options: set<option<s32>> = set.new();
+        options.add(some(1));
+        options.add(none);
+        options.add(some(1));
+        expect.equal(options.values(), [some(1), none,]);
+    }
+}

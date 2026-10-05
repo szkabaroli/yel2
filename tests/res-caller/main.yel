@@ -1,0 +1,18 @@
+// tests/res-api's resource, imported: two counters made, used through their handles, and dropped
+// (its drop seen through dropped)
+
+from "test:res" include counters;
+
+main: func() -> s32 {
+    let a = counters.counter.new("a");
+    let b = counters.counter.new("b");
+    a.bump(2);
+    a.bump(3);
+    b.bump(10);
+    print("{a.label()} {b.label()} {a.absorb(b)}\n");
+    a.drop();
+    print("dropped {counters.dropped()}\n");
+    b.drop();
+    print("dropped {counters.dropped()}\n");
+    0
+}

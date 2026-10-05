@@ -5,7 +5,7 @@
 // what the walk over a func learns: the positions (two for each statement: its uses, then what it
 // allocates) of each local's first def and last use, where allocations happen, and, for each loop
 // being walked, the locals used in it
-record Ranges {
+resource Ranges {
     first-def: list<s64>,
     last-use: list<s64>,
     allocs: list<s64>,

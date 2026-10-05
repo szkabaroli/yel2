@@ -1,11 +1,11 @@
 // records, variants, enums and match
 
-record Point {
+resource Point {
     x: s32,
     y: s32,
 }
 
-record Counter { name: string, values: list<s32>, }
+resource Counter { name: string, values: list<s32>, }
 
 enum Color { red, green, blue, }
 

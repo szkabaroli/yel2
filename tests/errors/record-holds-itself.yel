@@ -1,0 +1,5 @@
+// error: 2:1: record Node holds itself: a value's size would never end
+record Node { value: s32, next: option<Node>, }
+record Pair { left: Inner, }
+record Inner { back: list<Pair>, }
+main: func() {}

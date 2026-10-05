@@ -1,0 +1,13 @@
+// yel's standard library, written in yel over the prelude's externs (runtime/prelude.yel), as
+// Porffor's builtins (compiler/builtins) are written in JS over its intrinsics. This directory,
+// runtime/std/core, is its core: what the language needs (what the compiler lowers syntax to, the
+// methods of its own types), and every program reaches its names without an include, after its own
+// and the prelude's: a program naming a func as one here names its own. Its folders are one
+// package, a file for each part: text (text, char, buffer, format), collections (list, map, set,
+// option), numbers (number, integer), async (async, streams), reactive (observe, reactive,
+// view-events), runtime (memory, value, assert), host (WASI natively: host-*.yel, cli-exit). The
+// rest of the library is a package in each other directory of runtime/std, reached only by an
+// include of std:<name> (std:encoding/json); a std:<name> with no directory is WASI's wasi:<name>
+// (std:cli, std:filesystem), natively core's host.
+
+package yel:std@0.1.0;

@@ -5,7 +5,7 @@ package test:component@0.1.0;
 
 from "wasi:clocks" include monotonic-clock;
 
-export module api {
+module api {
     record Point { x: s32, y: s32, }
 
     enum Dir { north, south, }
@@ -74,9 +74,12 @@ export module api {
 
     tally: func(name: string) -> s32 {
         names.push(name);
-        visits += 1;
+        visits += tally-step();
         visits + names.len() as s32
     }
+
+    // the module's own (@(private)): the host never sees it (not in the component's WIT)
+    @(private) tally-step: func() -> s32 { 1 }
 
     // a range crosses as its type, checked when lifted
     type percent = 0..=100;

@@ -5,7 +5,8 @@
 # allocation (YEL_GC_STRESS=1: the frame's roots must keep what is live). With WASI_SDK: the bitcode built for
 # wasm too, and run under wasmtime (its exit code ok or err, as WASI's: 0 or 1). On an arm64 Mac with
 # Rosetta: built for x86-64 too (libuv and the runtime with it), and run under Rosetta: each of the C
-# calling conventions llvm.yel knows, run.
+# calling conventions llvm.yel knows, run. Each also built with debug info (-g: DWARF, at -O0), checked
+# by the verifier, run, and its line table read back (llvm-dwarfdump).
 #
 #   tools/bitcode-test.sh [tests...]     (YELC: the compiler, default build/yelc2)
 set -u
@@ -24,6 +25,8 @@ tests=${*:-tests/bitcode/*.yel}
 OPT=${OPT:-$(command -v opt || echo /opt/homebrew/opt/llvm/bin/opt)}
 [ -x "$OPT" ] || { echo "no LLVM opt (for its verifier): set OPT"; exit 1; }
 verify() { "$OPT" -passes=verify -disable-output "$1" 2>&1 | head -5; }
+# llvm-dwarfdump (beside opt): a -g build's line table read back
+DWARFDUMP=${DWARFDUMP:-$(dirname "$OPT")/llvm-dwarfdump}
 failed=0
 # the runtime, for the C build (an object) and the bitcode one (bitcode, for each target: the C one's
 # as it is, linked into the program's module)
@@ -116,6 +119,23 @@ for test in $tests; do
 			ok=0
 		fi
 	done
+	# with debug info (-g): the module the verifier checks (its debug info too), built at -O0 with
+	# DWARF, doing the same, its line table naming the test's own file
+	if [ $ok = 1 ]; then
+		if "$YELC" "$test" "$out/$name-g.bc" --backend bitcode -g 2> "$out/$name-g.err" \
+			&& { invalid=$(verify "$out/$name-g.bc"); [ -z "$invalid" ] || { echo "LLVM's verifier: $invalid" > "$out/$name-g.err"; false; }; } \
+			&& clang -g -O0 -Wno-override-module "$out/$name-g.bc" $extra "$out/runtime.bc" $SYSTEM -o "$out/$name-g" 2>> "$out/$name-g.err"; then
+			got=$(run "$out/$name-g")
+			[ "$got" = "$want" ] || { echo "FAIL $name (-g): the C build gave"; echo "$want" | head -5; echo "  and the -g build"; echo "$got" | head -5; ok=0; }
+			dwarf="$out/$name-g"
+			[ -d "$out/$name-g.dSYM" ] && dwarf="$out/$name-g.dSYM"
+			"$DWARFDUMP" --debug-line "$dwarf" 2> /dev/null | grep -q "$(basename "$test")" \
+				|| { echo "FAIL $name (-g): no line table for $(basename "$test")"; ok=0; }
+		else
+			echo "FAIL $name: the -g build: $(head -3 "$out/$name-g.err")"
+			ok=0
+		fi
+	fi
 	if [ -n "${WASI_SDK:-}" ] && [ $ok = 1 ]; then
 		"$YELC" "$test" "$out/$name-wasm.bc" --backend bitcode --triple wasm32-unknown-wasip3 \
 			&& { invalid=$(verify "$out/$name-wasm.bc"); [ -z "$invalid" ] || { echo "LLVM's verifier: $invalid" > "$out/$name-wasm.err"; false; }; } \
@@ -158,12 +178,16 @@ if [ -n "${WASI_SDK:-}" ] && [ -z "${*:-}" ]; then
 		if [ "$3" = "$(cat "$2")" ]; then echo "ok   $1 (component)"; else echo "FAIL $1 (component): $(echo "$3" | head -3)"; failed=1; fi
 	}
 	built() { component "$@" || { echo "FAIL $1 (component): $(grep -v '^ *#\|Stack\|PLEASE' "$out/c-$1.log" | head -3)"; failed=1; return 1; }; }
-	built imports tests/imports.yel && expect imports tests/imports.out "$(crun "$out/c-imports.wasm" 2>&1)"
-	built host-waits tests/host-waits.yel && expect host-waits tests/host-waits.out "$(crun "$out/c-host-waits.wasm" 2>&1)"
+	# the host's interfaces (tests/host: imports, the clock's waits, resources, the filesystem,
+	# TCP, name lookups), its tests run as a bitcode component, a call each
+	if BACKEND=bitcode WASMTIME_FLAGS="-S inherit-network=y -S allow-ip-name-lookup=y" tools/test-component.sh tests/host > "$out/c-host.out" 2>&1; then
+		echo "ok   host ($(tail -n 1 "$out/c-host.out"), component)"
+	else
+		echo "FAIL host (component): $(grep '^FAIL' "$out/c-host.out" | head -3)"
+		failed=1
+	fi
 	built cat tests/cat.yel && expect cat tests/cat.component.out "$(crun "$out/c-cat.wasm" < tests/cat.in 2>&1)"
 	built stdin-drop tests/stdin-drop.yel && expect stdin-drop tests/stdin-drop.component.out "$(head -c 2000000 /dev/zero | crun "$out/c-stdin-drop.wasm" 2>&1)"
-	built resources tests/resources.yel && expect resources tests/resources.out "$(crun -S inherit-network=y --dir . "$out/c-resources.wasm" 2>&1)"
-	built filesystem tests/filesystem.yel && expect filesystem tests/filesystem.out "$(crun --dir . "$out/c-filesystem.wasm" 2>&1)"
 	if built component tests/component reactor; then
 		while read -r call; do crun --invoke "$call" "$out/c-component.wasm"; done < tests/component.calls > "$out/c-component.calls.out" 2>&1
 		expect component tests/component.calls.out "$(cat "$out/c-component.calls.out")"
@@ -172,6 +196,14 @@ if [ -n "${WASI_SDK:-}" ] && [ -z "${*:-}" ]; then
 		built fixed-api tests/fixed-api reactor && built fixed-caller tests/fixed-caller -I "$out/c-fixed-api-wit" \
 			&& wac plug "$out/c-fixed-caller.wasm" --plug "$out/c-fixed-api.wasm" -o "$out/c-fixed-lists.wasm" \
 			&& expect fixed-lists tests/fixed-lists.component.out "$(crun -W component-model-fixed-length-lists=y "$out/c-fixed-lists.wasm" 2>&1)"
+		built res-api tests/res-api reactor && built res-caller tests/res-caller -I "$out/c-res-api-wit" \
+			&& wac plug "$out/c-res-caller.wasm" --plug "$out/c-res-api.wasm" -o "$out/c-resources-exported.wasm" \
+			&& expect resources-exported tests/resources-exported.component.out "$(crun "$out/c-resources-exported.wasm" 2>&1)"
+		built ui-dom tests/ui-dom reactor && built ui-counter tests/ui-counter reactor -I tests/ui-wit \
+			&& built ui-driver tests/ui-driver -I "$out/c-ui-counter-wit" -I tests/ui-wit \
+			&& wac plug "$out/c-ui-counter.wasm" --plug "$out/c-ui-dom.wasm" -o "$out/c-ui-counter-hosted.wasm" \
+			&& wac plug "$out/c-ui-driver.wasm" --plug "$out/c-ui-counter-hosted.wasm" -o "$out/c-ui.wasm" \
+			&& expect ui tests/ui.component.out "$(crun "$out/c-ui.wasm" 2>&1)"
 		built stream-api tests/stream-api reactor && built stream-caller tests/stream-caller -I "$out/c-stream-api-wit" \
 			&& wac plug "$out/c-stream-caller.wasm" --plug "$out/c-stream-api.wasm" -o "$out/c-streams.wasm" \
 			&& expect streams tests/streams.component.out "$(crun "$out/c-streams.wasm" 2>&1)"

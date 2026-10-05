@@ -1,0 +1,19 @@
+id = "yel"
+name = "Yel"
+version = "0.1.0"
+schema_version = 1
+authors = ["yel2"]
+description = "yel2: highlighting, outline and indentation (Tree-sitter), the compiler's errors and formatting (yel-lsp)."
+repository = "https://github.com/szkabaroli/yel2"
+
+# the grammar (editors/tree-sitter-yel): dev.sh points this at a snapshot of it in build/, as Zed
+# builds a grammar from a git repository at a commit; once pushed, the repository's own URL and a
+# commit of it (with path = "editors/tree-sitter-yel")
+[grammars.yel]
+repository = "https://github.com/szkabaroli/yel2"
+path = "editors/tree-sitter-yel"
+rev = "bd17d61492632739c2699458cafe2444a66092a1"
+
+[language_servers.yel-lsp]
+name = "yel-lsp"
+languages = ["Yel"]

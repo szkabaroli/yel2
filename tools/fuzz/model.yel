@@ -25,17 +25,17 @@ variant Ty {
     param-t(string),
 }
 
-record Fixed { item: Ty, len: s64, }
-record Sides { ok: Ty, err: Ty, }
+resource Fixed { item: Ty, len: s64, }
+resource Sides { ok: Ty, err: Ty, }
 // an anonymous record's fields, in order of their names (as yel keeps them)
-record Fields { names: list<string>, types: list<Ty>, }
-record Table { key: Ty, value: Ty, }
-record Fun { params: list<Ty>, result: Ty, }
+resource Fields { names: list<string>, types: list<Ty>, }
+resource Table { key: Ty, value: Ty, }
+resource Fun { params: list<Ty>, result: Ty, }
 
 // a declared type. kind: "record", "variant" (types: each case's payload, unit-t for none),
 // "enum", "flags", "distinct" (base), "strings" (an alias of string literals: names), "range"
 // (base, low..=high), "union" (an alias of kinds: types)
-record TypeDecl {
+resource TypeDecl {
     kind: string,
     name: string,
     names: list<string>,
@@ -48,7 +48,7 @@ record TypeDecl {
 // a func the program has: how it is called (module.name for a module's), its params, which of them
 // are readonly (only read), its result, its type params (generic), and whether it yields (its
 // result a seq of result)
-record FuncInfo {
+resource FuncInfo {
     name: string,
     params: list<Ty>,
     readonly: list<bool>,
@@ -58,11 +58,11 @@ record FuncInfo {
 }
 
 // a constant: its name and type (an s32 or a string)
-record ConstInfo { name: string, ty: Ty, value: string, }
+resource ConstInfo { name: string, ty: Ty, value: string, }
 
 // a local in scope: whether it may be assigned (a let's, never a param's nor a for's), and whether
 // it is only read (a readonly param: never written, kept nor given another name)
-record Local { name: string, ty: Ty, mutable: bool, readonly: bool, }
+resource Local { name: string, ty: Ty, mutable: bool, readonly: bool, }
 
 module types {
     int-names: func() -> list<string> { ["s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64",] }

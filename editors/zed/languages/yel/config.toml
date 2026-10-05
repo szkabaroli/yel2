@@ -1,0 +1,16 @@
+name = "Yel"
+grammar = "yel"
+path_suffixes = ["yel"]
+line_comments = ["// "]
+tab_size = 4
+hard_tabs = false
+# kebab-case names (total-count) are one word
+word_characters = ["-"]
+autoclose_before = ";:.,=}])>"
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = true },
+    { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
+    { start = "'", end = "'", close = true, newline = false, not_in = ["string", "comment"] },
+]

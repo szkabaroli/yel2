@@ -1,0 +1,136 @@
+// escape.yel, tested (yelc test compiler): small programs built as IR (analysis.lower), and what
+// the program's flow says of them: which locals share a value, what each func does with its
+// parameters (writes, keeps, gives back), whether its result is new, and which records stay on the
+// stack. The readonly and move checks and the releases all read these
+
+from "std:testing" include expect;
+
+module escape-tests {
+    // a func's summary: by its key, the flow's facts of it
+    @(private) summary: async func(source: string, name: string) -> tuple<Lowered, IrFunc> {
+        let lowered = wait lowering.built(source);
+        (lowered, lowering.func-named(lowered, name))
+    }
+
+    // a parameter given back is the result; a literal is a new one
+    @(test) gives-back-a-parameter: async func() {
+        let (lowered, same) = wait summary(c"
+            same: func(items: list<s64>) -> list<s64> { items }
+            made: func() -> list<s64> { [1, 2,] }
+
+            main: func() {
+                let kept = same(made());
+            }
+        ", "same");
+        expect.equal(lowered.facts.param-gives[same.name], [true,]);
+        expect.equal(lowered.facts.fresh-result[same.name], false);
+        let made = lowering.func-named(lowered, "made");
+        expect.equal(lowered.facts.fresh-result[made.name], true);
+    }
+
+    // a parameter pushed to is written; one only read is not; and through a func that writes it
+    @(test) writes-through-calls: async func() {
+        let (lowered, add) = wait summary(c"
+            add: func(items: list<s64>) { items.push(1); }
+            size: func(items: list<s64>) -> s64 { items.len() }
+            again: func(items: list<s64>) { add(items); }
+
+            main: func() {
+                let items = [0,];
+                again(items);
+                let count = size(items);
+            }
+        ", "add");
+        expect.equal(lowered.facts.param-writes[add.name], [true,]);
+        let size = lowering.func-named(lowered, "size");
+        expect.equal(lowered.facts.param-writes[size.name], [false,]);
+        let again = lowering.func-named(lowered, "again");
+        expect.equal(lowered.facts.param-writes[again.name], [true,]);
+    }
+
+    // a parameter pushed into another is kept in it, not let escape
+    @(test) kept-in-another-parameter: async func() {
+        let (lowered, keep) = wait summary(c"
+            keep: func(into: list<list<s64>>, items: list<s64>) { into.push(items); }
+
+            main: func() {
+                let all: list<list<s64>> = [];
+                keep(all, [1,]);
+            }
+        ", "keep");
+        expect.equal(lowered.facts.param-kept-in[keep.name][1], [0,]);
+        expect.equal(lowered.facts.param-escapes[keep.name], [false, false,]);
+    }
+
+    // a copy is another name for the same value: one group
+    @(test) copies-share-a-group: async func() {
+        let (lowered, share) = wait summary(c"
+            share: func() -> s64 {
+                let first = [1,];
+                let second = first;
+                let other = [2,];
+                second.push(3);
+                first.len() + other.len()
+            }
+
+            main: func() {
+                let count = share();
+            }
+        ", "share");
+        let groups = lowered.facts.groups[share.name];
+        let first = opt.find(groups, lowering.local-named(share, "first"));
+        expect.equal(opt.find(groups, lowering.local-named(share, "second")), first);
+        expect.not-equal(opt.find(groups, lowering.local-named(share, "other")), first);
+        expect.holds(groups.written[first]);
+    }
+
+    // a resource that never leaves the func making it is kept on its stack; one given back, or an
+    // async func's (gone from the stack while it waits), on the heap
+    @(test) places-records: async func() {
+        let lowered = wait lowering.built(c"
+            resource cell { value: s64, }
+
+            kept: func() -> s64 {
+                let held: cell = { value: 3, };
+                held.value
+            }
+
+            given: func() -> cell {
+                let held: cell = { value: 3, };
+                held
+            }
+
+            waits: async func() -> s64 {
+                let held: cell = { value: 3, };
+                wait sleep(0);
+                held.value
+            }
+
+            main: async func() {
+                let value = kept() + given().value + wait waits();
+            }
+        ");
+        expect.equal(stacked(lowered, "kept"), [true,]);
+        expect.equal(stacked(lowered, "given"), [false,]);
+        expect.equal(stacked(lowered, "waits"), [false,]);
+    }
+
+    // for each record a func makes, in order, whether it goes on its stack
+    @(private) stacked: func(lowered: Lowered, name: string) -> list<bool> {
+        let f = lowering.func-named(lowered, name);
+        opt.place-records(lowered.facts, f);
+        let out: list<bool> = [];
+        for n in flatten(f.body) {
+            match n.kind {
+                assign(x) => {
+                    match x.value.kind {
+                        alloc(a) => { out.push(a.stack); }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}

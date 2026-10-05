@@ -1,5 +1,5 @@
-// a type of one value: declared (type only = "post": a match on it needs that arm alone), or left by
-// a test (b in a match's true arm is true: a closure's result found from it is a bool, as a
+// a type of one value: declared (type only = "post": a match on it needs that arm alone), or left
+// by a test (b in a match's true arm is true: a closure's result found from it is a bool, as a
 // literal's is, not that one value; found by tools/fuzz)
 
 type only = "post";

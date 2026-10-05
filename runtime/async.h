@@ -27,7 +27,23 @@ typedef struct y_async {
 	struct y_async *owner;
 	// a future the host writes: its end let go, when no one will wait for it (else NULL)
 	void (*release)(struct y_async *self);
+	// a task's async context: its values of the program's @(context) globals, while another runs
+	// (taken from its starter's when started; NULL for none: no such globals, or not a task)
+	void *context;
+	// a task's number (from 1, once started) and its async func's name: what YEL_ASYNC_TRACE tells
+	int64_t id;
+	const char *name;
 } y_async;
+
+/** YEL_ASYNC_TRACE: the tasks still waiting, and on what (a deadlock found: told before the program
+stops), or a hint to set it; and those never done once the program's main is (at its end). */
+yunit yel_async_trace_deadlock(void);
+yunit yel_async_trace_end(void);
+
+/** A global made an async context's (@(context)): each task its own value of it, a task started taking
+its starter's as it is then. Its place, size and scan (NULL: it holds no pointer); made known once, by
+the program's y_globals_init. */
+void y_context_global(void *place, size_t size, void (*scan)(void *));
 
 extern int64_t y_async_order;
 
@@ -155,6 +171,11 @@ typedef struct ystream {
 	int32_t host_release;
 	uint8_t *host_buf;
 } ystream;
+
+/** The task being stepped waits for a stream's items (its reader), or for room in it (its writer):
+the stream wakes it. */
+void yel_stream_park_reader(ystream *s);
+void yel_stream_park_writer(ystream *w);
 
 void y_trace_stream(void *obj);
 

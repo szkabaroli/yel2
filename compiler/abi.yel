@@ -19,7 +19,7 @@ type set-crossing = "enum" | "variant" | "checked";
 // its core params' and result's types (usize for i32, u64 for i64, f32, f64; () for none), the
 // runtime's C for it natively (yn_<name>), and whether natively there is none (std's host gives
 // the import: only a component calls it)
-record CoreImport { c-name: string, module: string, name: string, params: list<Type>, result: Type, native: string, wasm-only: bool, }
+resource CoreImport { c-name: string, module: string, name: string, params: list<Type>, result: Type, native: string, wasm-only: bool, }
 
 module gen {
     // ================================================================ layouts
@@ -72,7 +72,7 @@ module gen {
                 out
             }
             named(n) => {
-                let kind = named-kind(g, n);
+                let kind = abi-kind(g, n);
                 if kind == "record" {
                     let out: list<string> = [];
                     for x in wit-field-types(g, n) {
@@ -81,12 +81,12 @@ module gen {
                         }
                     }
                     out
-                } else if kind == "flags" || kind == "enum" || kind == "handle" {
+                } else if kind == "flags" || kind == "enum" || kind == "handle" || kind == "owned" {
                     ["i32",]
                 }
                 else {
                     let payloads: list<Type> = [];
-                    for k in g.variants[n].cases {
+                    for k in g.symbols.variants[n].cases {
                         payloads.push(wit-payload(g, n, k.name));
                     }
                     variant-flat(g, payloads)
@@ -418,8 +418,9 @@ module gen {
             anon-record(r) => handles-sum(g, r.types, depth + 1),
             union-type(xs) => if crossing(t) == "variant" { handles-sum(g, kinds(t), depth + 1) } else { 0 },
             named(n) => {
-                if g.records.has(n) { return handles-sum(g, wit-field-types(g, n), depth + 1); }
-                if g.variants.has(n) { return handles-sum(g, case-payloads(g, n), depth + 1); }
+                if g.owned.has(n) { return 0; }
+                if g.symbols.records.has(n) { return handles-sum(g, wit-field-types(g, n), depth + 1); }
+                if g.symbols.variants.has(n) { return handles-sum(g, case-payloads(g, n), depth + 1); }
                 0
             }
             _ => 0,
@@ -442,7 +443,7 @@ module gen {
     // a variant's cases' payloads as written (unit for a case carrying none)
     case-payloads: func(g: Gen, n: Name) -> list<Type> {
         let out: list<Type> = [];
-        for k in g.variants[n].cases {
+        for k in g.symbols.variants[n].cases {
             out.push(if k.has-payload { wit-payload(g, n, k.name) } else { Type.unit-type });
         }
         out
@@ -470,14 +471,14 @@ module gen {
     // a record's field types as written (a literal or union type its own, not its kinds)
     wit-field-types: func(g: Gen, n: Name) -> list<Type> {
         if g.wit-fields.has(name-text(n)) { return g.wit-fields[name-text(n)]; }
-        g.records[n].field-types
+        g.symbols.records[n].field-types
     }
 
     // a variant's case's payload type as written
     wit-payload: func(g: Gen, n: Name, case-name: string) -> Type {
-        let v = g.variants[n];
+        let v = g.symbols.variants[n];
         let i = case-index(v, case-name);
-        if g.wit-cases.has(name-text(n)) { return g.wit-cases[name-text(n)][i]; }
+        if g.wit-cases.has(name-text(n)) { return value-records(g, g.wit-cases[name-text(n)][i]); }
         v.cases[i].payload
     }
 
@@ -504,6 +505,100 @@ module gen {
     // an exported func's name in its module's interface: its last part, as written
     export-name: func(name: string) -> string { name.substring(name.len() - base-name(name).len(), name.len()) }
 
+    // ---- exported resources
+
+    // a visible module's WIT interface, as the component exports it: <id>/<module>@<version>
+    export-iface: func(pkg: Package, m: string) -> string {
+        let id = if pkg.id == "" { "yel:app" } else { pkg.id };
+        let version = if pkg.version == "" { "" } else { "@" + pkg.version };
+        "{id}/{wit-ident(m)}{version}"
+    }
+
+    // the exported resource a func is a method of: its module's, taking it first as self
+    owner: func(g: Gen, f: Func) -> option<Name> {
+        if f.params.len() == 0 || f.params[0] != "self" { return none; }
+        match g.wit-sigs[f.name].params[0] {
+            named(n) => if g.owned.has(n) && g.owned[n].module == f.scope.module { some(n) } else { none },
+            _ => none,
+        }
+    }
+
+    // the exported resource a func constructs: its module's new, giving one
+    constructed: func(g: Gen, f: Func) -> option<Name> {
+        if base-name(f.name) != "new" { return none; }
+        match g.wit-sigs[f.name].result {
+            named(n) => if g.owned.has(n) && g.owned[n].module == f.scope.module { some(n) } else { none },
+            _ => none,
+        }
+    }
+
+    // whether a func is a resource's drop (its destructor runs it; the host never calls it)
+    is-drop: func(g: Gen, f: Func) -> bool {
+        match owner(g, f) {
+            some(n) => g.owned[n].drop == f.name,
+            none => false,
+        }
+    }
+
+    // a func's name in WIT: a method's [method]<resource>.<name>, a constructor's
+    // [constructor]<resource>, any other's its own
+    export-func-name: func(g: Gen, f: Func) -> string {
+        match owner(g, f) {
+            some(n) => { return "[method]{g.owned[n].wit-name}.{export-name(f.name)}"; }
+            none => {}
+        }
+        match constructed(g, f) {
+            some(n) => "[constructor]{g.owned[n].wit-name}",
+            none => export-name(f.name),
+        }
+    }
+
+    // a resource's destructor, as IR: the host dropped a handle to it ([dtor]<resource>, given
+    // its rep): its drop run on its object (where it has one), its table's slot let go
+    destructor-ir: func(g: Gen, n: Name) {
+        let o = g.owned[n];
+        let s32 = Type.num("s32");
+        let d = helper-func(g, "y_dtor_" + mangle(name-text(n)), Type.unit-type, true);
+        d.export-name = "{o.iface}#[dtor]{o.wit-name}";
+        let rep = helper-local(d, s32, "rep", true);
+        if o.drop != "" {
+            let object = convert(Type.named(n), runtime-call("y_res_get", [int-const(o.table, s32), local(rep, s32),], Type.address-type));
+            d.body.push(call(o.drop, g.funcs[o.drop].c-name, [bind-helper(d, object, Type.named(n)),], Type.unit-type, fx().call));
+        }
+        d.body.push(runtime-call("y_res_free", [int-const(o.table, s32), local(rep, s32),], Type.unit-type));
+    }
+
+    // a value bound to a helper's local (an operand must be one)
+    bind-helper: func(f: IrFunc, value: Node, t: Type) -> Node {
+        let at = helper-local(f, t, "", false);
+        f.body.push(assign(at, value));
+        local(at, t)
+    }
+
+    // the handle the host is given for an object of an exported resource (an own handle): a slot of
+    // its table (its rep), made a handle ([resource-new]<resource>; natively the rep is the handle)
+    owned-handle: func(g: Gen, n: Name, object: Node) -> Node {
+        let o = g.owned[n];
+        let s32 = Type.num("s32");
+        let c-name = "y_resnew_" + mangle(name-text(n));
+        if !made-before(g, c-name) {
+            declare-core-import(g, c-name, "[export]" + o.iface, "[resource-new]" + o.wit-name, [s32,], s32, "", true);
+            let stub = helper-func(g, c-name, s32, false);
+            stub.build = "native";
+            let p = helper-local(stub, s32, "rep", true);
+            stub.body.push(return-stmt(local(p, s32)));
+        }
+        let rep = runtime-call("y_res_new", [int-const(o.table, s32), convert(Type.address-type, object),], s32);
+        runtime-call(c-name, [rep,], s32)
+    }
+
+    // a named type as the canonical ABI sees it: an exported resource's ("owned": a handle),
+    // else as named-kind says
+    abi-kind: func(g: Gen, n: Name) -> string {
+        if g.owned.has(n) { return "owned"; }
+        named-kind(g, n)
+    }
+
     join-flat: func(a: string, b: string) -> string {
         if a == b { return a; }
         if (a == "i32" && b == "f32") || (a == "f32" && b == "i32") { return "i32"; }
@@ -528,11 +623,11 @@ module gen {
             char-type => "uint32_t",
             string-type => "yabi_str",
             named(n) => {
-                let kind = named-kind(g, n);
-                if kind == "enum" { tag-c(g.variants[n].cases.len()) }
-                else if kind == "handle" { "uint32_t" }
+                let kind = abi-kind(g, n);
+                if kind == "enum" { tag-c(g.symbols.variants[n].cases.len()) }
+                else if kind == "handle" || kind == "owned" { "uint32_t" }
                 else if kind == "flags" {
-                    let k = g.flags[n].flags.len();
+                    let k = g.symbols.flags[n].flags.len();
                     if k <= 8 {
                         "uint8_t"
                     } else if k <= 16 {
@@ -591,15 +686,15 @@ module gen {
                 c"{tag-c(ks.len())} tag; union { {members.join("")}uint8_t none; } u;"
             }
             named(tn) => {
-                if g.records.has(tn) {
-                    let r = g.records[tn];
+                if g.symbols.records.has(tn) {
+                    let r = g.symbols.records[tn];
                     let parts: list<string> = [];
                     for i in 0..r.fields.len() {
                         parts.push("{abi-type(g, wit-field-types(g, tn)[i])} f_{mangle(r.fields[i])};");
                     }
                     parts.join(" ")
                 } else {
-                    let v = g.variants[tn];
+                    let v = g.symbols.variants[tn];
                     let members: list<string> = [];
                     for k in v.cases {
                         if k.has-payload {
@@ -643,11 +738,11 @@ module gen {
             range-type(r) => set-abi-of(g, t),
             union-type(xs) => set-abi-of(g, t),
             named(n) => {
-                let kind = named-kind(g, n);
-                if kind == "enum" { return tag-num(g.variants[n].cases.len()); }
-                if kind == "handle" { return Type.num("u32"); }
+                let kind = abi-kind(g, n);
+                if kind == "enum" { return tag-num(g.symbols.variants[n].cases.len()); }
+                if kind == "handle" || kind == "owned" { return Type.num("u32"); }
                 if kind == "flags" {
-                    let count = g.flags[n].flags.len();
+                    let count = g.symbols.flags[n].flags.len();
                     return Type.num(if count <= 8 { "u8" } else if count <= 16 { "u16" } else { "u32" });
                 }
                 Type.canonical-type(t)
@@ -708,8 +803,10 @@ module gen {
             }
             future-type(x) => out.push(store(dst(), runtime-call("y_fpump_" + site-future(g, x), [src(),], Type.num("u32")))),
             named(n) => {
-                let kind = named-kind(g, n);
+                let kind = abi-kind(g, n);
                 if kind == "enum" || kind == "flags" || kind == "handle" { out.push(store(dst(), convert(abi-of(g, t), src()))); }
+                // an exported resource's object: an own handle to it
+                else if kind == "owned" { out.push(store(dst(), convert(abi-of(g, t), owned-handle(g, n, src())))); }
                 else { out.push(runtime-call(lower-fn(g, t), [address-of(dst()), src(),], Type.unit-type)); }
             }
             _ => out.push(runtime-call(lower-fn(g, t), [address-of(dst()), src(),], Type.unit-type)),
@@ -761,17 +858,21 @@ module gen {
             }
             future-type(x) => runtime-call("y_fread_" + site-future(g, x), [src(),], t),
             named(n) => {
-                let kind = named-kind(g, n);
+                let kind = abi-kind(g, n);
                 if kind == "enum" {
-                    return convert(t, pure-call("y_abi_tag", [convert(u32, src()), int-const(g.variants[n].cases.len(), u32),], Type.num("s32")));
+                    return convert(t, pure-call("y_abi_tag", [convert(u32, src()), int-const(g.symbols.variants[n].cases.len(), u32),], Type.num("s32")));
                 }
                 if kind == "flags" {
                     // the declared flags' bits only (a host may set others)
                     let mask: u64 = 0;
-                    for f in g.flags[n].flags { mask = mask * 2 + 1; }
+                    for f in g.symbols.flags[n].flags { mask = mask * 2 + 1; }
                     return bin("&", t, convert(t, src()), const(Constant.int(mask), t));
                 }
                 if kind == "handle" { return convert(t, src()); }
+                // an exported resource's: its rep (a borrowed handle, a method's self) names its object
+                if kind == "owned" {
+                    return convert(t, runtime-call("y_res_get", [int-const(g.owned[n].table, Type.num("s32")), convert(Type.num("s32"), src()),], Type.address-type));
+                }
                 runtime-call(lift-fn(g, t), [address-of(src()),], t)
             }
             _ => runtime-call(lift-fn(g, t), [address-of(src()),], t),
@@ -865,15 +966,15 @@ module gen {
                 }
             }
             named(tn) => {
-                if g.records.has(tn) {
-                    let r = g.records[tn];
+                if g.symbols.records.has(tn) {
+                    let r = g.symbols.records[tn];
                     let types = wit-field-types(g, tn);
                     for i in 0..r.fields.len() {
                         let member = ["f_" + mangle(r.fields[i]),];
                         part(types[i], member, member, true, base + handles-before(g, types, i), out);
                     }
                 } else {
-                    let cases = g.variants[tn].cases;
+                    let cases = g.symbols.variants[tn].cases;
                     let tag = { -> load(local(v, t), ["tag",], true, Type.num("s32"), false) };
                     out.push(store(abi-field(dst(), ["tag",], tag-num(cases.len())), convert(tag-num(cases.len()), tag())));
                     for i in 0..cases.len() {
@@ -992,8 +1093,8 @@ module gen {
                 out.push(halt-stmt());
             }
             named(tn) => {
-                if g.records.has(tn) {
-                    let r = g.records[tn];
+                if g.symbols.records.has(tn) {
+                    let r = g.symbols.records[tn];
                     let types = wit-field-types(g, tn);
                     let o = helper-local(f, t, "o", false);
                     out.push(assign(o, alloc("R_" + mangle(name-text(tn)), name-text(tn), true, trace-fn(g, tn), t)));
@@ -1003,7 +1104,7 @@ module gen {
                     }
                     out.push(return-stmt(local(o, t)));
                 } else {
-                    let v = g.variants[tn];
+                    let v = g.symbols.variants[tn];
                     let tag = { -> abi-field(src(), ["tag",], tag-num(v.cases.len())) };
                     for i in 0..v.cases.len() {
                         let k = v.cases[i];
@@ -1170,14 +1271,14 @@ module gen {
             union-type(_) => set-slots-ir(g, t, value, slots, at, into, out),
             anon-record(fields) => fields-slots-ir(g, fields.types, field-members(fields.fields), value, slots, at, into, out),
             named(name) => {
-                let kind = named-kind(g, name);
-                if kind == "enum" || kind == "flags" || kind == "handle" { word(abi-of(g, t)); }
+                let kind = abi-kind(g, name);
+                if kind == "enum" || kind == "flags" || kind == "handle" || kind == "owned" { word(abi-of(g, t)); }
                 else if kind == "record" {
-                    fields-slots-ir(g, wit-field-types(g, name), field-members(g.records[name].fields), value, slots, at, into, out);
+                    fields-slots-ir(g, wit-field-types(g, name), field-members(g.symbols.records[name].fields), value, slots, at, into, out);
                 } else {
                     let payloads: list<Type> = [];
                     let members: list<list<string>> = [];
-                    for variant-case in g.variants[name].cases {
+                    for variant-case in g.symbols.variants[name].cases {
                         payloads.push(if variant-case.has-payload { wit-payload(g, name, variant-case.name) } else { Type.unit-type });
                         members.push(["u", "c_" + mangle(variant-case.name),]);
                     }
@@ -1236,7 +1337,7 @@ module gen {
         let tag-type = match held {
             option-type(_) => Type.num("u8"),
             result-type(_) => Type.num("u8"),
-            named(n) => tag-num(g.variants[n].cases.len()),
+            named(n) => tag-num(g.symbols.variants[n].cases.len()),
             _ => tag-num(payloads.len()),
         };
         let tag = { -> abi-field(value(), ["tag",], tag-type) };
@@ -1309,8 +1410,8 @@ module gen {
     import-wrapper-ir: func(g: Gen, x: Extern) {
         let k = mangle(x.name);
         let n = x.params.len();
-        let pts = x.param-types;
-        let rt = x.result;
+        let pts = x.param-types.map({ t -> value-records(g, t) });
+        let rt = value-records(g, x.result);
         let pflat = params-flat(g, pts);
         let by-memory = pflat.len() > 16;
         let rflat = flat-types(g, rt);
@@ -1415,8 +1516,8 @@ module gen {
     async-import-wrapper-ir: func(g: Gen, x: Extern) {
         let k = mangle(x.name);
         let n = x.params.len();
-        let pts = x.param-types;
-        let rt = x.result;
+        let pts = x.param-types.map({ t -> value-records(g, t) });
+        let rt = value-records(g, x.result);
         let pflat = params-flat(g, pts);
         let by-memory = pflat.len() > 4;
         let has-result = !is-unit-type(rt);
@@ -1515,9 +1616,9 @@ module gen {
     // stack)
     export-wrapper-ir: func(g: Gen, f: Func, iface: string) {
         let k = mangle(f.name);
-        let fname = export-name(f.name);
-        let pts = g.wit-sigs[f.name].params;
-        let rt = g.wit-sigs[f.name].result;
+        let fname = export-func-name(g, f);
+        let pts = g.wit-sigs[f.name].params.map({ t -> value-records(g, t) });
+        let rt = value-records(g, g.wit-sigs[f.name].result);
         let n = pts.len();
         let pflat = params-flat(g, pts);
         let by-memory = pflat.len() > 16;
@@ -1576,9 +1677,9 @@ module gen {
     // again. A component's only (wasi)
     async-export-wrapper-ir: func(g: Gen, f: Func, iface: string) {
         let k = mangle(f.name);
-        let fname = export-name(f.name);
-        let pts = g.wit-sigs[f.name].params;
-        let rt = g.wit-sigs[f.name].result;
+        let fname = export-func-name(g, f);
+        let pts = g.wit-sigs[f.name].params.map({ t -> value-records(g, t) });
+        let rt = value-records(g, g.wit-sigs[f.name].result);
         let n = pts.len();
         let pflat = params-flat(g, pts);
         let by-memory = pflat.len() > 16;
@@ -1764,7 +1865,8 @@ module gen {
             },
             range-type(r) => set-wit(g, t),
             union-type(xs) => set-wit(g, t),
-            anon-record(r) => set-ident(g, t),
+            // a record held as its fields: that record; an anonymous one: its alias
+            anon-record(r) => if r.name != "" { wit-ident(base-name(r.name)) } else { set-ident(g, t) },
             _ => "_",
         }
     }
@@ -1791,8 +1893,13 @@ module gen {
             future-type(x) => named-types(g, x, out),
             range-type(r) => set-named-types(g, t, out),
             union-type(xs) => set-named-types(g, t, out),
-            // an anonymous record's alias: a WIT record (and its fields' types)
+            // a record held as its fields: that record
             anon-record(r) => {
+                if r.name != "" {
+                    named-types(g, Type.named(intern(r.name)), out);
+                    return;
+                }
+                // an anonymous record's alias: a WIT record (and its fields' types)
                 let k = g.set-names[show-type(t)];
                 if contains(out, k) { return; }
                 out.push(k);
@@ -1801,13 +1908,15 @@ module gen {
             named(n) => {
                 if contains(out, name-text(n)) { return; }
                 out.push(name-text(n));
-                if g.records.has(n) {
+                // (an exported resource: a handle, its fields its own)
+                if g.owned.has(n) { return; }
+                if g.symbols.records.has(n) {
                     for x in wit-field-types(g, n) {
                         named-types(g, x, out);
                     }
                 }
-                if g.variants.has(n) {
-                    for k in g.variants[n].cases {
+                if g.symbols.variants.has(n) {
+                    for k in g.symbols.variants[n].cases {
                         named-types(g, wit-payload(g, n, k.name), out);
                     }
                 }
@@ -1830,6 +1939,29 @@ module gen {
 
     // an exported module's WIT interface: its funcs, and the types they need (a WIT interface's
     // by use, a yel one defined in it)
+    // a func's params in WIT, from the first-th (an exported resource's object borrowed)
+    wit-params: func(g: Gen, f: Func, first: s64) -> string {
+        let sig = g.wit-sigs[f.name];
+        let params: list<string> = [];
+        for i in first..f.params.len() {
+            let t = sig.params[i];
+            let shown = match t {
+                named(n) => if g.owned.has(n) { "borrow<{g.owned[n].wit-name}>" } else { wit-of(g, t) },
+                _ => wit-of(g, t),
+            };
+            params.push("{wit-ident(f.params[i])}: {shown}");
+        }
+        params.join(", ")
+    }
+
+    // a func's result in WIT (" -> T", "" for none)
+    wit-result: func(g: Gen, f: Func) -> string {
+        match g.wit-sigs[f.name].result {
+            unit-type => "",
+            _ => " -> {wit-of(g, g.wit-sigs[f.name].result)}",
+        }
+    }
+
     wit-interface: func(g: Gen, m: string, funcs: list<Func>, out: list<string>) {
         let types: list<string> = [];
         for f in funcs {
@@ -1872,19 +2004,41 @@ module gen {
                     for k in kinds(t) { cases.push("{kind-case(k)}({wit-of(g, k)})"); }
                     out.push(c"  variant {wit-ident(base-name(n))} { {cases.join(", ")} }");
                 }
-            } else if g.records.has(type-name) {
-                let r = g.records[type-name];
+            } else if g.owned.has(type-name) {
+                // an exported resource: its constructor and methods (a borrowed self, not written)
+                let o = g.owned[type-name];
+                out.push("  resource {o.wit-name} \{");
+                for f in funcs {
+                    match constructed(g, f) {
+                        some(c) => { if c == type-name { out.push("    constructor({wit-params(g, f, 0)});"); } }
+                        none => {}
+                    }
+                }
+                for f in funcs {
+                    match owner(g, f) {
+                        some(c) => {
+                            if c == type-name && !is-drop(g, f) {
+                                let kind = if f.is-async { "async func" } else { "func" };
+                                out.push("    {wit-ident(base-name(f.name))}: {kind}({wit-params(g, f, 1)}){wit-result(g, f)};");
+                            }
+                        }
+                        none => {}
+                    }
+                }
+                out.push("  \}");
+            } else if g.symbols.records.has(type-name) {
+                let r = g.symbols.records[type-name];
                 let fields: list<string> = [];
                 for i in 0..r.fields.len() {
                     fields.push("{wit-ident(r.fields[i])}: {wit-of(g, wit-field-types(g, type-name)[i])}");
                 }
                 out.push(c"  record {wit-ident(base-name(n))} { {fields.join(", ")} }");
-            } else if g.flags.has(type-name) {
+            } else if g.symbols.flags.has(type-name) {
                 let names: list<string> = [];
-                for x in g.flags[type-name].flags { names.push(wit-ident(x)); }
+                for x in g.symbols.flags[type-name].flags { names.push(wit-ident(x)); }
                 out.push(c"  flags {wit-ident(base-name(n))} { {names.join(", ")} }");
             } else {
-                let v = g.variants[type-name];
+                let v = g.symbols.variants[type-name];
                 let cases: list<string> = [];
                 for k in v.cases {
                     if k.has-payload {
@@ -1901,6 +2055,8 @@ module gen {
         let type-names: list<string> = [];
         for n in types { type-names.push(wit-ident(base-name(n))); }
         for f in funcs {
+            // (a resource's constructor and methods: its own names)
+            if owner(g, f) != none || constructed(g, f) != none { continue; }
             let fname = wit-ident(base-name(f.name));
             if contains(type-names, fname) {
                 let d = diagnostics.error(f.span, "func {base-name(f.name)} has the name of a type of module {m}", "");
@@ -1909,17 +2065,9 @@ module gen {
             }
         }
         for f in funcs {
-            let params: list<string> = [];
-            let sig = g.wit-sigs[f.name];
-            for i in 0..f.params.len() {
-                params.push("{wit-ident(f.params[i])}: {wit-of(g, sig.params[i])}");
-            }
-            let result = match sig.result {
-                unit-type => "",
-                _ => " -> {wit-of(g, sig.result)}",
-            };
+            if owner(g, f) != none || constructed(g, f) != none { continue; }
             let kind = if f.is-async { "async func" } else { "func" };
-            out.push("  {wit-ident(base-name(f.name))}: {kind}({params.join(", ")}){result};");
+            out.push("  {wit-ident(base-name(f.name))}: {kind}({wit-params(g, f, 0)}){wit-result(g, f)};");
         }
         out.push(c"}");
         out.push("");

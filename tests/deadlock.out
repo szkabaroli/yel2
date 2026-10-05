@@ -1,1 +1,2 @@
+yel: YEL_ASYNC_TRACE=1 tells each task and what it waits for
 panic: every task waits, and nothing will wake one: a deadlock

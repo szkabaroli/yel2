@@ -1,0 +1,86 @@
+mount
+  create-element VStack -> 1
+  create-element Text -> 2
+  create-text "Hello, ada!" -> 3
+  append-child 2 3
+  append-child 1 2
+  create-element Text -> 4
+  create-text "Clicked 0 times" -> 5
+  append-child 4 5
+  append-child 1 4
+  create-element Button -> 6
+  create-text "+" -> 7
+  append-child 6 7
+  add-event-listener 6 click 1
+  append-child 1 6
+  append-child 0 1
+click (handler 1)
+  set-text-content 5 "Clicked 1 times"
+click
+  set-text-content 5 "Clicked 2 times"
+set-name grace
+  set-text-content 3 "Hello, grace!"
+set-name grace again: nothing
+unmount
+  remove 1
+todo: mount
+  create-element VStack -> 8
+  set-style 8 pad f64(8)
+  create-element Text -> 9
+  set-attribute 9 weight str("normal")
+  create-text "0 done" -> 10
+  append-child 9 10
+  append-child 8 9
+  create-comment if -> 11
+  append-child 8 11
+  create-element Text -> 12
+  create-text "Nothing to do" -> 13
+  append-child 12 13
+  insert-before 8 12 11
+  create-comment for -> 14
+  append-child 8 14
+  append-child 0 8
+todo: items a, b
+  remove 12
+  create-comment if -> 15
+  insert-before 8 15 11
+  create-element Button -> 16
+  create-text "a" -> 17
+  append-child 16 17
+  add-event-listener 16 click 1
+  insert-before 8 16 14
+  create-element Button -> 18
+  create-text "b" -> 19
+  append-child 18 19
+  add-event-listener 18 click 2
+  insert-before 8 18 14
+todo: a, b, c (busy; rows a and b kept)
+  create-element Text -> 20
+  create-text "Busy" -> 21
+  append-child 20 21
+  insert-before 8 20 15
+  insert-before 8 16 14
+  insert-before 8 18 14
+  create-element Button -> 22
+  create-text "c" -> 23
+  append-child 22 23
+  add-event-listener 22 click 3
+  insert-before 8 22 14
+todo: click c's row
+  set-attribute 9 weight str("bold")
+  set-text-content 10 "1 done"
+todo: c, a (b let go)
+  remove 20
+  insert-before 8 22 14
+  insert-before 8 16 14
+  remove 18
+todo: none
+  remove 15
+  create-element Text -> 24
+  create-text "Nothing to do" -> 25
+  append-child 24 25
+  insert-before 8 24 11
+  remove 22
+  remove 16
+todo: unmount
+  remove 8

@@ -9,7 +9,7 @@ type either = fi | fs;
 type shape = { a: s32 } | { b: string };
 type half = 0.5 | 1.0;
 
-record Counter { n: s32, }
+resource Counter { n: s32, }
 
 seven: func() -> s32 { 7 }
 

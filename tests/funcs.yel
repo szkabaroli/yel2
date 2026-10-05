@@ -1,7 +1,7 @@
 // Funcs as values: a top-level func passed, kept and called through a local (a C function pointer;
 // no closure: it captures nothing)
 
-record Named { name: string, score: s32, }
+resource Named { name: string, score: s32, }
 
 by-score: func(a: Named, b: Named) -> bool { a.score < b.score }
 
@@ -29,7 +29,7 @@ inc: func(x: s32) -> s32 { x + 1 }
 square: func(x: s32) -> s32 { x * x }
 
 // a func kept in a record, and chosen at run time
-record Op { label: string, run: func(s32) -> s32, }
+resource Op { label: string, run: func(s32) -> s32, }
 
 main: func() {
     let people: list<Named> = [

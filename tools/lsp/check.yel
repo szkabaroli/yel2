@@ -1,0 +1,250 @@
+// Checking: each open document's package checked as yelc check checks it (the compiler's analysis
+// module, every open document read in place of its file on disk), and what that finds published as
+// each file's diagnostics, those a file had and has no more cleared. A change waits SETTLE ms for
+// the next before a check runs, so a burst of typing is checked once. A check goes in two steps:
+// as far as what each name names (mode names: what requests read, answered at once), then the
+// IR's readonly and move checks (analysis.check-flow); what it finds is told once, after the
+// first where that found errors (the IR's are not run then), else after the second. One check runs for a
+// change, whoever asks; the last one is let go before the next is made.
+//
+// A document's package: the core standard library's for one of its files (checked through a
+// program of nothing, which loads it), the document alone where its directory holds programs of
+// their own (more than one file with a main, as tests/), else its directory's.
+
+from "../../compiler" include analysis, diagnostics, packages;
+from "std:encoding/json" include json;
+
+// how long a change waits for another before the check (milliseconds)
+const SETTLE: s64 = 200;
+
+module check {
+    // a check wanted: run once no change has come for SETTLE ms
+    soon: func(state: Server) {
+        state.revision += 1;
+        let _ = start settled(state, state.revision);
+    }
+
+    @(private) settled: async func(state: Server, revision: s64) {
+        wait sleep(SETTLE);
+        if state.revision != revision || state.shut-down { return; }
+        wait all(state);
+    }
+
+    // every open document's package checked, and each file's diagnostics published: what it has
+    // now (none clears what it had)
+    all: async func(state: Server) {
+        let overlays = open-documents(state);
+        let inputs: list<string> = [];
+        for uri in state.documents.keys() {
+            let input = wait package-input(state, path(uri), overlays);
+            if !inputs.contains(input) { inputs.push(input); }
+        }
+        // (what each name names first, told at once, the requests waiting for it answered; the
+        // IR's readonly and move checks after, told once they are done, where no change has come
+        // since)
+        let checks: list<analysis.Checked> = [];
+        for input in inputs { checks.push(wait fresh(state, input, overlays)); }
+        // (errors of what names name are all a check finds: the IR's checks run on no program in
+        // error, so they are told now. Else nothing yet: what the IR's checks find is told with
+        // them, so a readonly or move error never goes and comes back between the two)
+        if checks.any({ c -> c.problems.len() > 0 }) {
+            wait publish(state, inputs, checks);
+            return;
+        }
+        let revision = state.revision;
+        // (the requests that waited for it answered first: the IR's checks never wait, so nothing
+        // else runs while they do)
+        wait sleep(1);
+        if state.revision != revision { return; }
+        for index in 0..checks.len() {
+            let found = analysis.check-flow(checks[index]);
+            if state.revision != revision { return; }
+            let flowed = checks[index];
+            flowed.problems = found;
+            checks[index] = flowed;
+            state.checked.set(inputs[index], flowed);
+        }
+        wait publish(state, inputs, checks);
+    }
+
+    // each checked input's problems published as its files' diagnostics (none clears what a file
+    // had)
+    @(private) publish: async func(state: Server, inputs: list<string>, checks: list<analysis.Checked>) {
+        let found: map<string, list<json.value>> = map.new();
+        for index in 0..inputs.len() {
+            let checked = checks[index];
+            for problem in checked.problems {
+                // (one about no file in particular: the input's)
+                let place = problem.place;
+                if place.path == "" { place.path = inputs[index]; }
+                let uri = file-uri(place.path);
+                if !found.has(uri) { found.set(uri, []); }
+                found[uri].push(diagnostic(state, checked.texts, problem, place));
+            }
+        }
+        for uri in state.documents.keys() {
+            if !found.has(uri) { found.set(uri, []); }
+        }
+        for uri in state.published.values() {
+            if !found.has(uri) { found.set(uri, []); }
+        }
+        state.published = set.new();
+        for uri in found.keys() {
+            if found[uri].len() > 0 { state.published.add(uri); }
+            wait rpc.notify(state.connection, "textDocument/publishDiagnostics", json.object([
+                ("uri", json.value.text(uri)),
+                ("diagnostics", json.value.array(found[uri])),
+            ]));
+        }
+    }
+
+    // what the check of uri's package found, as the documents are now: the last check's where no
+    // change has come since, else a check made now (a request's: definition, references, hover)
+    checked: async func(state: Server, uri: string) -> analysis.Checked {
+        let overlays = open-documents(state);
+        let input = wait package-input(state, path(uri), overlays);
+        wait fresh(state, input, overlays)
+    }
+
+    // input's package checked as far as what names name (mode names), as the documents are now:
+    // the last check where no change has come since, else the one under way for this change
+    // (waited for), else one begun now (the last one let go first: its trees and all are not kept
+    // while the next is made)
+    @(private) fresh: async func(state: Server, input: string, overlays: map<string, string>) -> analysis.Checked {
+        loop {
+            if state.checked.has(input) && state.checked-at.get(input).unwrap-or(-1) == state.revision {
+                return state.checked[input];
+            }
+            if state.checking.get(input).unwrap-or(-1) != state.revision { break; }
+            wait sleep(5);
+        }
+        let revision = state.revision;
+        state.checking.set(input, revision);
+        state.checked.remove(input);
+        let context = analysis.context(input, overlays);
+        context.mode = "names";
+        let checked = wait analysis.check(context, state.prelude, []);
+        state.checking.remove(input);
+        state.checked.set(input, checked);
+        state.checked-at.set(input, revision);
+        checked
+    }
+
+    // each open document's text, by its path: what a check reads in place of the disk's
+    @(private) open-documents: func(state: Server) -> map<string, string> {
+        let overlays: map<string, string> = map.new();
+        for uri in state.documents.keys() { overlays.set(path(uri), state.documents[uri]); }
+        overlays
+    }
+
+    // the package a file is checked in: what yelc would be given to check it
+    @(private) package-input: async func(state: Server, file: string, overlays: map<string, string>) -> string {
+        // (found once a change: each file of a directory is parsed to find it)
+        if state.inputs-at != state.revision {
+            state.inputs = map.new();
+            state.inputs-at = state.revision;
+        }
+        match state.inputs.get(file) {
+            some(input) => { return input; }
+            none => {}
+        }
+        let input = wait package-of(state, file, overlays);
+        state.inputs.set(file, input);
+        input
+    }
+
+    @(private) package-of: async func(state: Server, file: string, overlays: map<string, string>) -> string {
+        let dir = packages.dir-name(file);
+        let prelude-dir = packages.dir-name(state.prelude);
+        // a file of the standard library's core (in a folder of runtime/std/core): the core itself
+        // checked (its test files too)
+        let core = prelude-dir + "/std/core";
+        if dir == core || dir.starts-with(core + "/") { return core; }
+        // (each file parsed: whether it declares a main of its own)
+        let mains = 0;
+        let listing = analysis.context(dir, overlays);
+        for name in wait diagnostics.source-entries(listing, dir) {
+            if !name.ends-with(".yel") { continue; }
+            if wait analysis.has-main(listing, dir + "/" + name) { mains += 1; }
+        }
+        if mains > 1 { file } else { dir }
+    }
+
+    // a problem as LSP's diagnostic: its range in the client's units, its message with its label,
+    // notes and helps after it, and the other places as related information
+    @(private) diagnostic: func(state: Server, texts: map<string, string>, problem: analysis.Problem, place: analysis.Place) -> json.value {
+        let message = problem.message;
+        if problem.label != "" { message = message + "\n" + problem.label; }
+        for note in problem.notes { message = message + "\nnote: " + note; }
+        for help in problem.helps { message = message + "\nhelp: " + help; }
+        let related: list<json.value> = [];
+        for other in problem.related {
+            let location = json.object([("uri", json.value.text(file-uri(other.place.path))), ("range", range(state, texts, other.place)),]);
+            related.push(json.object([
+                ("location", location),
+                ("message", json.value.text(if other.message == "" { "here" } else { other.message })),
+            ]));
+        }
+        json.object([
+            ("range", range(state, texts, place)),
+            ("severity", json.value.number("1")),
+            ("source", json.value.text("yelc")),
+            ("message", json.value.text(message)),
+            ("relatedInformation", json.value.array(related)),
+        ])
+    }
+
+    // a place's range: its lines from 0, its columns in the client's units (none: the file's start)
+    range: func(state: Server, texts: map<string, string>, place: analysis.Place) -> json.value {
+        if place.line == 0 { return server.range(state, "", 0, 0, 0); }
+        let lines = texts.get(place.path).unwrap-or("").split("\n");
+        let first = if place.line - 1 < lines.len() { lines[place.line - 1] } else { "" };
+        let last = if place.end-line - 1 < lines.len() { lines[place.end-line - 1] } else { "" };
+        json.object([
+            ("start", server.position(place.line - 1, server.client-column(state, first, place.col - 1))),
+            ("end", server.position(place.end-line - 1, server.client-column(state, last, place.end-col - 1))),
+        ])
+    }
+
+    // a file:// URI's path (its %XX escapes undone); any other URI as it is
+    path: func(uri: string) -> string {
+        if !uri.starts-with("file://") { return uri; }
+        let encoded = uri.substring(7, uri.len());
+        let out = buffer.buffer(encoded.len());
+        let index = 0;
+        loop {
+            if index >= encoded.len() { break; }
+            let byte = encoded.byte-at(index);
+            if byte == 37 && index + 2 < encoded.len() {
+                let high = to-digit(encoded.byte-at(index + 1), 16);
+                let low = to-digit(encoded.byte-at(index + 2), 16);
+                if high.is-some() && low.is-some() {
+                    out.push-byte(high.unwrap-or(0) * 16 + low.unwrap-or(0));
+                    index += 3;
+                    continue;
+                }
+            }
+            out.push-byte(byte);
+            index += 1;
+        }
+        out.to-string()
+    }
+
+    // a path's file:// URI: each byte but a letter, a digit, / - . _ ~ escaped %XX
+    file-uri: func(file: string) -> string {
+        let digits = "0123456789ABCDEF";
+        let out = buffer.buffer(file.len() + 7);
+        out.push("file://");
+        for index in 0..file.len() {
+            let byte = file.byte-at(index);
+            if is-alphanumeric(byte) || byte == 47 || byte == 45 || byte == 46 || byte == 95 || byte == 126 {
+                out.push-byte(byte);
+            } else {
+                out.push-byte(37);
+                out.push-byte(digits.byte-at(byte / 16));
+                out.push-byte(digits.byte-at(byte % 16));
+            }
+        }
+        out.to-string()
+    }
+}

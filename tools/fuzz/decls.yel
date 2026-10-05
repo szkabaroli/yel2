@@ -15,7 +15,8 @@ module decls {
                 }
                 let fields: list<string> = [];
                 for k in 0..decl.names.len() { fields.push("{decl.names[k]}: {types.show(decl.types[k])},"); }
-                lines.push("record {name} {gen.lb()} {fields.join(" ")} {gen.rb()}");
+                // (a resource: a shared object, as the programs made assume)
+                lines.push("resource {name} {gen.lb()} {fields.join(" ")} {gen.rb()}");
             } else if kind == "variant" {
                 let cases: list<string> = [];
                 for k in 0..dice.between(g.dice, 1, 4) {

@@ -1,0 +1,45 @@
+// std's buffer and a string's bytes and chars, tested (yelc test runtime/std/core): bytes gathered
+// (append-only), handed out as a string (sharing its bytes) or a list<u8> (copied)
+
+from "std:testing" include expect;
+
+module buffer-tests {
+    resource doc { title: string, body: buffer, }
+
+    @(test) gathers-bytes: func() {
+        let b = buffer(4);
+        b.push("key");
+        b.push-byte(61);
+        b.push-char('→');
+        b.push-bytes([33, 33,]);
+        let first = b.to-string();
+        // what was handed out keeps its bytes as the buffer grows past them
+        for i in 0..100 { b.push("{i},"); }
+        expect.equal(first, "key=→!!");
+        expect.equal(first.len(), 9);
+        expect.equal(b.len(), 299);
+        expect.equal(b.to-bytes().len(), 299);
+        expect.equal(b.to-string().slice(0, 12), "key=→!!0,1");
+    }
+
+    // in a resource (the collector traces the buffer through it), and shown
+    @(test) is-held-and-shown: func() {
+        let d: doc = { title: "notes", body: buffer(0), };
+        for i in 0..3 { d.body.push("line {i}\n"); }
+        expect.equal(d.body.len(), 21);
+        expect.equal("{d}", "\{title: \"notes\", body: buffer(\"line 0\\nline 1\\nline 2\\n\")\}");
+    }
+
+    // one name for each type: the first argument's chooses (len of a string, a list, a buffer)
+    @(test) reads-bytes-and-chars: func() {
+        let word = "héllo";
+        expect.equal(word.len(), 6);
+        expect.equal(word.chars().len(), 5);
+        expect.equal(word.chars(), ['h', 'é', 'l', 'l', 'o',]);
+        expect.equal(word.bytes(), [104, 195, 169, 108, 108, 111,]);
+        expect.equal(from-utf8([104, 105,]), ok("hi"));
+        expect.equal(from-utf8([104, 255,]), err(1));
+        expect.holds(is-utf8(word));
+        expect.equal(to-string(42), "42");
+    }
+}

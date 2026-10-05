@@ -4,9 +4,9 @@
 
 from "wasi:clocks" include monotonic-clock;
 
-record Packet { link: option<Packet>, id: s32, kind: s32, a1: s32, a2: list<s32>, }
+resource Packet { link: option<Packet>, id: s32, kind: s32, a1: s32, a2: list<s32>, }
 
-record Tcb {
+resource Tcb {
     link: option<Tcb>,
     id: s32,
     priority: s32,
@@ -22,15 +22,15 @@ variant Task {
     handler(HandlerTask),
 }
 
-record IdleTask { v1: s32, count: s32, }
+resource IdleTask { v1: s32, count: s32, }
 
-record DeviceTask { v1: option<Packet>, }
+resource DeviceTask { v1: option<Packet>, }
 
-record WorkerTask { v1: s32, v2: s32, }
+resource WorkerTask { v1: s32, v2: s32, }
 
-record HandlerTask { v1: option<Packet>, v2: option<Packet>, }
+resource HandlerTask { v1: option<Packet>, v2: option<Packet>, }
 
-record Scheduler {
+resource Scheduler {
     queue-count: s32,
     hold-count: s32,
     blocks: list<option<Tcb>>,
@@ -40,7 +40,7 @@ record Scheduler {
 }
 
 // the constants: ids, packets' kinds, a task's states, a work packet's data
-record Ids { idle: s32, worker: s32, handler-a: s32, handler-b: s32, device-a: s32, device-b: s32, }
+resource Ids { idle: s32, worker: s32, handler-a: s32, handler-b: s32, device-a: s32, device-b: s32, }
 
 ids: func() -> Ids { { idle: 0, worker: 1, handler-a: 2, handler-b: 3, device-a: 4, device-b: 5, } }
 

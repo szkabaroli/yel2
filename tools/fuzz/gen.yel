@@ -3,7 +3,7 @@
 // it cannot say on its own, where no type is wanted: [], none, a record's literal, is made in a
 // typed let first and named).
 
-record Gen {
+resource Gen {
     dice: Dice,
     decls: list<TypeDecl>,
     funcs: list<FuncInfo>,

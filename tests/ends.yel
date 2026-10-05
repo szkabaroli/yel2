@@ -3,7 +3,7 @@
 // one kept, is left to whoever has it
 
 // a writer a record holds too, given a started task: not this func's alone, so not closed here
-record Chan { w: writer<s32>, }
+resource Chan { w: writer<s32>, }
 
 producer: async func(c: Chan) {
     wait yield-turn();

@@ -1,0 +1,156 @@
+// Reactivity, made of observe (std's): effects, the owners that let them go, and the queue that
+// runs them. An effect runs its func, tracked; a change to what it read queues it, and flush runs
+// what is queued (each once, in order), again while what they run changes more. Whatever changes
+// state then calls flush: an event's handler once it is done, a prop set from outside.
+
+module reactive {
+    // what is let go together (a component's, once unmounted): the effects made under it, and
+    // what they asked to be done then
+    resource Owner { cleanups: list<func()>, }
+
+    // an effect: its func (what it gives back runs before it runs again, and when it is let go),
+    // what it made under it (its own owner: let go before it runs again), what it read
+    resource Effect {
+        run: func() -> func(),
+        cleanup: func(),
+        children: Owner,
+        watch: option<observe.Watch>,
+        alive: bool,
+        queued: bool,
+    }
+
+    // the owner what is made now joins (none: no one lets it go); each task's own (@(context)): a
+    // task started under an owner joins it, what it makes and its cleanups, even after it waits
+    @(private, context) let owner: option<Owner>;
+    // what flush runs, in order; whether it is running
+    @(private) let queue: list<func()>;
+    @(private) let flushing: bool;
+
+    new-owner: func() -> Owner { { cleanups: [], } }
+
+    // run, what it makes joining o
+    within: func(o: Owner, run: func()) {
+        let outer = owner;
+        owner = some(o);
+        run();
+        owner = outer;
+    }
+
+    // everything made under o let go (the last made first)
+    dispose: func(o: Owner) {
+        let cleanups = o.cleanups;
+        o.cleanups = [];
+        let i = cleanups.len();
+        loop {
+            if i == 0 { break; }
+            i -= 1;
+            let c = cleanups[i];
+            c();
+        }
+    }
+
+    // done when the owner now is let go
+    on-cleanup: func(c: func()) {
+        match owner {
+            some(o) => o.cleanups.push(c),
+            none => {}
+        }
+    }
+
+    // run now, and again (after a flush) each time what it read changes; what it gives back runs
+    // before it runs again, and when its owner lets it go
+    effect: func(run: func() -> func()) -> Effect {
+        let e: Effect = {
+            run: run,
+            cleanup: nothing,
+            children: new-owner(),
+            watch: none,
+            alive: true,
+            queued: false,
+        };
+        go(e);
+        on-cleanup({ -> stop(e); });
+        e
+    }
+
+    // an effect let go: its cleanup run, and run no more
+    stop: func(e: Effect) {
+        if !e.alive { return; }
+        e.alive = false;
+        match e.watch {
+            some(w) => observe.stop(w),
+            none => {}
+        }
+        dispose(e.children);
+        let cleanup = e.cleanup;
+        e.cleanup = nothing;
+        cleanup();
+    }
+
+    // f run at the next flush
+    schedule: func(f: func()) {
+        let waiting = queue;
+        waiting.push(f);
+    }
+
+    // what is queued, each in order, and what that queues, until none is (an effect that changes
+    // what it reads, again and again, is a loop: stopped)
+    flush: func() {
+        if flushing { return; }
+        flushing = true;
+        let rounds = 0;
+        loop {
+            let now = queue;
+            if now.len() == 0 { break; }
+            rounds += 1;
+            if rounds > 100 {
+                queue = [];
+                flushing = false;
+                panic("effects changed what they read 100 times in one flush: an update loop");
+            }
+            queue = [];
+            for f in now { f(); }
+        }
+        flushing = false;
+    }
+
+    // run, then what it changed run (each effect once, however many changes it made)
+    batch: func(run: func()) {
+        let outer = flushing;
+        flushing = true;
+        run();
+        flushing = outer;
+        flush();
+    }
+
+    @(private) nothing: func() {}
+
+    // the effect run (what it made before, and its cleanup, let go first), tracked
+    @(private) go: func(e: Effect) {
+        dispose(e.children);
+        let cleanup = e.cleanup;
+        e.cleanup = nothing;
+        cleanup();
+        let run = e.run;
+        e.watch = some(observe.track({ -> within(e.children, { -> e.cleanup = run(); }); }, { -> queue-effect(e); }));
+    }
+
+    @(private) queue-effect: func(e: Effect) {
+        if e.queued || !e.alive { return; }
+        e.queued = true;
+        schedule({ -> check(e); });
+    }
+
+    // a queued effect: run again if what it read has changed (a derived value may have come out the
+    // same), else watching it again
+    @(private) check: func(e: Effect) {
+        e.queued = false;
+        if !e.alive { return; }
+        match e.watch {
+            some(w) => {
+                if observe.changed(w) { go(e); } else { observe.rearm(w); }
+            }
+            none => go(e),
+        }
+    }
+}

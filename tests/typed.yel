@@ -1,6 +1,6 @@
 // typed C: generic funcs compiled per type, options of options, equality and showing made per type
 
-record Pair { name: string, scores: list<s32>, }
+resource Pair { name: string, scores: list<s32>, }
 
 variant Tree {
     leaf(s32),

@@ -1,0 +1,74 @@
+// yelc test: a package's @(test) funcs, run by the runner it makes (each in a process of its own:
+// a failure ends only its test), with std:testing's expectations. Built as a program (yelc), the
+// tests are left out and main runs
+
+from "std:testing" include expect;
+
+// the sum of a list
+total: func(items: list<s32>) -> s32 {
+    let sum = 0;
+    for item in items { sum += item; }
+    sum
+}
+
+main: func() -> s32 {
+    print("{total([1, 2, 3,])}\n");
+    0
+}
+
+@(test) sums-a-list: func() {
+    expect.equal(total([1, 2, 3,]), 6);
+}
+
+@(test) sums-nothing: func() {
+    assert(total([]) == 0);
+}
+
+// a failing one: told, and the others still run
+@(test) catches-a-bug: func() {
+    expect.equal(total([2, 2,]), 5);
+}
+
+@(test) finds-what-it-expects: func() {
+    let parsed: result<s32, string> = ok(3);
+    let value = expect.ok(parsed);
+    expect.holds(value > 2);
+    expect.contains([1, 2, 3,], 2);
+    expect.length([1, 2,], 2);
+    expect.contains-text("hello yel", "yel");
+    expect.near(0.1 + 0.2, 0.3);
+    expect.none([1,].get(4));
+    expect.equal(expect.some([7,].get(0)), 7);
+}
+
+@(test) waits: async func() {
+    let got = wait later(4);
+    expect.equal(got, 8);
+}
+
+later: async func(value: s32) -> s32 { value * 2 }
+
+module parsing {
+    @(test) reads-a-number: func() {
+        expect.equal(parse-int("42"), some(42));
+    }
+
+    @(test) rejects-a-word: func() {
+        expect.equal(parse-int("yel"), some(0));
+    }
+}
+
+record point { x: s32, y: s32, }
+
+// texts as their snapshots have them (tests/testing/snapshots/main.snap: the runner loads them
+// before the test, and writes a new one once it passes)
+@(test) shows-a-record: func() {
+    let corner: point = { x: 1, y: 2, };
+    expect.snapshot("{corner}");
+    expect.snapshot("line one\nline two");
+}
+
+// one whose snapshot differs: told, line by line
+@(test) notices-a-change: func() {
+    expect.snapshot("alpha\nbeta, changed\ngamma");
+}

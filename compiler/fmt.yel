@@ -4,17 +4,27 @@
 // the author laid out over lines (a newline between a group's items) stays laid out as written,
 // each of its lines one group of its own; blank lines stay (one at most). A block's braces break
 // with the line they are on, so an if and its elses break together; a call whose last argument is
-// a group keeps the call on one line and breaks only that group (out.push({ ... })). Tokens are
-// printed as their source bytes, so strings and comments are never changed.
+// a group keeps the call on one line and breaks only that group (out.push({ ... })), but a call
+// holding a broken argument before its last breaks. A closure keeps its params and -> on the line
+// it opens on and breaks only its body. Tokens are printed as their source bytes, so strings and
+// comments are never changed.
+//
+// Formatting what this makes changes nothing: each choice made of a group this breaks is made the
+// same once that group is written broken (a fill's separator measured only to the next {} or []
+// group's opening break, a broken group holding no flat group around it, a block's lines filled
+// as lines fills them)
 
 // a layout: text; a line (a space where its group fits, else a line break); a soft line (nothing,
-// else a line break); a hard line; text only where its group breaks; a sequence; the lines inside
-// four spaces further in; a group
+// else a line break); a hard line; the break after a {} or [] group's opening bracket (a line or a
+// soft line: where a line's measure for a fill's separator ends, as a second formatting's ends at
+// the hard line that break has become); text only where its group breaks; a sequence; the lines
+// inside four spaces further in; a group
 variant Doc {
     text(string),
     line,
     softline,
     hardline,
+    opening-break(Doc),
     ifbreak(string),
     concat(list<Doc>),
     nest(Doc),
@@ -25,7 +35,7 @@ variant Doc {
 // forced: it breaks whatever the width; hug (a call's last argument a group): prefix (what comes
 // before that group), last (that group) and suffix (what closes the call), for printing the call
 // on one line and breaking only the last group
-record DocGroup { doc: Doc, forced: bool, hug: bool, prefix: Doc, last: Doc, suffix: Doc, }
+resource DocGroup { doc: Doc, forced: bool, hug: bool, prefix: Doc, last: Doc, suffix: Doc, }
 
 // a token (its index), or a group: its opening token, its items, its closing token
 variant Item {
@@ -36,34 +46,28 @@ variant Item {
 record GroupItem { open: s64, items: list<Item>, close: s64, }
 
 // a layout, and whether it must break the group it is in (a hard line in it)
-record Built { doc: Doc, forced: bool, }
+resource Built { doc: Doc, forced: bool, }
 
 // the file: its source and tokens; the tree's walk position
 // angled: each token's, whether it is inside a type's <...> (a comma there separates no items)
 // failed: its brackets do not match (the file is left as it is)
-record Fmt { src: string, toks: list<Token>, pos: s64, angled: list<bool>, failed: bool, }
+resource Fmt { src: string, toks: list<Token>, pos: s64, angled: list<bool>, failed: bool, }
 
 // a printing step: the layout, its indentation, whether its group is flat, and (a hugged call's
 // last group) that it breaks
-record Cmd { doc: Doc, indent: s64, flat: bool, must-break: bool, }
+resource Cmd { doc: Doc, indent: s64, flat: bool, must-break: bool, }
 
 // the printer's output: finished lines, the line being made, its column, and whether it has
 // anything yet (its indentation is written with its first text)
-record Out { lines: list<string>, cur: list<string>, col: s64, indent: s64, started: bool, }
+resource Out { lines: list<string>, cur: list<string>, col: s64, indent: s64, started: bool, }
 
 module fmt {
     width: func() -> s64 { 100 }
 
-    // a source's text, formatted
+    // a source's text, formatted: read from its syntax tree (grammar.yel's: each token as written,
+    // its comments, a string whole, and which tokens are inside a type's <…>)
     format: func(src: string, file: string) -> string {
-        let f: Fmt = {
-            src: src,
-            toks: lexer.lex-all(src, { sources: [{ path: file, text: src, },], errors: [], input: file, mode: "", backend: "", triple: "", }, 0),
-            pos: 0,
-            angled: [],
-            failed: false,
-        };
-        angles(f);
+        let f = tokens-of(src, file);
         let items = tree(f, "");
         if f.failed {
             eprint("{file}: not formatted: its brackets do not match\n");
@@ -72,6 +76,108 @@ module fmt {
         let body = lines(f, items);
         let doc = Doc.concat([body.doc, Doc.hardline,]);
         print-doc(doc)
+    }
+
+    // a file's tokens as the formatter reads them, from its syntax tree: each token (a comment
+    // too; a string one token, its pieces and interpolations whole), where it is, and whether it
+    // is inside a type's <…> (a type's arguments or a func's type parameters: a comma there
+    // separates no items)
+    tokens-of: func(src: string, file: string) -> Fmt {
+        let context: Context = {
+            sources: [{ path: file, text: src, origin: none, },],
+            errors: [],
+            input: file,
+            mode: "",
+            backend: "",
+            debug: false,
+            testing: false,
+            test-exports: false,
+            triple: "",
+            overlays: map.new(),
+            exits: false,
+            type-names: [],
+            uses: [],
+            modules: [],
+            declarations: [],
+            members: [],
+            locals: [],
+            bodies: [],
+            trees: map.new(),
+            symbols: symbols(),
+        };
+        let f: Fmt = { src: src, toks: [], pos: 0, angled: [], failed: false, };
+        let root = tree.root(grammar.parse-file(context, 0));
+        let lines: list<s64> = [0,];
+        for index in 0..src.len() { if src.byte-at(index) == 10 { lines.push(index + 1); } }
+        read-tokens(f, root, false, lines);
+        let end = place(lines, src.len());
+        f.toks.push({ kind: TokenKind.eof, text: "", span: { source: 0, line: end.line, col: end.col, end-line: end.line, end-col: end.col, }, indent: -1, template: false, start: src.len(), end: src.len(), escaped: false, });
+        f.angled.push(false);
+        f
+    }
+
+    @(private) read-tokens: func(f: Fmt, n: SyntaxNode, angled: bool, lines: list<s64>) {
+        // (a string taken whole, an attribute's or an include's: its pieces are its holder's own,
+        // one token from its opening quote to its closing one)
+        let string-start = -1;
+        let depth = 0;
+        for child in tree.children(n) {
+            match child {
+                token(t) => {
+                    if t.green.kind == TokenKind.string-start {
+                        if depth == 0 { string-start = t.offset; }
+                        depth += 1;
+                        continue;
+                    }
+                    if depth > 0 {
+                        if t.green.kind == TokenKind.string-end {
+                            depth -= 1;
+                            if depth == 0 { push-token(f, TokenKind.str, string-start, t.offset + t.green.text.len(), angled, lines); }
+                        }
+                        continue;
+                    }
+                    if t.green.kind == TokenKind.space || t.green.kind == TokenKind.unknown { continue; }
+                    push-token(f, t.green.kind, t.offset, t.offset + t.green.text.len(), angled, lines);
+                }
+                node(inner) => {
+                    let kind = tree.kind(inner);
+                    if kind == NodeKind.string-lit {
+                        // (a string one token: what is in it is its own)
+                        push-token(f, TokenKind.str, inner.offset, tree.end-offset(inner), angled, lines);
+                    } else {
+                        read-tokens(f, inner, angled || kind == NodeKind.type-args || kind == NodeKind.type-params, lines);
+                    }
+                }
+            }
+        }
+    }
+
+    @(private) push-token: func(f: Fmt, kind: TokenKind, start: s64, end: s64, angled: bool, lines: list<s64>) {
+        let first = place(lines, start);
+        let last = place(lines, end);
+        f.toks.push({
+            kind: kind,
+            text: f.src.substring(start, end),
+            span: { source: 0, line: first.line, col: first.col, end-line: last.line, end-col: last.col, },
+            indent: -1,
+            template: false,
+            start: start,
+            end: end,
+            escaped: false,
+        });
+        f.angled.push(angled);
+    }
+
+    // the line and column of byte at (lines: where each starts)
+    @(private) place: func(lines: list<s64>, at: s64) -> Span {
+        let low = 0;
+        let high = lines.len() - 1;
+        loop {
+            if low >= high { break; }
+            let middle = (low + high + 1) / 2;
+            if lines[middle] <= at { low = middle; } else { high = middle - 1; }
+        }
+        { source: 0, line: low + 1, col: at - lines[low] + 1, end-line: low + 1, end-col: at - lines[low] + 1, }
     }
 
     // ================================================================ the tree
@@ -144,27 +250,6 @@ module fmt {
         match i {
             tok(k) => is-op(f, i, ",") && !f.angled[k],
             group(g) => false,
-        }
-    }
-
-    // which tokens are inside a type's <...>: a < written against the name before it (list<,
-    // result<, f<T>; a comparison is written with spaces) opens one, a > closes it
-    angles: func(f: Fmt) {
-        let depth = 0;
-        for k in 0..f.toks.len() {
-            let t = f.toks[k];
-            f.angled.push(depth > 0);
-            if t.kind == TokenKind.op && t.text == "<" && k > 0 && f.toks[
-                k - 1
-            ].kind == TokenKind.id && f.toks[k - 1].end == t.start {
-                depth += 1;
-            } else if t.kind == TokenKind.op && t.text == ">" && depth > 0 {
-                depth -= 1;
-            } else if t.kind == TokenKind.op && (
-                t.text == ";" || t.text == "\{" || t.text == "\}"
-            ) {
-                depth = 0;
-            }
         }
     }
 
@@ -337,6 +422,9 @@ module fmt {
                 group(x) => {}
             }
         }
+        // a closure ({ params -> body }): its params' commas make it no list
+        let arrow = if open == "\{" { closure-arrow(f, g) } else { -1 };
+        if arrow >= 0 { return closure-doc(f, g, arrow); }
         let is-list = false;
         for i in items { if is-comma(f, i) { is-list = true; } }
         let is-block = open == "\{" && !is-list;
@@ -371,31 +459,158 @@ module fmt {
         } else {
             Doc.softline
         };
+        let first = if open == "(" { brk } else { Doc.opening-break(brk) };
         let doc = Doc.concat([
             Doc.text(open),
-            Doc.nest(Doc.concat([brk, content.doc, tail,])),
+            Doc.nest(Doc.concat([first, content.doc, tail,])),
             brk,
             Doc.text(close),
         ]);
         if is-block { return { doc: doc, forced: forced, }; }
-        // a call whose last argument is a group: that group may break alone
-        if open == "(" && huggable(f, end) && !forced {
+        // a call whose last argument is a group: that group may break alone, broken already or not
+        // (so formatting this again keeps it so), where nothing before it is broken; but not the
+        // last block of an if's elses, which break together. Its last argument: the last item but
+        // a comma after it (one a broken list was given, as formatting adds them)
+        let at = last-argument(f, items);
+        let before-forced = written;
+        for k in 0..at { if item(f, items[k]).forced { before-forced = true; } }
+        let ends-chain = at >= 1 && is-word(f, items[at - 1], "else");
+        if open == "(" && huggable(f, items[at]) && !before-forced && !ends-chain {
             let before: list<Doc> = [Doc.text(open),];
-            for k in 0..items.len() - 1 {
+            for k in 0..at {
                 before.push(item(f, items[k]).doc);
                 before.push(between(f, items[k], items[k + 1], false).doc);
             }
+            let after: list<Doc> = [];
+            for k in at + 1..items.len() { after.push(item(f, items[k]).doc); }
+            after.push(Doc.text(close));
             let gr: DocGroup = {
                 doc: doc,
                 forced: false,
                 hug: true,
                 prefix: Doc.concat(before),
-                last: item(f, end).doc,
-                suffix: Doc.text(close),
+                last: item(f, items[at]).doc,
+                suffix: Doc.concat(after),
             };
             return { doc: Doc.group(gr), forced: false, };
         }
         { doc: Doc.group(plain-group(doc, forced)), forced: false, }
+    }
+
+    // where a {} group's closure arrow is among its items (-1: it is no closure). A closure is a
+    // value, so its { comes after an operator or an opening bracket (=, (, ',', =>, :, return); a
+    // block's or a body's comes after a name, a type, ), ] or > (if x {, -> s64 {, module m {).
+    // Its arrow: the first -> at its top but one that ends a param's func type (func(...) -> T),
+    // with no comment before it (the params are laid out on one line)
+    closure-arrow: func(f: Fmt, g: GroupItem) -> s64 {
+        if g.open == 0 { return -1; }
+        let before = f.toks[g.open - 1];
+        let value-place = (
+            before.kind == TokenKind.op
+                && before.text != ")"
+                && before.text != "]"
+                && before.text != ">"
+                && before.text != "\}"
+        )
+            || before.text == "return";
+        if !value-place { return -1; }
+        let items = g.items;
+        for k in 0..items.len() {
+            if is-comment(f, items[k]) { return -1; }
+            if is-op(f, items[k], "->") {
+                let in-type = k >= 2 && is-word(f, items[k - 2], "func") && !is-tok(items[k - 1]);
+                if !in-type { return k; }
+            }
+        }
+        -1
+    }
+
+    // whether an item is the word w (a name's token: func)
+    is-word: func(f: Fmt, i: Item, w: string) -> bool {
+        match i {
+            tok(k) => f.toks[k].kind == TokenKind.id && f.toks[k].text == w,
+            group(g) => false,
+        }
+    }
+
+    // whether an item is a token (not a group)
+    is-tok: func(i: Item) -> bool {
+        match i {
+            tok(k) => true,
+            group(g) => false,
+        }
+    }
+
+    // a closure: its params and -> always on the line it opens on, its body after them where it
+    // fits, else a block's lines (as the author broke them, or a line after each ;), never a list's
+    // comma
+    closure-doc: func(f: Fmt, g: GroupItem, arrow: s64) -> Built {
+        let items = g.items;
+        let head: list<Doc> = [Doc.text(raw(f, g.open)), Doc.text(" "),];
+        let head-forced = false;
+        for k in 0..arrow + 1 {
+            let x = item(f, items[k]);
+            head.push(x.doc);
+            if x.forced { head-forced = true; }
+            if k < arrow {
+                let s = between(f, items[k], items[k + 1], false);
+                head.push(s.doc);
+            }
+        }
+        // (on one line however long: a break between params would read as a list)
+        head = [flattened(Doc.concat(head)),];
+        let body = items.slice(arrow + 1, items.len());
+        if body.len() == 0 {
+            head.push(Doc.text(" " + raw(f, g.close)));
+            return { doc: Doc.concat(head), forced: head-forced, };
+        }
+        // the body broken as its author broke it over lines, else laid out afresh
+        let written = line-of(f, first(body[0])) > end-line(f, last(items[arrow]))
+            || line-of(f, g.close) > end-line(f, last(body[body.len() - 1]));
+        for k in 1..body.len() {
+            if line-of(f, first(body[k])) > end-line(f, last(body[k - 1])) { written = true; }
+        }
+        let content = if written { lines(f, body) } else { flat-items(f, body, false, true) };
+        let forced = written || content.forced || head-forced;
+        let brk = if written { Doc.hardline } else { Doc.line };
+        let doc = Doc.concat([
+            Doc.concat(head),
+            Doc.nest(Doc.concat([Doc.opening-break(brk), content.doc,])),
+            brk,
+            Doc.text(raw(f, g.close)),
+        ]);
+        { doc: Doc.group(plain-group(doc, forced)), forced: false, }
+    }
+
+    // a layout printed flat: its lines spaces, its soft lines and its breaks' text nothing, its
+    // groups flat (a hard line, which cannot be, stays)
+    flattened: func(d: Doc) -> Doc {
+        match d {
+            line => Doc.text(" "),
+            softline => Doc.text(""),
+            ifbreak(_) => Doc.text(""),
+            concat(parts) => {
+                let out: list<Doc> = [];
+                for part in parts { out.push(flattened(part)); }
+                Doc.concat(out)
+            }
+            nest(inner) => flattened(inner),
+            opening-break(inner) => flattened(inner),
+            group(g) => flattened(g.doc),
+            fill(parts) => {
+                let out: list<Doc> = [];
+                for k in 0..parts.len() { out.push(flattened(parts[k])); }
+                Doc.concat(out)
+            }
+            _ => d,
+        }
+    }
+
+    // the index of a group's last argument: its last item, but a comma after it
+    last-argument: func(f: Fmt, items: list<Item>) -> s64 {
+        let at = items.len() - 1;
+        if at > 0 && is-comma(f, items[at]) { at -= 1; }
+        at
     }
 
     // whether a call's last argument may break alone: a {} or [] group with items, or a call whose
@@ -405,11 +620,10 @@ module fmt {
             group(g) => {
                 if g.items.len() == 0 { return false; }
                 let open = raw(f, g.open);
-                if open == "(" { return huggable(f, g.items[g.items.len() - 1]); }
+                if open == "(" { return huggable(f, g.items[last-argument(f, g.items)]); }
                 // a [] against what comes before it is an index (xs[i]), not a list
                 let prev = f.toks[g.open - 1];
-                !(open == "[" && prev.end == f.toks[g.open].start && prev.kind != TokenKind.op)
-                    && !(
+                !(open == "[" && prev.end == f.toks[g.open].start && prev.kind != TokenKind.op) && !(
                     open == "["
                         && prev.end == f.toks[g.open].start
                         && (prev.text == ")" || prev.text == "]")
@@ -428,9 +642,11 @@ module fmt {
     }
 
     // items written on one line: a list's items each a group, a line after each comma; a block's
-    // statements a line after each ; (no groups: they break with the braces); anything else one
-    // group
+    // statements a line after each ; (no groups: they break with the braces), each statement a
+    // fill as lines lays one out (so a block broken here lays out as it does once written broken);
+    // anything else one group. A list holding a broken item breaks
     flat-items: func(f: Fmt, items: list<Item>, is-list: bool, is-block: bool) -> Built {
+        if is-block { return block-items(f, items); }
         let out: list<Doc> = [];
         let part: list<Doc> = [];
         let part-forced = false;
@@ -442,6 +658,7 @@ module fmt {
             let at-end = k == items.len() - 1;
             if is-list && (is-comma(f, items[k]) || at-end) {
                 out.push(Doc.group(plain-group(Doc.concat(part), part-forced)));
+                if part-forced { forced = true; }
                 if !at-end { out.push(Doc.line); }
                 part = [];
                 part-forced = false;
@@ -451,9 +668,48 @@ module fmt {
                 if s.forced { part-forced = true; }
             }
         }
-        if is-list { return { doc: Doc.concat(out), forced: false, }; }
-        if is-block { return { doc: Doc.concat(part), forced: part-forced, }; }
+        if is-list { return { doc: Doc.concat(out), forced: forced, }; }
         { doc: Doc.group(plain-group(Doc.concat(part), part-forced)), forced: false, }
+    }
+
+    // a block's statements: a line after each ;, each statement a fill of its parts (split where
+    // a line may break: before && or ||, after a comma), as lines makes each line of one
+    block-items: func(f: Fmt, items: list<Item>) -> Built {
+        let out: list<Doc> = [];
+        let parts: list<Doc> = [];
+        let part: list<Doc> = [];
+        let part-forced = false;
+        let forced = false;
+        for k in 0..items.len() {
+            let x = item(f, items[k]);
+            part.push(x.doc);
+            if x.forced { part-forced = true; }
+            if k == items.len() - 1 { break; }
+            let s = between(f, items[k], items[k + 1], false);
+            if is-op(f, items[k], ";") {
+                // the statement ends: its parts a fill, then the line between statements
+                parts.push(part-doc(part, part-forced));
+                if part-forced { forced = true; }
+                out.push(Doc.fill(parts));
+                out.push(s.doc);
+                parts = [];
+                part = [];
+                part-forced = false;
+            } else if breaks(s.doc) {
+                parts.push(part-doc(part, part-forced));
+                if part-forced { forced = true; }
+                parts.push(s.doc);
+                part = [];
+                part-forced = false;
+            } else {
+                part.push(s.doc);
+                if s.forced { part-forced = true; }
+            }
+        }
+        parts.push(part-doc(part, part-forced));
+        if part-forced { forced = true; }
+        out.push(Doc.fill(parts));
+        { doc: Doc.concat(out), forced: forced, }
     }
 
     // ================================================================ printing
@@ -472,6 +728,12 @@ module fmt {
                 line => { if c.flat { emit(o, " "); } else { newline(o, c.indent); } }
                 softline => { if !c.flat { newline(o, c.indent); } }
                 hardline => newline(o, c.indent),
+                opening-break(d) => stack.push({
+                    doc: d,
+                    indent: c.indent,
+                    flat: c.flat,
+                    must-break: false,
+                }),
                 ifbreak(s) => { if !c.flat { emit(o, s); } }
                 concat(ds) => {
                     for k in 0..ds.len() {
@@ -504,7 +766,7 @@ module fmt {
                             flat: c.flat,
                             must-break: false,
                         });
-                        let sep-flat = c.flat || fits(width() - column(o), two, []);
+                        let sep-flat = c.flat || fits-opening(width() - column(o), two);
                         stack.push({
                             doc: parts[1],
                             indent: c.indent,
@@ -740,18 +1002,35 @@ module fmt {
     }
 
     // whether doc, flat, and what follows it up to the next line break fits in w columns
-    fits: func(w: s64, doc: Doc, rest: list<Cmd>) -> bool {
+    fits: func(w: s64, doc: Doc, rest: list<Cmd>) -> bool { measure(w, doc, rest, false) }
+
+    // whether a layout fits in w columns up to a {} or [] group's opening break, which ends the
+    // line there: what a fill's separator stays flat by, so that formatting what this makes again
+    // (that break a hard line then) decides the same
+    fits-opening: func(w: s64, doc: Doc) -> bool { measure(w, doc, [], true) }
+
+    // a layout's measure: whether it fits in w columns, flat, up to its first line break (in it,
+    // or after it, in rest: the line going on). A group broken already inside it cannot be flat:
+    // it does not fit. to-opening: a {} or [] group's opening break ends the line there
+    measure: func(w: s64, doc: Doc, rest: list<Cmd>, to-opening: bool) -> bool {
         let left = w;
-        let todo: list<Cmd> = [{ doc: doc, indent: 0, flat: true, must-break: false, },];
+        // what is left to measure, and of each whether it is the layout's own (else rest's)
+        let todo: list<Doc> = [doc,];
+        let flats: list<bool> = [true,];
+        let owns: list<bool> = [true,];
         let r = rest.len();
         loop {
             if todo.len() == 0 {
                 if r == 0 { return true; }
                 r -= 1;
-                todo.push(rest[r]);
+                todo.push(rest[r].doc);
+                flats.push(rest[r].flat);
+                owns.push(false);
             }
-            let c = todo.pop();
-            match c.doc {
+            let d = todo.pop();
+            let flat = flats.pop();
+            let own = owns.pop();
+            match d {
                 text(s) => {
                     let nl = find-byte(s, 10).unwrap-or(-1);
                     left -= display-width(if nl >= 0 { s.substring(0, nl) } else { s });
@@ -759,37 +1038,45 @@ module fmt {
                     if nl >= 0 { return true; }
                 }
                 line => {
-                    if !c.flat { return true; }
+                    if !flat { return true; }
                     left -= 1;
                     if left < 0 { return false; }
                 }
-                softline => { if !c.flat { return true; } }
+                softline => { if !flat { return true; } }
                 hardline => { return true; }
+                opening-break(inner) => {
+                    if to-opening { return true; }
+                    todo.push(inner);
+                    flats.push(flat);
+                    owns.push(own);
+                }
                 ifbreak(s) => {
-                    if !c.flat {
+                    if !flat {
                         left -= display-width(s);
                         if left < 0 { return false; }
                     }
                 }
                 concat(ds) | fill(ds) => {
                     for k in 0..ds.len() {
-                        todo.push({
-                            doc: ds[ds.len() - 1 - k],
-                            indent: 0,
-                            flat: c.flat,
-                            must-break: false,
-                        });
+                        todo.push(ds[ds.len() - 1 - k]);
+                        flats.push(flat);
+                        owns.push(own);
                     }
                 }
-                nest(d) => todo.push({ doc: d, indent: 0, flat: c.flat, must-break: false, }),
-                group(gr) => todo.push({
-                    doc: gr.doc,
-                    indent: 0,
-                    flat: c.flat && !gr.forced,
-                    must-break: false,
-                }),
+                nest(inner) => {
+                    todo.push(inner);
+                    flats.push(flat);
+                    owns.push(own);
+                }
+                group(gr) => {
+                    if gr.forced && own && !to-opening { return false; }
+                    todo.push(gr.doc);
+                    flats.push(flat && !gr.forced);
+                    owns.push(own);
+                }
             }
         }
+        true
     }
 
     // whether a hugged call's prefix, and its last group's opening, fit in w columns

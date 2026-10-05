@@ -1,0 +1,7 @@
+// error: 5:9: expected a name, found the keyword in (a name of that word is written %in)
+
+// a keyword where a name goes: told how to write the name
+main: func() -> s32 {
+    let in = 3;
+    0
+}

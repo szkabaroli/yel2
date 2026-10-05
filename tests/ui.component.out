@@ -1,0 +1,81 @@
+-- count set to 2 before mount
+-- mount into 0
+create-element("VStack") -> 1
+create-element("Text") -> 2
+create-text("Count: 0") -> 3
+append-child(2, 3)
+append-child(1, 2)
+create-element("HStack") -> 4
+create-element("Button") -> 5
+create-text("-") -> 6
+append-child(5, 6)
+add-event-listener(5, "clicked", 0)
+append-child(4, 5)
+create-element("Button") -> 7
+create-text("+") -> 8
+append-child(7, 8)
+add-event-listener(7, "clicked", 1)
+append-child(4, 7)
+append-child(1, 4)
+create-comment("if") -> 9
+append-child(1, 9)
+create-comment("for") -> 10
+append-child(1, 10)
+append-child(0, 1)
+-- + clicked
+set-text-content(3, "Count: 1")
+create-element("Text") -> 11
+create-text("item 1") -> 12
+append-child(11, 12)
+insert-before(1, 11, 10)
+-- + clicked 3 times (count 4: the if's branch appears)
+set-text-content(3, "Count: 2")
+set-text-content(12, "item 1")
+insert-before(1, 11, 10)
+create-element("Text") -> 13
+create-text("item 2") -> 14
+append-child(13, 14)
+insert-before(1, 13, 10)
+set-text-content(3, "Count: 3")
+set-text-content(12, "item 1")
+insert-before(1, 11, 10)
+set-text-content(14, "item 2")
+insert-before(1, 13, 10)
+create-element("Text") -> 15
+create-text("item 3") -> 16
+append-child(15, 16)
+insert-before(1, 15, 10)
+set-text-content(3, "Count: 4")
+create-element("Text") -> 17
+set-attribute(17, "content", str("High!"))
+set-attribute(17, "weight", str("bold"))
+insert-before(1, 17, 9)
+set-text-content(12, "item 1")
+insert-before(1, 11, 10)
+set-text-content(14, "item 2")
+insert-before(1, 13, 10)
+set-text-content(16, "item 3")
+insert-before(1, 15, 10)
+create-element("Text") -> 18
+create-text("item 4") -> 19
+append-child(18, 19)
+insert-before(1, 18, 10)
+-- - clicked (count 3: the branch goes)
+set-text-content(3, "Count: 3")
+remove(17)
+-- count set to 10 from outside
+set-text-content(3, "Count: 10")
+create-element("Text") -> 20
+set-attribute(20, "content", str("High!"))
+set-attribute(20, "weight", str("bold"))
+insert-before(1, 20, 9)
+-- items set from outside (one kept, one moved, two gone)
+set-text-content(16, "item 3")
+insert-before(1, 15, 10)
+set-text-content(12, "item 1")
+insert-before(1, 11, 10)
+remove(13)
+remove(18)
+-- count is 10, items ["item 3", "item 1"]
+-- unmount
+remove(1)

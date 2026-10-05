@@ -2,7 +2,7 @@
 // where a func is wanted (a fixed-length list, a record, none, a number's type, from the call's
 // place; its params' types from what it writes)
 
-record Point { x: s32, y: s32, }
+resource Point { x: s32, y: s32, }
 
 main: func() -> s32 {
     let a: list<u8, 3> = ({ c: char -> [8, 25, 140,] })('e');

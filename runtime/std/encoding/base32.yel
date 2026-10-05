@@ -1,0 +1,101 @@
+// Base32 (RFC 4648): five bytes as eight characters, A to Z and 2 to 7, padded with = to a whole
+// group (TOTP secrets, onion addresses). Reading takes either case, and the padding or its absence
+// alike; a character outside the alphabet, or a length no encoding gives, is an error.
+//
+// One of std's packages: from "std:encoding/base32" include base32; then base32.encode(bytes),
+// base32.decode(text).
+
+package std:encoding@0.1.0;
+
+module base32 {
+    const ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+    // the bytes as base32, padded
+    encode: func(bytes: list<u8> & readonly) -> string { written(bytes, true) }
+
+    // the bytes as base32, unpadded
+    encode-unpadded: func(bytes: list<u8> & readonly) -> string { written(bytes, false) }
+
+    // the bytes text spells, or where it does not
+    decode: func(text: string) -> result<list<u8>, string> {
+        let length = text.len();
+        loop {
+            if length == 0 || text.byte-at(length - 1) != 61 { break; }
+            length -= 1;
+        }
+        if length < text.len()
+            && text.len() % 8 != 0 { return err("padding past a whole group ({text.len()})"); }
+        // the characters a last group may have: 2, 4, 5 or 7 (1, 2, 3 or 4 bytes)
+        let tail = length % 8;
+        if tail == 1 || tail == 3 || tail == 6 { return err("a length no base32 has ({length})"); }
+        let bytes: list<u8> = [];
+        // up to 40 bits gathered (eight characters), given as five bytes
+        let group: u64 = 0;
+        let count = 0;
+        for index in 0..length {
+            let value = digit(text.byte-at(index));
+            if value < 0 { return err("not a base32 character at byte {index}"); }
+            group = group * 32 + value as u64;
+            count += 1;
+            if count == 8 {
+                for shift in 0..5 {
+                    bytes.push(((group >> (((4 - shift) * 8) as u64)) & 255) as u8);
+                }
+                group = 0;
+                count = 0;
+            }
+        }
+        if count > 0 {
+            // the last group: its bits past whole bytes zero
+            let bits = count * 5;
+            let whole = bits / 8;
+            let spare = bits - whole * 8;
+            if (group & ((1 << (spare as u64)) - 1)) != 0 {
+                return err("bits past the last byte at byte {length - 1}");
+            }
+            group = group >> (spare as u64);
+            for shift in 0..whole {
+                bytes.push(((group >> (((whole - 1 - shift) * 8) as u64)) & 255) as u8);
+            }
+        }
+        ok(bytes)
+    }
+
+    @(private) written: func(bytes: list<u8> & readonly, padded: bool) -> string {
+        let out = buffer.buffer((bytes.len() + 4) / 5 * 8);
+        let index = 0;
+        loop {
+            if index >= bytes.len() { break; }
+            let take = if bytes.len() - index < 5 { bytes.len() - index } else { 5 };
+            let group: u64 = 0;
+            for offset in 0..5 {
+                group = (group << 8) | (if offset < take {
+                    bytes[index + offset] as u64
+                } else {
+                    0
+                });
+            }
+            // the characters these bytes need: ceil(take * 8 / 5)
+            let characters = (take * 8 + 4) / 5;
+            for position in 0..8 {
+                if position < characters {
+                    out.push-byte(
+                        ALPHABET.byte-at(((group >> (((7 - position) * 5) as u64)) & 31) as s64)
+                    );
+                } else if padded {
+                    out.push-byte(61);
+                }
+            }
+            index += take;
+        }
+        out.to-string()
+    }
+
+    // a character's value (either case), -1 for one outside the alphabet
+    @(private) digit: func(byte: s64) -> s64 {
+        if byte >= 65 && byte <= 90 { return byte - 65; }
+        if byte >= 97 && byte <= 122 { return byte - 97; }
+        if byte >= 50 && byte <= 55 { return byte - 24; }
+        -1
+    }
+}

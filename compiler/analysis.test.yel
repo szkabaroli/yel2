@@ -1,0 +1,175 @@
+// main.yel's analysis, tested (yelc test compiler): a program written in memory checked as the
+// language server checks one (analysis.check, the file an overlay), and what a name there names:
+// its target, and the signature a hover shows of it
+
+from "std:testing" include expect;
+
+module analysis-tests {
+    // source checked as the file at test.yel: what the check found
+    @(private) checked: async func(source: string) -> analysis.Checked {
+        let overlays: map<string, string> = map.new();
+        overlays.set("test.yel", source);
+        let found = wait analysis.check(analysis.context("test.yel", overlays), "runtime/prelude.yel", []);
+        expect.equal(found.problems.len(), 0);
+        found
+    }
+
+    // the target the name at line and col (from 1) names
+    @(private) named-at: func(found: analysis.Checked, line: s64, col: s64) -> analysis.Target {
+        for reference in found.references {
+            let place = reference.place;
+            if place.path == "test.yel" && place.line == line && place.col <= col && col < place.end-col {
+                return found.targets[reference.target];
+            }
+        }
+        expect.fail("nothing named at {line}:{col}")
+    }
+
+    // module.f(a) of another package's module (std:testing's expect.equal): f names its func, as
+    // module.f(a) of the program's own module does
+    @(test) names-another-packages-func: async func() {
+        let found = wait checked(c"
+from \"std:testing\" include expect;
+
+module own {
+    twice: func(value: s64) -> s64 { value * 2 }
+}
+
+main: func() {
+    expect.equal(own.twice(2), 4);
+}
+");
+        expect.equal(named-at(found, 9, 12).name, "equal");
+        expect.equal(named-at(found, 9, 24).name, "twice");
+    }
+
+    // a func's signature as its declaration writes it: its type parameters, each default as
+    // written, and its types as an include names them (no package)
+    @(test) signature-as-written: async func() {
+        let found = wait checked(c"
+from \"std:testing\" include expect;
+
+main: func() {
+    expect.equal(1, 1);
+}
+");
+        expect.equal(
+            named-at(found, 5, 12).signature,
+            "equal: func<T>(got: T, want: T, location: source-location = #caller-location)",
+        );
+    }
+
+    // source checked as test.yel, whatever it finds (a file being written: errors and all)
+    @(private) checked-anyway: async func(source: string) -> analysis.Checked {
+        let overlays: map<string, string> = map.new();
+        overlays.set("test.yel", source);
+        wait analysis.check(analysis.context("test.yel", overlays), "runtime/prelude.yel", [])
+    }
+
+    // the outline: each declaration, its kind, and what is in it
+    @(test) outline-of-a-file: async func() {
+        let found = wait checked(c"
+module shapes {
+    record point { x: s64, y: s64, }
+
+    variant shape { circle(f64), dot, }
+
+    area: func(p: point) -> s64 { p.x * p.y }
+}
+
+const LIMIT: s64 = 3;
+");
+        let top = analysis.outline(found, "test.yel");
+        expect.equal(top.map({ s -> "{s.name} {s.kind}" }), ["shapes 2", "LIMIT 14",]);
+        let inner = top[0].children;
+        expect.equal(inner.map({ s -> "{s.name} {s.kind}" }), ["point 23", "shape 10", "area 12",]);
+        expect.equal(inner[0].children.map({ s -> "{s.name} {s.kind} {s.detail}" }), ["x 8 x: s64", "y 8 y: s64",]);
+        expect.equal(inner[1].children.map({ s -> s.name }), ["circle", "dot",]);
+        expect.equal(inner[2].detail, "area: func(p: point) -> s64");
+        // (its range all it covers, its selection its name)
+        expect.equal((inner[2].range.line, inner[2].selection.col), (7, 5));
+    }
+
+    // a call's signature: its declaration as written, each parameter's place, the one the
+    // cursor is at
+    @(test) signature-of-a-call: async func() {
+        let found = wait checked(c"
+add: func(left: s64, right: s64 = 2) -> s64 { left + right }
+
+main: func() {
+    let total = add(1, 2);
+}
+");
+        let help = expect.some(analysis.signature-help(found, "test.yel", 5, 24));
+        expect.equal(help.label, "add: func(left: s64, right: s64 = 2) -> s64");
+        expect.equal(help.params.map({ p -> { let (from, to) = p; help.label.substring(from, to) } }), ["left: s64", "right: s64 = 2",]);
+        expect.equal(help.active, 1);
+        // (at its first argument)
+        expect.equal(expect.some(analysis.signature-help(found, "test.yel", 5, 21)).active, 0);
+        // (outside its parens: none)
+        expect.none(analysis.signature-help(found, "test.yel", 5, 9));
+    }
+
+    // a call being written (its ) not yet there, the file not parsing): its signature all the same
+    @(test) signature-while-writing: async func() {
+        let found = wait checked-anyway(c"
+add: func(left: s64, right: s64) -> s64 { left + right }
+
+main: func() {
+    let total = add(1, 
+}
+");
+        let help = expect.some(analysis.signature-help(found, "test.yel", 5, 24));
+        expect.equal(help.label, "add: func(left: s64, right: s64) -> s64");
+        expect.equal(help.active, 1);
+    }
+
+    // x.f(…) of a value: x is f's first parameter
+    @(test) signature-of-a-method: async func() {
+        let found = wait checked(c"
+twice: func(value: s64, times: s64) -> s64 { value * times }
+
+main: func() {
+    let x = 3;
+    let six = x.twice(2);
+}
+");
+        expect.equal(expect.some(analysis.signature-help(found, "test.yel", 6, 23)).active, 1);
+    }
+
+    // a local renamed: its declaration and each use
+    @(test) renames-a-local: async func() {
+        let found = wait checked(c"
+main: func() -> s64 {
+    let total = 1;
+    total + total
+}
+");
+        let edits = expect.ok(wait analysis.rename(found, "test.yel", 3, 9, "sum"));
+        expect.equal(edits.map({ e -> "{e.place.line}:{e.place.col} {e.text}" }), ["3:9 sum", "4:5 sum", "4:13 sum",]);
+        // (a keyword's word: written %name)
+        let escaped = expect.ok(wait analysis.rename(found, "test.yel", 3, 9, "if"));
+        expect.equal(escaped[0].text, "%if");
+    }
+
+    // what is not renamed: a name std declares, one taken, one that would take another's uses
+    // (inner renamed outer: outer's use after it would read inner)
+    @(test) refuses-a-wrong-rename: async func() {
+        let found = wait checked(c"
+from \"std:testing\" include expect;
+
+total: func() -> s64 { 1 }
+
+main: func() -> s64 {
+    let outer = 2;
+    let inner = 1;
+    expect.equal(inner, 1);
+    inner + outer + total()
+}
+");
+        expect.contains-text(expect.err(wait analysis.rename(found, "test.yel", 9, 12, "same")), "outside this package");
+        expect.contains-text(expect.err(wait analysis.rename(found, "test.yel", 4, 1, "main")), "renaming it to main");
+        expect.contains-text(expect.err(wait analysis.rename(found, "test.yel", 8, 9, "outer")), "renaming it to outer");
+        expect.contains-text(expect.err(wait analysis.rename(found, "test.yel", 8, 9, "two words")), "is not a name");
+    }
+}

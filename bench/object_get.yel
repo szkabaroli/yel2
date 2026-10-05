@@ -2,7 +2,7 @@
 
 from "wasi:clocks" include monotonic-clock;
 
-record Obj { wow: s32, }
+resource Obj { wow: s32, }
 
 main: func() {
     let obj: Obj = { wow: 1337, };

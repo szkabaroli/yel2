@@ -1,0 +1,523 @@
+// URLs, as the WHATWG URL Standard has them (a browser's, Node's URL): a URL read (its scheme,
+// user, password, host, port, path, query and fragment, each percent-encoded as its part needs, its
+// path's . and .. segments taken out, a special scheme's default port left out), or read against a
+// base (a relative reference: ../a?b), and written again; and a query's parameters
+// (application/x-www-form-urlencoded: a + a space), and a component percent-encoded or decoded.
+// A host is ASCII (an international domain name is not made Punycode here), and an IP address
+// host is kept as written.
+//
+// One of std's packages: from "std:url" include url; then url.parse(text), url.join(base, text),
+// url.write(u), url.params(query).
+
+package std:url@0.1.0;
+
+module url {
+    // a URL's parts: its scheme (lower case), user and password (percent-encoded), host (none: a
+    // URL with no authority, mailto:a@b; a lower-case domain, or an address), port (none: its
+    // scheme's default, or none written), path (a special scheme's starts with /; an opaque one,
+    // mailto's, as written), query and fragment (none: no ? or #; some(""): one with nothing after)
+    record parts {
+        scheme: string,
+        username: string,
+        password: string,
+        host: option<string>,
+        port: option<u16>,
+        path: string,
+        query: option<string>,
+        fragment: option<string>,
+    }
+
+    // text read as a URL (it has a scheme)
+    parse: func(text: string) -> result<parts, string> { read(text, none) }
+
+    // text read against base: a relative reference (a path, ?query, #fragment, //host/path) made
+    // whole, or a URL of its own
+    join: func(base: parts, text: string) -> result<parts, string> { read(text, some(base)) }
+
+    // a URL written: scheme:[//[user[:password]@]host[:port]]path[?query][#fragment]
+    write: func(u: parts) -> string {
+        let out = buffer(64);
+        out.push(u.scheme);
+        out.push(":");
+        match u.host {
+            some(host) => {
+                out.push("//");
+                if u.username != "" || u.password != "" {
+                    out.push(u.username);
+                    if u.password != "" {
+                        out.push(":");
+                        out.push(u.password);
+                    }
+                    out.push("@");
+                }
+                out.push(host);
+                match u.port {
+                    some(port) => out.push(":{port}"),
+                    none => {}
+                }
+            }
+            none => {
+                // (a path that would read as an authority: /. before it, as the standard writes)
+                if u.path.starts-with("//") { out.push("/."); }
+            }
+        }
+        out.push(u.path);
+        match u.query {
+            some(query) => {
+                out.push("?");
+                out.push(query);
+            }
+            none => {}
+        }
+        match u.fragment {
+            some(fragment) => {
+                out.push("#");
+                out.push(fragment);
+            }
+            none => {}
+        }
+        out.to-string()
+    }
+
+    // a URL as write writes it
+    display: func(u: parts) -> string { write(u) }
+
+    // where a URL's resources come from: scheme://host[:port] (a scheme with none: null)
+    origin: func(u: parts) -> string {
+        match u.host {
+            some(host) => if special-port(u.scheme) >= -1 && u.scheme != "file" {
+                "{u.scheme}://{host}" + (match u.port {
+                    some(port) => ":{port}",
+                    none => "",
+                })
+            } else { "null" },
+            none => "null",
+        }
+    }
+
+    // ---- queries
+
+    // a query's parameters, as a form sends them (a=1&b=two+words): each name and value, decoded
+    // (a + is a space), in order, a name twice kept twice
+    params: func(query: string) -> list<tuple<string, string>> {
+        let out: list<tuple<string, string>> = [];
+        for piece in query.split("&") {
+            if piece == "" { continue; }
+            let (name, value) = match piece.find("=") {
+                some(at) => (piece.slice(0, at), piece.slice(at + 1, piece.len())),
+                none => (piece, ""),
+            };
+            out.push((form-decoded(name), form-decoded(value)));
+        }
+        out
+    }
+
+    // a parameter's first value in a URL's query (none: not there)
+    param: func(u: parts, name: string) -> option<string> {
+        match u.query {
+            some(query) => {
+                for pair in params(query) {
+                    if pair.0 == name { return some(pair.1); }
+                }
+                none
+            }
+            none => none,
+        }
+    }
+
+    // parameters as a query, as a form sends them (a space a +)
+    query: func(pairs: list<tuple<string, string>>) -> string {
+        let parts: list<string> = [];
+        for pair in pairs { parts.push("{form-encoded(pair.0)}={form-encoded(pair.1)}"); }
+        parts.join("&")
+    }
+
+    // ---- components
+
+    // text percent-encoded as a component (encodeURIComponent's: all but letters, digits and
+    // -_.!~*'())
+    encode: func(text: string) -> string {
+        let out = buffer(text.len());
+        for index in 0..text.len() {
+            let b = text.byte-at(index);
+            if is-alphanumeric(b) || b == 45 || b == 95 || b == 46 || b == 33 || b == 126 || b == 42 || b == 39 || b == 40 || b == 41 {
+                out.push-byte(b);
+            } else {
+                push-escaped(out, b);
+            }
+        }
+        out.to-string()
+    }
+
+    // a percent-encoded text decoded (an error: a % not followed by two hex digits, or bytes no
+    // UTF-8 is)
+    decode: func(text: string) -> result<string, string> {
+        let bytes: list<u8> = [];
+        let index = 0;
+        loop {
+            if index >= text.len() { break; }
+            let b = text.byte-at(index);
+            if b == 37 {
+                if index + 2 >= text.len() { return err("a % at {index} without two hex digits"); }
+                match (hex-value(text.byte-at(index + 1)), hex-value(text.byte-at(index + 2))) {
+                    (some(high), some(low)) => {
+                        bytes.push((high * 16 + low) as u8);
+                        index += 3;
+                        continue;
+                    }
+                    _ => { return err("a % at {index} without two hex digits"); }
+                }
+            }
+            bytes.push(b as u8);
+            index += 1;
+        }
+        match from-utf8(bytes) {
+            ok(decoded) => ok(decoded),
+            err(at) => err("not UTF-8 at byte {at}"),
+        }
+    }
+
+    // ---- reading (the standard's basic URL parser, its common states)
+
+    @(private) read: func(input: string, base: option<parts>) -> result<parts, string> {
+        let text = cleaned(input);
+        // a scheme: a letter, then letters, digits, + - . until a :
+        let colon = scheme-end(text);
+        if colon > 0 {
+            let scheme = text.slice(0, colon).to-lower();
+            let rest = text.slice(colon + 1, text.len());
+            let special = special-port(scheme) >= -1;
+            match base {
+                some(b) => {
+                    // (a special scheme's URL with its base's scheme and no //: relative to it)
+                    if special && b.scheme == scheme && !rest.starts-with("/") && !rest.starts-with("\\") && scheme != "file" {
+                        return relative(b, rest);
+                    }
+                }
+                none => {}
+            }
+            if special {
+                let slashes = 0;
+                loop {
+                    if slashes >= rest.len() || (rest.byte-at(slashes) != 47 && rest.byte-at(slashes) != 92) { break; }
+                    slashes += 1;
+                }
+                if scheme == "file" { return file-url(rest); }
+                return authority(scheme, rest.slice(slashes, rest.len()));
+            }
+            if rest.starts-with("//") { return authority(scheme, rest.slice(2, rest.len())); }
+            if rest.starts-with("/") {
+                let (path, query, fragment) = split-tail(rest);
+                return ok({ scheme: scheme, username: "", password: "", host: none, port: none, path: normal-path(path, false), query: encoded-query(query, false), fragment: encoded-fragment(fragment), });
+            }
+            // an opaque path: mailto:a@b, data:…
+            let (path, query, fragment) = split-tail(rest);
+            return ok({ scheme: scheme, username: "", password: "", host: none, port: none, path: encoded(path, 0), query: encoded-query(query, false), fragment: encoded-fragment(fragment), });
+        }
+        match base {
+            some(b) => relative(b, text),
+            none => err("no scheme: {input} (a relative reference needs a base: url.join)"),
+        }
+    }
+
+    // a relative reference against base
+    @(private) relative: func(b: parts, text: string) -> result<parts, string> {
+        let special = special-port(b.scheme) >= -1;
+        let slash = { at: s64 -> at < text.len() && (text.byte-at(at) == 47 || (special && text.byte-at(at) == 92)) };
+        if slash(0) && slash(1) {
+            if b.scheme == "file" { return file-url(text); }
+            return authority(b.scheme, text.slice(2, text.len()));
+        }
+        let (path, query, fragment) = split-tail(text);
+        let u: parts = {
+            scheme: b.scheme,
+            username: b.username,
+            password: b.password,
+            host: b.host,
+            port: b.port,
+            path: b.path,
+            query: b.query,
+            fragment: encoded-fragment(fragment),
+        };
+        if path == "" {
+            match query {
+                some(_) => { u.query = encoded-query(query, special); }
+                none => {
+                    // (#fragment alone: the base's all but its fragment)
+                    if text == "" { u.fragment = none; }
+                }
+            }
+            return ok(u);
+        }
+        u.query = encoded-query(query, special);
+        if slash(0) {
+            u.path = normal-path(path, special);
+            return ok(u);
+        }
+        // (an opaque base path takes no relative one)
+        if !b.path.starts-with("/") && b.host == none { return err("{text} is relative, and its base {write(b)} has no path to be relative to"); }
+        let directory = match b.path.find-last("/") {
+            some(at) => b.path.slice(0, at + 1),
+            none => "/",
+        };
+        u.path = normal-path(directory + path, special);
+        ok(u)
+    }
+
+    // //[user[:password]@]host[:port][path][?query][#fragment], after the scheme's //
+    @(private) authority: func(scheme: string, text: string) -> result<parts, string> {
+        let special = special-port(scheme) >= -1;
+        // the authority ends at the first / ? # (\ too, for a special scheme)
+        let end = 0;
+        loop {
+            if end >= text.len() { break; }
+            let b = text.byte-at(end);
+            if b == 47 || b == 63 || b == 35 || (special && b == 92) { break; }
+            end += 1;
+        }
+        let authority = text.slice(0, end);
+        let tail = text.slice(end, text.len());
+        let username = "";
+        let password = "";
+        let host-port = authority;
+        match authority.find-last("@") {
+            some(at) => {
+                let user-info = authority.slice(0, at);
+                host-port = authority.slice(at + 1, authority.len());
+                match user-info.find(":") {
+                    some(colon) => {
+                        username = encoded(user-info.slice(0, colon), 3);
+                        password = encoded(user-info.slice(colon + 1, user-info.len()), 3);
+                    }
+                    none => { username = encoded(user-info, 3); }
+                }
+            }
+            none => {}
+        }
+        // the port: after the last : not inside an [IPv6 address]
+        let host = host-port;
+        let port: option<u16> = none;
+        let bracket = host-port.find-last("]").unwrap-or(-1);
+        match host-port.find-last(":") {
+            some(colon) => {
+                if colon > bracket {
+                    host = host-port.slice(0, colon);
+                    let digits = host-port.slice(colon + 1, host-port.len());
+                    if digits != "" {
+                        let value = 0;
+                        for index in 0..digits.len() {
+                            let d = digits.byte-at(index);
+                            if d < 48 || d > 57 { return err("a port is digits: {digits}"); }
+                            value = value * 10 + d - 48;
+                            if value > 65535 { return err("a port is at most 65535: {digits}"); }
+                        }
+                        if value != special-port(scheme) { port = some(value as u16); }
+                    }
+                }
+            }
+            none => {}
+        }
+        if special && host == "" { return err("{scheme}: a URL of it has a host"); }
+        // (a special scheme's host percent-decoded first, as the standard reads a domain)
+        if special && host.contains("%") {
+            match decode(host) {
+                ok(decoded) => { host = decoded; }
+                err(problem) => { return err("the host {host}: {problem}"); }
+            }
+        }
+        for index in 0..host.len() {
+            let b = host.byte-at(index);
+            if b >= 128 { return err("{host} is not ASCII (an international domain name is not made Punycode here)"); }
+            if b == 32 || b == 35 || b == 37 || b == 47 || b == 60 || b == 62 || b == 63 || b == 64 || b == 92 || b == 94 || b == 124 || b < 32 {
+                return err("a host has no {from-byte(b):?}: {host}");
+            }
+        }
+        let (path, query, fragment) = split-tail(tail);
+        ok({
+            scheme: scheme,
+            username: username,
+            password: password,
+            host: some(if special { host.to-lower() } else { host }),
+            port: port,
+            path: if special || path != "" { normal-path(path, special) } else { "" },
+            query: encoded-query(query, special),
+            fragment: encoded-fragment(fragment),
+        })
+    }
+
+    // file:[//host]/path: its host the empty one where none is written (file:///a)
+    @(private) file-url: func(text: string) -> result<parts, string> {
+        let rest = text;
+        let host = "";
+        if rest.starts-with("//") || rest.starts-with("\\\\") {
+            let tail = rest.slice(2, rest.len());
+            let end = 0;
+            loop {
+                if end >= tail.len() || tail.byte-at(end) == 47 || tail.byte-at(end) == 92 || tail.byte-at(end) == 63 || tail.byte-at(end) == 35 { break; }
+                end += 1;
+            }
+            host = tail.slice(0, end).to-lower();
+            if host == "localhost" { host = ""; }
+            rest = tail.slice(end, tail.len());
+        }
+        let (path, query, fragment) = split-tail(rest);
+        ok({ scheme: "file", username: "", password: "", host: some(host), port: none, path: normal-path(path, true), query: encoded-query(query, true), fragment: encoded-fragment(fragment), })
+    }
+
+    // what follows a URL's authority: its path, its query (after ?) and its fragment (after #)
+    @(private) split-tail: func(text: string) -> tuple<string, option<string>, option<string>> {
+        let rest = text;
+        let fragment: option<string> = none;
+        match rest.find("#") {
+            some(at) => {
+                fragment = some(rest.slice(at + 1, rest.len()));
+                rest = rest.slice(0, at);
+            }
+            none => {}
+        }
+        let query: option<string> = none;
+        match rest.find("?") {
+            some(at) => {
+                query = some(rest.slice(at + 1, rest.len()));
+                rest = rest.slice(0, at);
+            }
+            none => {}
+        }
+        (rest, query, fragment)
+    }
+
+    // a path's segments, each percent-encoded, . and .. taken out (%2e too); a special scheme's
+    // \ a /, and its empty path /
+    @(private) normal-path: func(path: string, special: bool) -> string {
+        let text = if special { path.replace("\\", "/") } else { path };
+        if text == "" { return if special { "/" } else { "" }; }
+        let segments = text.split("/");
+        let out: list<string> = [];
+        for index in 0..segments.len() {
+            // (the first is before the leading /)
+            if index == 0 { continue; }
+            let segment = segments[index];
+            let last = index == segments.len() - 1;
+            let lowered = segment.to-lower();
+            if lowered == ".." || lowered == ".%2e" || lowered == "%2e." || lowered == "%2e%2e" {
+                if out.len() > 0 { let _ = out.pop(); }
+                if last { out.push(""); }
+            } else if lowered == "." || lowered == "%2e" {
+                if last { out.push(""); }
+            } else {
+                out.push(encoded(segment, 2));
+            }
+        }
+        "/" + out.join("/")
+    }
+
+    @(private) encoded-query: func(query: option<string>, special: bool) -> option<string> {
+        match query {
+            some(q) => some(encoded(q, if special { 5 } else { 4 })),
+            none => none,
+        }
+    }
+
+    @(private) encoded-fragment: func(fragment: option<string>) -> option<string> {
+        match fragment {
+            some(f) => some(encoded(f, 1)),
+            none => none,
+        }
+    }
+
+    // text with the bytes of a percent-encode set made %XX: 0 the C0 controls' (and every byte past
+    // ASCII), 1 the fragment's, 2 the path's, 3 the user info's, 4 the query's, 5 a special
+    // scheme's query's (a % already there is kept)
+    @(private) encoded: func(text: string, set: s64) -> string {
+        let out = buffer(text.len());
+        for index in 0..text.len() {
+            let b = text.byte-at(index);
+            if in-set(b, set) { push-escaped(out, b); } else { out.push-byte(b); }
+        }
+        out.to-string()
+    }
+
+    @(private) in-set: func(b: s64, set: s64) -> bool {
+        if b < 32 || b > 126 { return true; }
+        if set == 0 { return false; }
+        if set == 1 { return b == 32 || b == 34 || b == 60 || b == 62 || b == 96; }
+        let query = b == 32 || b == 34 || b == 35 || b == 60 || b == 62;
+        if set == 4 { return query; }
+        if set == 5 { return query || b == 39; }
+        let path = query || b == 63 || b == 94 || b == 96 || b == 123 || b == 125;
+        if set == 2 { return path; }
+        path || b == 47 || b == 58 || b == 59 || b == 61 || b == 64 || b == 91 || b == 92 || b == 93 || b == 124
+    }
+
+    // input with its leading and trailing C0 controls and spaces taken off, and each tab and line
+    // break in it
+    @(private) cleaned: func(input: string) -> string {
+        let start = 0;
+        let end = input.len();
+        loop {
+            if start >= end || input.byte-at(start) > 32 { break; }
+            start += 1;
+        }
+        loop {
+            if end <= start || input.byte-at(end - 1) > 32 { break; }
+            end -= 1;
+        }
+        let out = buffer(end - start);
+        for index in start..end {
+            let b = input.byte-at(index);
+            if b != 9 && b != 10 && b != 13 { out.push-byte(b); }
+        }
+        out.to-string()
+    }
+
+    // where a scheme's : is (0: none, a relative reference)
+    @(private) scheme-end: func(text: string) -> s64 {
+        if text.len() == 0 || !is-letter(text.byte-at(0)) { return 0; }
+        for index in 1..text.len() {
+            let b = text.byte-at(index);
+            if b == 58 { return index; }
+            if !(is-alphanumeric(b) || b == 43 || b == 45 || b == 46) { return 0; }
+        }
+        0
+    }
+
+    // a special scheme's default port (-1: one with none, file; -2: not special)
+    @(private) special-port: func(scheme: string) -> s64 {
+        if scheme == "http" || scheme == "ws" { return 80; }
+        if scheme == "https" || scheme == "wss" { return 443; }
+        if scheme == "ftp" { return 21; }
+        if scheme == "file" { return -1; }
+        -2
+    }
+
+    @(private) form-encoded: func(text: string) -> string {
+        let out = buffer(text.len());
+        for index in 0..text.len() {
+            let b = text.byte-at(index);
+            if b == 32 { out.push-byte(43); }
+            else if is-alphanumeric(b) || b == 42 || b == 45 || b == 46 || b == 95 { out.push-byte(b); }
+            else { push-escaped(out, b); }
+        }
+        out.to-string()
+    }
+
+    @(private) form-decoded: func(text: string) -> string {
+        match decode(text.replace("+", " ")) {
+            ok(decoded) => decoded,
+            err(_) => text,
+        }
+    }
+
+    @(private) push-escaped: func(out: buffer, b: s64) {
+        let digits = "0123456789ABCDEF";
+        out.push-byte(37);
+        out.push-byte(digits.byte-at(b >> 4));
+        out.push-byte(digits.byte-at(b & 15));
+    }
+
+    @(private) hex-value: func(b: s64) -> option<s64> { to-digit(b, 16) }
+
+    @(private) is-letter: func(b: s64) -> bool { (b >= 65 && b <= 90) || (b >= 97 && b <= 122) }
+
+    @(private) is-alphanumeric: func(b: s64) -> bool { is-letter(b) || (b >= 48 && b <= 57) }
+}

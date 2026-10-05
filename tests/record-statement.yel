@@ -2,8 +2,7 @@
 // first field is no type's < (it is no closure's params; found by tools/fuzz)
 
 make: func(c: bool) -> { a: s32, b: char } {
-    if c {
-    }
+    if c { }
     { a: ((0 as s32) << (32 as s64)), b: if true { 'x' } else { 'y' }, }
 }
 

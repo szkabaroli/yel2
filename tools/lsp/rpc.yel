@@ -1,0 +1,124 @@
+// JSON-RPC 2.0 over stdio, framed as the Language Server Protocol frames it: each message a header
+// (Content-Length: <bytes>, other fields allowed and passed over), a blank line, then that many
+// bytes of JSON. Read from std:cli's stdin and written to its stdout, each a stream: the same
+// natively (std's host-stdio.yel) and as a component, and a read waits on the reactor, so the
+// server's other tasks go on while no message has come.
+
+from "std:cli" include stdin, stdout, types;
+from "std:encoding/json" include json;
+
+// a connection to the client: stdin's bytes (input, and what of them is read and not framed yet:
+// pending; ended: stdin is done), and the writer of the stream stdout writes (written: how its
+// writing ended, waited for at the close)
+resource Connection {
+    input: stream<u8>,
+    pending: string,
+    ended: bool,
+    out: writer<u8>,
+    written: future<result<(), types.error-code>>,
+}
+
+// one message read: its body, or why there is none (ended: stdin is done; else a framing error)
+variant Frame { message(string), malformed(string), ended, }
+
+// how much of stdin one read takes
+const CHUNK: s64 = 65536;
+
+module rpc {
+    // stdin and stdout, as a connection
+    connect: func() -> Connection {
+        let (input, _) = stdin.read-via-stream();
+        let (bytes, out) = stream-pair(CHUNK);
+        { input: input, pending: "", ended: false, out: out, written: stdout.write-via-stream(bytes), }
+    }
+
+    // what is written so far flushed out, and stdout closed
+    close: async func(connection: Connection) {
+        connection.out.close();
+        match wait connection.written {
+            ok(_) => {}
+            err(error) => eprint("yel-lsp: stdout: {error}\n"),
+        }
+    }
+
+    // more of stdin added to pending: false where it gave none (its end)
+    fill: async func(connection: Connection) -> bool {
+        if connection.ended { return false; }
+        let bytes = wait connection.input.read-some(CHUNK);
+        if bytes.len() == 0 {
+            connection.ended = true;
+            return false;
+        }
+        // (bytes as they came: a chunk may end inside a character, the next one has the rest)
+        let chunk = buffer.buffer(bytes.len());
+        chunk.push-bytes(bytes);
+        connection.pending = connection.pending + chunk.to-string();
+        true
+    }
+
+    // the next message's body, read until it is all there
+    next: async func(connection: Connection) -> Frame {
+        // the header: up to its blank line
+        let header-end = -1;
+        loop {
+            match connection.pending.find("\r\n\r\n") {
+                some(index) => {
+                    header-end = index;
+                    break;
+                }
+                none => {
+                    if !wait fill(connection) {
+                        if connection.pending.trim().len() > 0 { return Frame.malformed("stdin ends inside a header"); }
+                        return Frame.ended;
+                    }
+                }
+            }
+        }
+        let length = -1;
+        for line in connection.pending.substring(0, header-end).split("\r\n") {
+            match line.find(":") {
+                some(colon) => {
+                    if line.substring(0, colon).trim().to-lower() == "content-length" {
+                        length = parse-int(line.substring(colon + 1, line.len()).trim()).unwrap-or(-1);
+                    }
+                }
+                none => {}
+            }
+        }
+        let body-start = header-end + 4;
+        if length < 0 {
+            connection.pending = connection.pending.substring(body-start, connection.pending.len());
+            return Frame.malformed("a header with no Content-Length");
+        }
+        // the body: length bytes past the blank line
+        loop {
+            if connection.pending.len() >= body-start + length { break; }
+            if !wait fill(connection) { return Frame.malformed("stdin ends inside a message's body"); }
+        }
+        let body = connection.pending.substring(body-start, body-start + length);
+        connection.pending = connection.pending.substring(body-start + length, connection.pending.len());
+        Frame.message(body)
+    }
+
+    // a message written, framed (stdout's stream takes it as soon as there is room)
+    send: async func(connection: Connection, message: json.value) {
+        let body = json.write(message);
+        wait connection.out.write-all("Content-Length: {body.len()}\r\n\r\n{body}".bytes());
+    }
+
+    // the reply to id's request: its result
+    reply: async func(connection: Connection, id: json.value, result: json.value) {
+        wait send(connection, json.object([("jsonrpc", json.value.text("2.0")), ("id", id), ("result", result),]));
+    }
+
+    // the reply to id's request: an error (JSON-RPC's codes, LSP's: see the server)
+    reply-error: async func(connection: Connection, id: json.value, code: s64, message: string) {
+        let error = json.object([("code", json.value.number("{code}")), ("message", json.value.text(message)),]);
+        wait send(connection, json.object([("jsonrpc", json.value.text("2.0")), ("id", id), ("error", error),]));
+    }
+
+    // a notification to the client: no id, no reply
+    notify: async func(connection: Connection, method: string, params: json.value) {
+        wait send(connection, json.object([("jsonrpc", json.value.text("2.0")), ("method", json.value.text(method)), ("params", params),]));
+    }
+}

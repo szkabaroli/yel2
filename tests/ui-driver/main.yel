@@ -1,0 +1,33 @@
+// tests/ui-counter's component, driven as a host would (tests/ui-dom stands in for the shell's
+// dom, printing each call): mounted, its buttons clicked (their handlers' ids, in the order
+// mount made them: - is 0, + is 1), a prop set from outside, unmounted
+
+from "test:counter" include counter-component;
+
+main: func() -> s32 {
+    let none = counter-component.event-payload.none;
+    let c = counter-component.counter.new();
+    // set before it is mounted: only its state (mount shows it, and the first click updates)
+    eprint("-- count set to 2 before mount\n");
+    c.set-count(2);
+    c.set-count(0);
+    eprint("-- mount into 0\n");
+    c.mount(0);
+    eprint("-- + clicked\n");
+    c.dispatch(1, none);
+    eprint("-- + clicked 3 times (count 4: the if's branch appears)\n");
+    c.dispatch(1, none);
+    c.dispatch(1, none);
+    c.dispatch(1, none);
+    eprint("-- - clicked (count 3: the branch goes)\n");
+    c.dispatch(0, none);
+    eprint("-- count set to 10 from outside\n");
+    c.set-count(10);
+    eprint("-- items set from outside (one kept, one moved, two gone)\n");
+    c.set-items(["item 3", "item 1",]);
+    eprint("-- count is {c.get-count()}, items {c.get-items()}\n");
+    eprint("-- unmount\n");
+    c.unmount();
+    c.drop();
+    0
+}

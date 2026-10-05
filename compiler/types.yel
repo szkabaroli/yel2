@@ -2,6 +2,21 @@
 // the generator keep.
 
 // what a type stands for now: a settled variable is its type
+// a number literal's type where nothing settled it: an integer's s32, a float's f32 (what the code
+// made of it holds: gen's); unit for any other variable
+unsettled-number: func(kind: s64) -> Type {
+    if kind == 1 { Type.num("s32") } else if kind == 2 { Type.num("f32") } else { Type.unit-type }
+}
+
+// t resolved, each number literal's type nothing settled given as its code holds it (an integer's
+// s32): what it is once compiled, as a language server tells it
+settled-type: func(t0: Type) -> Type {
+    match resolve(t0) {
+        var(v) => if v.kind == 1 || v.kind == 2 { unsettled-number(v.kind) } else { resolve(t0) },
+        let t => map-children(t, settled-type),
+    }
+}
+
 resolve: func(t: Type) -> Type {
     match t {
         var(v) => match v.bound {
@@ -17,7 +32,23 @@ is-int: func(n: string) -> bool { n.byte-at(0) != 102 }
 
 is-signed: func(n: string) -> bool { n.byte-at(0) == 115 }
 
-show-type: func(t0: Type) -> string {
+// a type as the compiler tells it (an error's message): a named type by its key
+show-type: func(t0: Type) -> string { shown-type(t0, false) }
+
+// a type as a program writes it (a hover's signature): a named type without its package, as an
+// include names it (source-location, types.tcp-socket)
+written-type: func(t0: Type) -> string { shown-type(t0, true) }
+
+// a type's key without its package (pkg/m.t: m.t)
+written-name: func(key: string) -> string {
+    match key.find-last("/") {
+        some(slash) => key.substring(slash + 1, key.len()),
+        none => key,
+    }
+}
+
+// (written: as written-type tells it, else as show-type)
+shown-type: func(t0: Type, written: bool) -> string {
     let t = resolve(t0);
     match t {
         num(n) => n,
@@ -31,34 +62,34 @@ show-type: func(t0: Type) -> string {
         error-type => "\{error\}",
         // (the IR's only: no program has one)
         address-type => "address",
-        canonical-type(x) => "canonical<{show-type(x)}>",
-        list-type(x) => "list<{show-type(x)}>",
-        fixed-list(x) => "list<{show-type(x.item)}, {if x.len < 0 { "?" } else { "{x.len}" }}>",
+        canonical-type(x) => "canonical<{shown-type(x, written)}>",
+        list-type(x) => "list<{shown-type(x, written)}>",
+        fixed-list(x) => "list<{shown-type(x.item, written)}, {if x.len < 0 { "?" } else { "{x.len}" }}>",
         map-type(x) => match resolve(x.value) {
-            unit-type => "set<{show-type(x.key)}>",
-            _ => "map<{show-type(x.key)}, {show-type(x.value)}>",
+            unit-type => "set<{shown-type(x.key, written)}>",
+            _ => "map<{shown-type(x.key, written)}, {shown-type(x.value, written)}>",
         },
         func-type(f) => {
             let parts: list<string> = [];
-            for x in f.params { parts.push(show-type(x)); }
+            for x in f.params { parts.push(shown-type(x, written)); }
             let r = match resolve(f.result) {
                 unit-type => "",
-                _ => " -> {show-type(f.result)}",
+                _ => " -> {shown-type(f.result, written)}",
             };
             "func({parts.join(", ")}){r}"
         }
-        option-type(x) => "option<{show-type(x)}>",
-        future-type(x) => "future<{show-type(x)}>",
-        seq-type(x) => "seq<{show-type(x)}>",
-        stream-type(x) => "{if x.writer { "writer" } else { "stream" }}<{show-type(x.item)}>",
-        result-type(r) => "result<{show-part(r.ok)}, {show-part(r.err)}>",
+        option-type(x) => "option<{shown-type(x, written)}>",
+        future-type(x) => "future<{shown-type(x, written)}>",
+        seq-type(x) => "seq<{shown-type(x, written)}>",
+        stream-type(x) => "{if x.writer { "writer" } else { "stream" }}<{shown-type(x.item, written)}>",
+        result-type(r) => "result<{shown-part(r.ok, written)}, {shown-part(r.err, written)}>",
         tuple-type(xs) => {
             let parts: list<string> = [];
-            for x in xs { parts.push(show-type(x)); }
+            for x in xs { parts.push(shown-type(x, written)); }
             "tuple<{parts.join(", ")}>"
         }
         readonly-type(x) => {
-            let inner = show-type(x);
+            let inner = shown-type(x, written);
             match resolve(x) {
                 union-type(xs) => "({inner}) & readonly",
                 _ => "{inner} & readonly",
@@ -66,28 +97,28 @@ show-type: func(t0: Type) -> string {
         }
         anon-record(r) => {
             let parts: list<string> = [];
-            for i in 0..r.fields.len() { parts.push("{r.fields[i]}: {show-type(r.types[i])}"); }
+            for i in 0..r.fields.len() { parts.push("{r.fields[i]}: {shown-type(r.types[i], written)}"); }
             if parts.len() == 0 { "\{\}" } else { "\{ " + parts.join(", ") + " \}" }
         }
         union-type(xs) => {
             let parts: list<string> = [];
-            for x in xs { parts.push(show-type(x)); }
+            for x in xs { parts.push(shown-type(x, written)); }
             parts.join(" | ")
         }
         singleton(s) => s.text,
         range-type(r) => r.text,
         distinct-type(x) => x.name,
-        named(n) => name-text(n),
+        named(n) => if written { written-name(name-text(n)) } else { name-text(n) },
         param(n) => n,
         var(v) => if v.kind == 1 { "an integer" } else if v.kind == 2 { "a float" } else { "_" },
     }
 }
 
 // a result's payload type, _ for none
-show-part: func(t: Type) -> string {
+shown-part: func(t: Type, written: bool) -> string {
     match resolve(t) {
         unit-type => "_",
-        _ => show-type(t),
+        _ => shown-type(t, written),
     }
 }
 
@@ -281,7 +312,7 @@ readonly-of: func(t0: Type) -> Type {
         anon-record(r) => {
             let out: list<Type> = [];
             for x in r.types { out.push(readonly-of(x)); }
-            Type.anon-record({ fields: r.fields, types: out, })
+            Type.anon-record({ fields: r.fields, types: out, name: r.name, })
         }
         union-type(xs) => {
             let out: list<Type> = [];
@@ -326,7 +357,7 @@ anon-record-of: func(fields: list<string>, types: list<Type>) -> Type {
         fs.push(fields[least]);
         ts.push(types[least]);
     }
-    Type.anon-record({ fields: fs, types: ts, })
+    Type.anon-record({ fields: fs, types: ts, name: "", })
 }
 
 // whether a sorts before b, byte by byte
@@ -602,7 +633,7 @@ rebuild: func(t0: Type, cs: list<Type>) -> Type {
         option-type(x) => Type.option-type(cs[0]),
         result-type(r) => Type.result-type({ ok: cs[0], err: cs[1], }),
         tuple-type(xs) => Type.tuple-type(cs),
-        anon-record(r) => Type.anon-record({ fields: r.fields, types: cs, }),
+        anon-record(r) => Type.anon-record({ fields: r.fields, types: cs, name: r.name, }),
         union-type(xs) => Type.union-type(cs),
         readonly-type(x) => Type.readonly-type(cs[0]),
         future-type(x) => Type.future-type(cs[0]),

@@ -1,0 +1,43 @@
+// A view's event handlers by id (what a view's dispatch is given: the id its listener was added
+// with, from 1 as yel-solid's), and the flush after each: the effects what the handler changed
+// runs. A view (compiler/parser.yel's lowering) makes one for each `on event { … }`, and lets it go
+// with the owner it was made under (a branch shown no more, a row removed, the view unmounted).
+
+module view-events {
+    @(private) let handlers: list<option<func()>>;
+    @(private) let released: list<u32>;
+
+    // run, under a new id
+    handler: func(run: func()) -> u32 {
+        let spare = released;
+        if spare.len() > 0 {
+            let id = spare.pop();
+            let all = handlers;
+            all[(id - 1) as s64] = some(run);
+            return id;
+        }
+        let all = handlers;
+        all.push(some(run));
+        all.len() as u32
+    }
+
+    // an id let go: its handler gone, the id another's later
+    release: func(id: u32) {
+        let all = handlers;
+        all[(id - 1) as s64] = none;
+        let spare = released;
+        spare.push(id);
+    }
+
+    // the handler of an id run (none: a stale id, from before it was let go), then what it changed
+    dispatch: func(id: u32) {
+        let all = handlers;
+        if id >= 1 && (id as s64) <= all.len() {
+            match all[(id - 1) as s64] {
+                some(run) => run(),
+                none => {}
+            }
+        }
+        reactive.flush();
+    }
+}

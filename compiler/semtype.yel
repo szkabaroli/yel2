@@ -20,11 +20,11 @@ record ValueSet { co: bool, vals: list<string>, }
 type key-kind = "int" | "float" | "char" | "string";
 
 // a float type's values (kind: f32, f64)
-record NumSet { kind: string, set: ValueSet, }
+resource NumSet { kind: string, set: ValueSet, }
 
 // an integer type's values, or the chars (kind: s8 to u64, char): ranges apart and in order, each
 // from lo to hi (a u64's moved down by 2^63, so the order holds in an s64)
-record IntSet { kind: string, ranges: list<Interval>, }
+resource IntSet { kind: string, ranges: list<Interval>, }
 
 record Interval { lo: s64, hi: s64, }
 
@@ -33,9 +33,9 @@ record Interval { lo: s64, hi: s64, }
 record Atom { tag: string, owner: string, fields: list<SemType>, }
 
 // the products every pos atom holds and no neg atom does
-record Conj { pos: list<Atom>, neg: list<Atom>, }
+resource Conj { pos: list<Atom>, neg: list<Atom>, }
 
-record SemType {
+resource SemType {
     units: bool,
     // 1: true, 2: false
     bools: s64,
@@ -49,9 +49,6 @@ record SemType {
     // a union of conjunctions
     products: list<Conj>,
 }
-
-// the declarations an atom opens into
-record Decls { records: map<Name, RecordInfo>, variants: map<Name, list<CaseDecl>>, }
 
 module semtype {
     // ================================================================ building
@@ -76,7 +73,7 @@ module semtype {
     one-value: func(k: string) -> ValueSet { { co: false, vals: [k,], } }
 
     // the values of a type as the checker settled it
-    translate: func(d: Decls, t0: Type) -> SemType {
+    translate: func(d: Symbols, t0: Type) -> SemType {
         let t = settled(t0);
         let s = nothing();
         match t {
@@ -168,7 +165,7 @@ module semtype {
     anon-tag: func(fields: list<string>) -> string { "\{" + fields.join(",") + "\}" }
 
     // a result's side: its payload's values, or no field when it carries nothing
-    side: func(d: Decls, t: Type) -> list<SemType> {
+    side: func(d: Symbols, t: Type) -> list<SemType> {
         match resolve(t) {
             unit-type => [],
             _ => [translate(d, t),],
@@ -218,16 +215,16 @@ module semtype {
     }
 
     // a declared type's values, opened one level: a record's one product, a variant's cases
-    open-ref: func(d: Decls, n: string) -> list<Conj> {
+    open-ref: func(d: Symbols, n: string) -> list<Conj> {
         let type-name = intern(n);
         let out: list<Conj> = [];
         if d.records.has(type-name) {
             let fields: list<SemType> = [];
-            for t in d.records[type-name].types { fields.push(translate(d, t)); }
+            for t in d.records[type-name].field-types { fields.push(translate(d, t)); }
             out.push(conj(atom(n, n, fields)));
             return out;
         }
-        for k in d.variants[type-name] {
+        for k in d.variants[type-name].cases {
             let fields: list<SemType> = [];
             // a payload of () carries nothing: no field, as a case declared without one (and as its
             // pattern has: checker.case-type)
@@ -578,7 +575,7 @@ module semtype {
         }
     }
 
-    inter: func(d: Decls, a0: SemType, b0: SemType) -> SemType {
+    inter: func(d: Symbols, a0: SemType, b0: SemType) -> SemType {
         // a declared type the other side restricts, opened
         let a = opened(d, a0, b0);
         let b = opened(d, b0, a0);
@@ -607,7 +604,7 @@ module semtype {
         }
     }
 
-    diff: func(d: Decls, a0: SemType, b0: SemType) -> SemType {
+    diff: func(d: Symbols, a0: SemType, b0: SemType) -> SemType {
         let a = opened(d, a0, b0);
         let b = opened(d, b0, a0);
         // the products less each of b's (a conjunction's complement: one of its atoms not held),
@@ -637,7 +634,7 @@ module semtype {
     }
 
     // a, its declared types the other side looks inside of (and does not hold whole) opened
-    opened: func(d: Decls, a: SemType, other: SemType) -> SemType {
+    opened: func(d: Symbols, a: SemType, other: SemType) -> SemType {
         let refs: list<string> = [];
         let products = concat-conjs(a.products, []);
         for r in a.refs {
@@ -693,7 +690,7 @@ module semtype {
         out
     }
 
-    inhabited-conjs: func(d: Decls, xs: list<Conj>) -> list<Conj> {
+    inhabited-conjs: func(d: Symbols, xs: list<Conj>) -> list<Conj> {
         let out: list<Conj> = [];
         for x in xs {
             match conj-sample(d, x) {
@@ -706,7 +703,7 @@ module semtype {
 
     // ================================================================ emptiness, and a value
 
-    is-empty: func(d: Decls, a: SemType) -> bool {
+    is-empty: func(d: Symbols, a: SemType) -> bool {
         match sample(d, a) {
             some(s) => false,
             none => true,
@@ -715,7 +712,7 @@ module semtype {
 
     // a value of the set, shown as a pattern (_ for any value of a part held whole); none when it
     // is empty
-    sample: func(d: Decls, a: SemType) -> option<string> {
+    sample: func(d: Symbols, a: SemType) -> option<string> {
         for x in a.products {
             match conj-sample(d, x) {
                 some(s) => { return some(s); }
@@ -776,7 +773,7 @@ module semtype {
     }
 
     // a product every pos atom holds and no neg one does, shown; none when there is none
-    conj-sample: func(d: Decls, x: Conj) -> option<string> {
+    conj-sample: func(d: Symbols, x: Conj) -> option<string> {
         if x.pos.len() == 0 { return some("_"); }
         let first = x.pos[0];
         let fields: list<SemType> = [];
@@ -811,7 +808,7 @@ module semtype {
     // fields (each inhabited) whose products none of negs from i on holds: for each of them, one
     // field outside its field's set (the standard search for a product with negations)
     explore: func(
-        d: Decls,
+        d: Symbols,
         fields: list<SemType>,
         negs: list<Atom>,
         i: s64,
@@ -832,7 +829,7 @@ module semtype {
         none
     }
 
-    show-product: func(d: Decls, a: Atom, fields: list<string>) -> string {
+    show-product: func(d: Symbols, a: Atom, fields: list<string>) -> string {
         if a.tag.starts-with("tuple/") { return "(" + fields.join(", ") + ")"; }
         // an anonymous record's: its fields' names in its tag
         if a.tag == "\{\}" { return "\{\}"; }

@@ -3,7 +3,7 @@
 // made in a block, given readonly at once); where it is the caller's, it is the caller's (on the
 // heap); and a record kept in a list made outside a loop is each turn's own
 
-record Point { x: s32, y: s32, }
+resource Point { x: s32, y: s32, }
 
 // kept in the caller's map: its record outlives this call
 put: func(m: map<string, Point>, k: string, n: s32) {

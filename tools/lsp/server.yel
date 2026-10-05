@@ -1,0 +1,291 @@
+// The server: LSP's lifecycle (initialize, initialized, shutdown, exit), the documents the editor
+// has open (full sync: each change gives the whole text), the compiler's errors as each file's
+// diagnostics (check.yel: yelc check's, run on the open documents as they are, unsaved too), and
+// formatting (yelc --fmt's), and what names name (symbols.yel: definition, references, hover,
+// completion, the outline, a call's signature, rename).
+//
+// Positions: LSP counts a line's characters in UTF-16 units unless the client offers utf-8
+// (general.positionEncodings, LSP 3.17), which this takes when it can: yel's spans count bytes.
+
+from "../../compiler" include fmt, analysis;
+from "std:encoding/json" include json;
+
+// connection: the client's (rpc.yel). prelude: the runtime's prelude.yel (beside it the standard
+// library and WIT), an absolute path. documents: each open one's text, by its URI. revision: how
+// many changes asked for a check (check.soon's). published: the URIs given diagnostics last, so a
+// check that finds none there clears them. utf8: positions count bytes (else UTF-16 units). done:
+// exit was asked for, with exit-code
+resource Server {
+    connection: Connection,
+    prelude: string,
+    revision: s64,
+    published: set<string>,
+    // each package's last check (by its input), and the revision it was made at
+    checked: map<string, analysis.Checked>,
+    checked-at: map<string, s64>,
+    // the change each package's check under way is of (check.fresh's)
+    checking: map<string, s64>,
+    // each file's package (check.package-input's), found since the last change
+    inputs: map<string, string>,
+    inputs-at: s64,
+    documents: map<string, string>,
+    initialized: bool,
+    shut-down: bool,
+    utf8: bool,
+    done: bool,
+    exit-code: s32,
+}
+
+// JSON-RPC's error codes, and LSP's
+const PARSE-ERROR: s64 = -32700;
+const INVALID-REQUEST: s64 = -32600;
+const METHOD-NOT-FOUND: s64 = -32601;
+const INVALID-PARAMS: s64 = -32602;
+const SERVER-NOT-INITIALIZED: s64 = -32002;
+// a request that could not be done (LSP's: a rename refused, and why)
+const REQUEST-FAILED: s64 = -32803;
+
+module server {
+    new: func(connection: Connection, prelude: string) -> Server {
+        {
+            connection: connection,
+            prelude: prelude,
+            revision: 0,
+            published: set.new(),
+            checked: map.new(),
+            checked-at: map.new(),
+            checking: map.new(),
+            inputs: map.new(),
+            inputs-at: -1,
+            documents: map.new(),
+            initialized: false,
+            shut-down: false,
+            utf8: false,
+            done: false,
+            exit-code: 0,
+        }
+    }
+
+    // one message's body handled: a request replied to, a notification acted on
+    handle: async func(server: Server, body: string) {
+        let message = match json.parse(body) {
+            ok(value) => value,
+            err(error) => {
+                wait rpc.reply-error(server.connection, json.value.null, PARSE-ERROR, error);
+                return;
+            }
+        };
+        let id = json.member(message, "id");
+        let params = json.member(message, "params").unwrap-or(json.value.null);
+        let method = match json.string-value(json.member(message, "method")) {
+            some(name) => name,
+            none => {
+                // a reply to a request of ours (none are sent), or no message at all
+                match id {
+                    some(request) => {
+                        if json.member(message, "result").is-none() && json.member(
+                            message,
+                            "error",
+                        ).is-none() {
+                            wait rpc.reply-error(server.connection, request, INVALID-REQUEST, "a request with no method");
+                        }
+                    }
+                    none => wait rpc.reply-error(server.connection, 
+                        json.value.null,
+                        INVALID-REQUEST,
+                        "a message with no method and no id",
+                    ),
+                }
+                return;
+            }
+        };
+        match id {
+            some(request) => wait request-handled(server, request, method, params),
+            none => wait notification-handled(server, method, params),
+        }
+    }
+
+    request-handled: async func(server: Server, id: json.value, method: string, params: json.value) {
+        if method == "initialize" {
+            if server.initialized {
+                wait rpc.reply-error(server.connection, id, INVALID-REQUEST, "initialize was already sent");
+                return;
+            }
+            server.initialized = true;
+            match json.items(json.path(params, ["capabilities", "general", "positionEncodings"])) {
+                some(encodings) => {
+                    for encoding in encodings {
+                        if encoding == json.value.text("utf-8") { server.utf8 = true; }
+                    }
+                }
+                none => {}
+            }
+            let capabilities = json.object([
+                ("positionEncoding", json.value.text(if server.utf8 { "utf-8" } else { "utf-16" })),
+                ("textDocumentSync", json.value.number("1")),
+                ("hoverProvider", json.value.boolean(true)),
+                ("definitionProvider", json.value.boolean(true)),
+                ("referencesProvider", json.value.boolean(true)),
+                ("documentHighlightProvider", json.value.boolean(true)),
+                ("documentFormattingProvider", json.value.boolean(true)),
+                ("completionProvider", json.object([("triggerCharacters", json.value.array([json.value.text("."),])),])),
+                ("documentSymbolProvider", json.value.boolean(true)),
+                ("signatureHelpProvider", json.object([("triggerCharacters", json.value.array([json.value.text("("), json.value.text(","),])),])),
+                ("renameProvider", json.object([("prepareProvider", json.value.boolean(true)),])),
+            ]);
+            let info = json.object([
+                ("name", json.value.text("yel-lsp")),
+                ("version", json.value.text("0.1.0")),
+            ]);
+            wait rpc.reply(server.connection, id, json.object([("capabilities", capabilities), ("serverInfo", info),]));
+            return;
+        }
+        if !server.initialized {
+            wait rpc.reply-error(server.connection, id, SERVER-NOT-INITIALIZED, "{method} before initialize");
+            return;
+        }
+        if server.shut-down {
+            wait rpc.reply-error(server.connection, id, INVALID-REQUEST, "{method} after shutdown");
+            return;
+        }
+        if method == "shutdown" {
+            server.shut-down = true;
+            wait rpc.reply(server.connection, id, json.value.null);
+        } else if method == "textDocument/hover" {
+            wait symbols.hover(server, id, params);
+        } else if method == "textDocument/definition" {
+            wait symbols.definition(server, id, params);
+        } else if method == "textDocument/references" {
+            wait symbols.references(server, id, params);
+        } else if method == "textDocument/documentHighlight" {
+            wait symbols.highlights(server, id, params);
+        } else if method == "textDocument/completion" {
+            wait symbols.completion(server, id, params);
+        } else if method == "textDocument/documentSymbol" {
+            wait symbols.outline(server, id, params);
+        } else if method == "textDocument/signatureHelp" {
+            wait symbols.signature-help(server, id, params);
+        } else if method == "textDocument/prepareRename" {
+            wait symbols.prepare-rename(server, id, params);
+        } else if method == "textDocument/rename" {
+            wait symbols.rename(server, id, params);
+        } else if method == "textDocument/formatting" {
+            wait formatting(server, id, params);
+        } else {
+            wait rpc.reply-error(server.connection, id, METHOD-NOT-FOUND, "no method {method}");
+        }
+    }
+
+    notification-handled: async func(server: Server, method: string, params: json.value) {
+        if method == "exit" {
+            server.done = true;
+            server.exit-code = if server.shut-down { 0 } else { 1 };
+            return;
+        }
+        // before initialize, every notification but exit is dropped; $/ ones may always be
+        if !server.initialized || server.shut-down { return; }
+        let uri = json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or("");
+        if method == "textDocument/didOpen" {
+            let text = json.string-value(json.path(params, ["textDocument", "text"])).unwrap-or("");
+            server.documents.set(uri, text);
+            check.soon(server);
+        } else if method == "textDocument/didChange" {
+            // full sync: the last change is the whole text
+            match json.items(json.member(params, "contentChanges")) {
+                some(changes) => {
+                    if changes.len() > 0 {
+                        let text = json.string-value(
+                            json.member(changes[changes.len() - 1], "text")
+                        ).unwrap-or("");
+                        server.documents.set(uri, text);
+                        check.soon(server);
+                    }
+                }
+                none => {}
+            }
+        } else if method == "textDocument/didSave" {
+            check.soon(server);
+        } else if method == "textDocument/didClose" {
+            // (its diagnostics cleared by the check: it is no longer read in place of its file)
+            server.documents.remove(uri);
+            check.soon(server);
+        }
+    }
+
+    // the document formatted as yelc --fmt formats it: one edit giving the whole of it (none where
+    // it is formatted already, or its brackets do not match: then it is left as it is)
+    formatting: async func(server: Server, id: json.value, params: json.value) {
+        let uri = json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or("");
+        let text = match server.documents.get(uri) {
+            some(text) => text,
+            none => {
+                wait rpc.reply-error(server.connection, id, INVALID-PARAMS, "{uri} is not open");
+                return;
+            }
+        };
+        let formatted = fmt.format(text, check.path(uri));
+        if formatted == text {
+            wait rpc.reply(server.connection, id, json.value.array([]));
+            return;
+        }
+        // the whole text: from its start to just past its last line's last character
+        let lines = text.split("\n");
+        let last = lines.len() - 1;
+        let whole = json.object([
+            ("start", position(0, 0)),
+            ("end", position(last, client-column(server, lines[last], lines[last].len()))),
+        ]);
+        let edit = json.object([("range", whole), ("newText", json.value.text(formatted)),]);
+        wait rpc.reply(server.connection, id, json.value.array([edit,]));
+    }
+
+    // a range on one line, from byte start to byte end, in the client's units
+    range: func(server: Server, line: string, row: s64, start: s64, end: s64) -> json.value {
+        json.object([
+            ("start", position(row, client-column(server, line, start))),
+            ("end", position(row, client-column(server, line, end))),
+        ])
+    }
+
+    position: func(row: s64, column: s64) -> json.value {
+        json.object([
+            ("line", json.value.number("{row}")),
+            ("character", json.value.number("{column}")),
+        ])
+    }
+
+    // positions: a client's column (bytes, or UTF-16 units) and a byte index into the line
+
+    // the byte where the client's column is (past the line's end: its end)
+    byte-column: func(server: Server, line: string, column: s64) -> s64 {
+        if server.utf8 { return if column < line.len() { column } else { line.len() }; }
+        let units = 0;
+        let at = 0;
+        loop {
+            if at >= line.len() || units >= column { return at; }
+            let length = sequence-length(line.byte-at(at));
+            units += if length == 4 { 2 } else { 1 };
+            at += length;
+        }
+        at
+    }
+
+    // the client's column for byte at
+    client-column: func(server: Server, line: string, at: s64) -> s64 {
+        if server.utf8 { return at; }
+        let units = 0;
+        let index = 0;
+        loop {
+            if index >= at || index >= line.len() { return units; }
+            let length = sequence-length(line.byte-at(index));
+            units += if length == 4 { 2 } else { 1 };
+            index += length;
+        }
+        units
+    }
+
+    // how many bytes the UTF-8 sequence led by byte takes
+    sequence-length: func(byte: s64) -> s64 {
+        if byte >= 0xF0 { 4 } else if byte >= 0xE0 { 3 } else if byte >= 0xC0 { 2 } else { 1 }
+    }
+}

@@ -1,0 +1,20 @@
+// error: 11:13: func pair is private to its package (@(private))
+// error: 12:13: type Step is private to its package (@(private))
+// error: 13:5: type Feet is private to its package (@(private))
+// error: 14:17: type Mode is private to its package (@(private))
+// error: 15:5: type Cell is private to its file (@(private="file"))
+// error: 16:13: func twice is private to its file (@(private="file"))
+// error: 17:17: func scale is private to its package (@(private))
+// error: 18:17: variant Step is private to its package (@(private))
+from "../vis-lib" include api;
+main: func() -> s32 {
+    let p = api.pair(1, 2);
+    let s = api.Step.back;
+    let f: api.Feet = 3;
+    let modes = api.Mode.fast;
+    let c: api.Cell = { n: 1, };
+    let t = api.twice(4);
+    let scale = api.scale;
+    let ahead = forward(1);
+    0
+}

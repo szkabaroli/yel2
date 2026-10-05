@@ -1,0 +1,41 @@
+// WIT resources: a handle (u32) the host owns. A static func or constructor is called on the type
+// (types.tcp-socket.create(…)), a method on a handle (s.bind(…)), and drop gives it back. Natively
+// the runtime's C keeps the handles (runtime/wasi-native.h); in a component, the host
+
+from "std:testing" include expect;
+from "wasi:sockets" include types;
+from "wasi:filesystem" include preopens;
+from "wasi:cli" include terminal-stdout;
+
+module resource-tests {
+    @(test) binds-a-socket: func() {
+        let s = expect.ok(types.tcp-socket.create(types.ip-address-family.ipv4));
+        expect.equal("{s.get-address-family()}", "ipv4");
+        expect.holds(!s.get-is-listening());
+        let loopback = types.ip-socket-address.ipv4({ port: 0, address: (127, 0, 0, 1), });
+        expect.ok(s.bind(loopback));
+        match expect.ok(s.get-local-address()) {
+            ipv4(v4) => {
+                expect.equal(v4.address, (127, 0, 0, 1));
+                expect.holds(v4.port > 0);
+            }
+            ipv6(_) => expect.fail("an ipv6 address for an ipv4 socket"),
+        }
+        s.drop();
+    }
+
+    // the handles are values: a list of them, each dropped
+    @(test) lists-the-preopens: func() {
+        let dirs = preopens.get-directories();
+        expect.equal(dirs.map({ d -> d.1 }), [".",]);
+        for d in dirs { d.0.drop(); }
+    }
+
+    // (a terminal or not, as where it runs: its handle given back either way)
+    @(test) asks-for-a-terminal: func() {
+        match terminal-stdout.get-terminal-stdout() {
+            some(t) => t.drop(),
+            none => {}
+        }
+    }
+}

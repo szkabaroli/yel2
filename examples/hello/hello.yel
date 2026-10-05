@@ -1,0 +1,28 @@
+// The yel-solid hello example (packages/yel-solid/examples/hello: a counter) as a yel view, with the
+// same WIT (yel:hello's app-component: resource app) so the same hosts run it. The view is lowered
+// to an observable resource of its fields and the funcs its interface has (new, mount, unmount,
+// dispatch, get-name, set-name): each binding that reads a field an effect, so a click tells the
+// host only the text that changed.
+
+package yel:hello@0.1.0;
+
+from "yel:ui" include dom;
+
+module app-component {
+    view App {
+        name: string = "world";
+        @(private) count: s32 = 0;
+
+        Card {
+            style.pad: 200.0
+            VStack {
+                Text { "Hello, {name}!" }
+                Text { "Clicked {count} times" }
+                Button {
+                    "Click me"
+                    on click { count += 1; }
+                }
+            }
+        }
+    }
+}

@@ -6,7 +6,7 @@
 // the func being written: its C lines; each local's C name, and its pointers (as C) and where their
 // slots start (-1: it has none); how many slots its frame has; the labels of the loops around, and
 // the labels a goto names
-record Render {
+resource Render {
     g: Gen,
     f: IrFunc,
     lines: list<string>,
@@ -36,6 +36,17 @@ module gen {
         if first < 0 { return; }
         let paths = r.paths[i];
         for k in 0..paths.len() { line(r, "ys[{first + k}] = (void *)({paths[k]});"); }
+    }
+
+    // the local a store's target is in, where it is in the local's own value (a fixed list's item,
+    // a value's field, at any depth), not through a pointer
+    place-local: func(n: Node) -> option<s64> {
+        match n.kind {
+            local(i) => some(i),
+            list-get(t) => if t.fixed { place-local(t.list) } else { none },
+            load(t) => if t.arrow { none } else { place-local(t.base) },
+            _ => none,
+        }
     }
 
     // ================================================================ values
@@ -262,15 +273,11 @@ module gen {
             }
             store(x) => {
                 line(r, "{render-expr(r, x.target)} = {top-expr(r, x.value)};");
-                // an item set in a local's fixed-length list: the local's slots again
-                match x.target.kind {
-                    list-get(t) => {
-                        match t.list.kind {
-                            local(i) => root(r, i),
-                            _ => {}
-                        }
-                    }
-                    _ => {}
+                // an item set in a local's fixed-length list, a field of a local's value: the local's
+                // slots again
+                match place-local(x.target) {
+                    some(i) => root(r, i),
+                    none => {}
                 }
             }
             // an intrinsic's value not used: a cast says so (C warns of an unused comma)
@@ -415,6 +422,9 @@ module gen {
         out.push(start + c" {");
         out.push("\t{q} *fr = y_new(sizeof({q}), {trace});");
         out.push("\tfr->h.step = {f.c-name};");
+        // (its name: what YEL_ASYNC_TRACE tells its tasks by, std's without its package)
+        let named = if f.key.starts-with("yel:std/") { f.key.substring(8, f.key.len()) } else { f.key };
+        out.push("\tfr->h.name = \"{named}\";");
         if f.release { out.push("\tfr->h.release = y_async_release_by_step;"); }
         for k in 0..f.params.len() { out.push("\tfr->l{f.params[k]} = a{k};"); }
         out.push("\treturn (y_async *)fr;");

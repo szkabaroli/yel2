@@ -1,0 +1,18 @@
+// error: 9:29: the default of word is a literal or a # directive
+// error: 12:40: #caller-expression(p): p is one of named's parameters, whose argument's text it is
+// error: 15:17: #caller-location is a parameter's default: the place of a call that leaves it out
+// error: 16:17: #places: no such directive (#file, #line, #column, #func, #location; a parameter's default: #caller-location, #caller-expression(param))
+
+first: func(word: string, count: s32) -> string { word }
+
+// a default that is not a literal
+second: func(word: string = first("a", 1)) -> string { word }
+
+// #caller-expression of no parameter of its own
+named: func(value: s32, text: string = #caller-expression(other)) -> string { text }
+
+main: func() -> s32 {
+    let place = #caller-location;
+    let other = #places;
+    0
+}

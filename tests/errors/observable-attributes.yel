@@ -1,0 +1,9 @@
+// error: 6:15: @(observable) goes on a resource: a record is a value, copied where it goes, so no one sees it change
+// error: 7:29: @(ignored) is for a field of an @(observable) resource: Plain is not one
+// error: 8:15: @(observable) goes on a resource: it tells who reads and writes its fields
+// (an observable resource's field may be @(ignored); a record or a func is never observable, nor
+// is a plain resource's field ignored)
+@(observable) record Point { x: s32, y: s32, }
+resource Plain { @(ignored) n: s32, }
+@(observable) main: func() {}
+@(observable) resource Fine { a: s32, @(ignored) b: s32, }

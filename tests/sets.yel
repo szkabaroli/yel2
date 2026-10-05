@@ -8,7 +8,7 @@ type name = string;
 type pair = tuple<name, level>;
 type maybe-level = option<level>;
 
-record Request { method: method, path: name, }
+resource Request { method: method, path: name, }
 
 describe: func(m: method) -> string {
     match m {

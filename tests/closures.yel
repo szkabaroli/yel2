@@ -2,7 +2,7 @@
 // reference: a closure and the scope it is made in share each variable, through an environment the
 // closures made in one scope share (a for's, one each turn)
 
-record Person { name: string, age: s32, }
+resource Person { name: string, age: s32, }
 
 // a counter: its count lives on in the environment after make-counter returns
 make-counter: func() -> func() -> s32 {

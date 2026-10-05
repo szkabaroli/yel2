@@ -1,0 +1,109 @@
+// std:encoding, tested (yelc test runtime/std/encoding): base16 (hex), base32 and base64 against
+// RFC 4648's vectors (section 10) and back, what each refuses, and uuid: text read and written
+// again, its bytes, and the versions made
+
+package std:encoding@0.1.0;
+
+from "std:testing" include expect;
+
+module encoding-tests {
+    // a decode's bytes as hex, or its error
+    shown: func(decoded: result<list<u8>, string>) -> string {
+        match decoded {
+            ok(bytes) => hex.encode(bytes),
+            err(error) => "error: {error}",
+        }
+    }
+
+    // RFC 4648's vectors: each word, and its hex, base64 and base32 (decoded back to it)
+    @(test) encodes-the-rfc-vectors: func() {
+        let vectors = [
+            ("", "", "", ""),
+            ("f", "66", "Zg==", "MY======"),
+            ("fo", "666f", "Zm8=", "MZXQ===="),
+            ("foo", "666f6f", "Zm9v", "MZXW6==="),
+            ("foob", "666f6f62", "Zm9vYg==", "MZXW6YQ="),
+            ("fooba", "666f6f6261", "Zm9vYmE=", "MZXW6YTB"),
+            ("foobar", "666f6f626172", "Zm9vYmFy", "MZXW6YTBOI======"),
+        ];
+        for vector in vectors {
+            let (word, sixteen, sixty-four, thirty-two) = vector;
+            let bytes = word.bytes();
+            expect.equal(hex.encode(bytes), sixteen);
+            expect.equal(base64.encode(bytes), sixty-four);
+            expect.equal(base32.encode(bytes), thirty-two);
+            expect.equal(shown(base64.decode(sixty-four)), sixteen);
+            expect.equal(shown(base32.decode(thirty-two)), sixteen);
+            expect.equal(shown(hex.decode(sixteen)), sixteen);
+        }
+    }
+
+    @(test) writes-each-alphabet: func() {
+        let edge: list<u8> = [0xFB, 0xFF, 0x00,];
+        expect.equal(base64.encode(edge), "+/8A");
+        expect.equal(base64.encode-url(edge), "-_8A");
+        expect.equal(base64.encode-url([0xFB, 0xFF,]), "-_8");
+        expect.equal(shown(base64.decode-url("-_8")), "fbff");
+        expect.equal(hex.encode-upper(edge), "FBFF00");
+        expect.equal(base32.encode-unpadded("fo".bytes()), "MZXQ");
+        expect.equal(shown(base32.decode("mzxq")), "666f");
+        expect.equal(shown(hex.decode("DeadBeef")), "deadbeef");
+        expect.equal(shown(base64.decode("Zg")), "66");
+    }
+
+    @(test) refuses-what-is-not-encoded: func() {
+        expect.equal(shown(hex.decode("abc")), "error: an odd count of hex digits (3)");
+        expect.equal(shown(hex.decode("zz")), "error: not a hex digit at byte 0");
+        expect.equal(shown(hex.decode("a")), "error: an odd count of hex digits (1)");
+        expect.equal(shown(base64.decode("Z")), "error: a length no base64 has (1)");
+        expect.equal(shown(base64.decode("Zm9!")), "error: not a base64 character at byte 3");
+        expect.equal(shown(base64.decode("Zg=")), "error: not a base64 character at byte 2");
+        expect.equal(shown(base64.decode("Zh==")), "error: bits past the last byte at byte 1");
+        expect.equal(shown(base64.decode("Zg===")), "error: a length no base64 has (5)");
+        expect.equal(shown(base32.decode("M")), "error: a length no base32 has (1)");
+        expect.equal(shown(base32.decode("MZX")), "error: a length no base32 has (3)");
+        expect.equal(shown(base32.decode("M1======")), "error: not a base32 character at byte 1");
+        expect.equal(shown(base32.decode("MZ======x")), "error: a length no base32 has (9)");
+        expect.equal(shown(base32.decode("MZ")), "error: bits past the last byte at byte 1");
+    }
+
+    @(test) reads-and-writes-uuids: func() {
+        let text = "550e8400-e29b-41d4-a716-446655440000";
+        let id = expect.ok(uuid.parse("URN:UUID:" + text.to-upper()));
+        expect.equal(uuid.to-string(id), text);
+        expect.equal(uuid.version(id), 4);
+        expect.equal(hex.encode(uuid.bytes(id)), "550e8400e29b41d4a716446655440000");
+        expect.equal(uuid.to-string(expect.ok(uuid.from-bytes(uuid.bytes(id)))), text);
+        expect.equal(uuid.to-string(uuid.nil()), "00000000-0000-0000-0000-000000000000");
+    }
+
+    @(test) refuses-what-is-no-uuid: func() {
+        expect.equal(expect.err(uuid.parse("550e8400-e29b-41d4-a716-44665544000")), "a UUID is 36 characters, not 35");
+        expect.equal(expect.err(uuid.parse("550e8400xe29b-41d4-a716-446655440000")), "expected '-' at byte 8");
+        expect.equal(expect.err(uuid.parse("550e8400-e29b-41d4-a716-44665544000g")), "not a hex digit at byte 35");
+        expect.equal(expect.err(uuid.from-bytes([1, 2,])), "a UUID is 16 bytes, not 2");
+    }
+
+    // version 4: random; version 7: time-ordered, each made in a run past the one before (most
+    // within one millisecond: its counter)
+    @(test) makes-versions-4-and-7: func() {
+        let variant = { id: uuid.id -> (id.low >> 62) == 2 };
+        let first = uuid.random();
+        let second = uuid.random();
+        expect.equal(uuid.version(first), 4);
+        expect.holds(variant(first));
+        expect.not-equal(uuid.to-string(first), uuid.to-string(second));
+        let ordered = uuid.time-ordered();
+        let later = uuid.time-ordered();
+        expect.equal(uuid.version(ordered), 7);
+        expect.holds(variant(ordered));
+        expect.holds((ordered.high >> 16) <= (later.high >> 16));
+        expect.holds((ordered.high >> 16) > 1700000000000);
+        let previous = uuid.time-ordered();
+        for index in 0..2000 {
+            let next = uuid.time-ordered();
+            expect.holds(uuid.to-string(next).compare(uuid.to-string(previous)) > 0);
+            previous = next;
+        }
+    }
+}

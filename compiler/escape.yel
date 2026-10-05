@@ -16,7 +16,7 @@
 // a func's locals in groups that may hold one value, and whether each group's value escapes the
 // func; for each local, the loop it is first defined in (0: none), each loop's parent, and each
 // record the func makes with the loop it is made in
-record Groups {
+resource Groups {
     parent: list<s64>,
     escapes: list<bool>,
     returned: list<bool>,
@@ -40,7 +40,7 @@ record Groups {
 // what a call does with its arguments (by index): kept, written, given back; moved to the host
 // (all of them: a WIT func's); and whether its result is new
 // (keeps: anywhere; into: only in those other arguments)
-record CallFlow {
+resource CallFlow {
     keeps: list<bool>,
     kept-in: list<list<s64>>,
     writes: list<bool>,
@@ -52,7 +52,7 @@ record CallFlow {
 // what escape analysis needs to know of the program: its funcs by C name, which of each one's
 // params escape it, which named types hold pointers (records, and variants with payloads), and,
 // by C name, each func's groups (as last found) and the yel funcs it calls
-record Facts {
+resource Facts {
     funcs: map<Name, IrFunc>,
     // by C name: which parameters each func keeps (lets escape), which it gives back, and whether
     // what it gives back is new
@@ -77,6 +77,10 @@ record Facts {
     // value (its type is fixed while the analysis runs)
     flows: map<Name, CallFlow>,
     mutable-locals: map<Name, list<bool>>,
+    // by a closure's lifted func's C name: whether its body lets its environment escape (a closure
+    // made in it, kept): then where the closure is made, the environment it is given escapes,
+    // though the closure is only called (a func given it calls it: what it made is kept)
+    env-escapes: map<Name, bool>,
 }
 
 module opt {
@@ -293,8 +297,26 @@ module opt {
             taint(gr, q);
         }
         group-walk(p, gr, f, f.body, 0);
+        for n in flatten(f.body) { closure-envs(p, gr, n); }
         close(gr, f);
         gr
+    }
+
+    // each closure made in n (its operands too) whose body lets its environment escape: the
+    // environment it is given escapes here
+    closure-envs: func(p: Facts, gr: Groups, n: Node) {
+        match n.kind {
+            make(m) => {
+                if m.parts.len() == 2 {
+                    match m.parts[0].kind {
+                        func-ref(r) => { if p.env-escapes.get-or(r.name, false) { escape(gr, m.parts[1]); } }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        for index in 0..operand-count(n) { closure-envs(p, gr, operand(n, index)); }
     }
 
     group-walk: func(p: Facts, gr: Groups, f: IrFunc, body: list<Node>, loop: s64) {
@@ -525,8 +547,20 @@ module opt {
         for f in funcs {
             let out: list<Name> = [];
             calls(f.body, out, map.new());
+            // a closure made here: its body's summary (whether it lets its environment escape)
+            // known before this func's
+            for n in flatten(f.body) { closures-made(n, out); }
             p.callees.set(f.name, out);
         }
+    }
+
+    // the funcs n makes a value of (a closure's body), into out (once each)
+    closures-made: func(n: Node, out: list<Name>) {
+        match n.kind {
+            func-ref(r) => { if !out.contains(r.name) { out.push(r.name); } }
+            _ => {}
+        }
+        for index in 0..operand-count(n) { closures-made(operand(n, index), out); }
     }
 
     // each func's summary (which parameters it keeps, which it gives back, whether its result is
@@ -541,6 +575,7 @@ module opt {
         p.groups = map.new();
         p.flows = map.new();
         p.mutable-locals = map.new();
+        p.env-escapes = map.new();
         find-callees(p, funcs);
         let keys: list<Name> = [];
         for f in funcs {
@@ -575,8 +610,11 @@ module opt {
             ws.push(gr.written[find(gr, q)]);
         }
         let fresh = p.fresh-result[n] && gives-new(gr, f);
+        let env = f.env-param >= 0 && gr.escapes[find(gr, f.env-param)];
         let changed = !same(esc, p.param-escapes[n]) || !same(gives, p.param-gives[n])
-            || !same(ws, p.param-writes[n]) || fresh != p.fresh-result[n] || !same-in(kept-in, p.param-kept-in[n]);
+            || !same(ws, p.param-writes[n]) || fresh != p.fresh-result[n] || !same-in(kept-in, p.param-kept-in[n])
+            || env != p.env-escapes.get-or(n, false);
+        p.env-escapes.set(n, env);
         // a call of it found again (and of its start, an async func's step's)
         if changed {
             p.flows.remove(n);

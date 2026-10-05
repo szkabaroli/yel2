@@ -1,0 +1,2914 @@
+// Lowering: a file's syntax tree (grammar.yel's) to what the checker reads, the declarations and
+// their statements, expressions, patterns and types (syntax.yel's AST), each where it is written.
+// What the parser only reads, this gives a meaning: the scope a declaration is in (its package,
+// module, includes and attributes), a literal's value (a string's escapes, a multiline one's lines
+// past its indent), what yel writes for what it says (xs[i] is xs.at(i), wait for a stream's
+// loop, an arm for each alternative that binds), and the yel made from what is written (a view's
+// resource and funcs, a regex literal's matcher), parsed in turn. Its errors are those of what a
+// tree means (a package's name across files, a view's names, a regex's pattern); the language
+// server's notes of where each declaration and type name is written are made here too.
+
+// a file being lowered: its context and source, its text and where each line starts (a span's
+// line and column), its tree, the scope it declares in, the declarations its expressions made
+// (a regex's matcher: the next declaration's place's), and the attributes on what it lowers
+resource Lowerer {
+    context: Context,
+    source: s64,
+    text: string,
+    lines: list<s64>,
+    root: SyntaxNode,
+    scope: Scope,
+    made: list<Decl>,
+    testing: bool,
+    observable: bool,
+    in-context: bool,
+}
+
+module lower {
+    // a reader of sources[source]: its tree parsed (kept in the context's trees), its scope its
+    // file's (a first line //+build <target>: what its funcs are made for)
+    reader: func(context: Context, source: s64) -> Lowerer {
+        let green = grammar.parse-file(context, source);
+        lowerer(context, source, green)
+    }
+
+    @(private) lowerer: func(context: Context, source: s64, green: GreenNode) -> Lowerer {
+        let text = context.sources[source].text;
+        let lines: list<s64> = [0,];
+        for index in 0..text.len() {
+            if text.byte-at(index) == 10 { lines.push(index + 1); }
+        }
+        let l: Lowerer = {
+            context: context,
+            source: source,
+            text: text,
+            lines: lines,
+            root: tree.root(green),
+            scope: blank-scope(context.sources[source].path),
+            made: [],
+            testing: false,
+            observable: false,
+            in-context: false,
+        };
+        if starts-with(text, "//+build ") {
+            let line = text.substring(9, text.find-byte(10).unwrap-or(text.len())).trim();
+            if line != "native" && line != "wasi" {
+                let at: Span = { source: source, line: 1, col: 10, end-line: 1, end-col: 10 + line.len(), };
+                diagnostics.report(context, diagnostics.error(at, "a build target is native or wasi, not {line}", ""));
+            }
+            l.scope.build = line;
+        }
+        l
+    }
+
+    // the file's declarations, into out (what their expressions made after each)
+    declarations: func(l: Lowerer, out: list<Decl>) {
+        for n in tree.child-nodes(l.root) { declaration-made(l, n, out); }
+    }
+
+    @(private) declaration-made: func(l: Lowerer, n: SyntaxNode, out: list<Decl>) {
+        declaration(l, n, out);
+        for d in l.made { out.push(d); }
+        l.made = [];
+    }
+
+    // sources[source] as one expression (a source made of a call: a regex literal's value)
+    expression-source: func(context: Context, source: s64) -> Expr {
+        let green = grammar.parse-expression(context, source);
+        let l = lowerer(context, source, green);
+        match first-node(l.root) {
+            some(n) => expr(l, n),
+            none => node(ExprKind.unit, nowhere()),
+        }
+    }
+
+    // ================================================================ the tree read
+
+    // its child nodes
+    nodes: func(n: SyntaxNode) -> list<SyntaxNode> { tree.child-nodes(n) }
+
+    first-node: func(n: SyntaxNode) -> option<SyntaxNode> {
+        let all = tree.child-nodes(n);
+        if all.len() == 0 { none } else { some(all[0]) }
+    }
+
+    // its child nodes of kind
+    nodes-of: func(n: SyntaxNode, kind: NodeKind) -> list<SyntaxNode> {
+        tree.child-nodes(n).filter({ c -> tree.kind(c) == kind })
+    }
+
+    // its first child node of kind
+    first-of: func(n: SyntaxNode, kind: NodeKind) -> option<SyntaxNode> {
+        for c in tree.child-nodes(n) {
+            if tree.kind(c) == kind { return some(c); }
+        }
+        none
+    }
+
+    // its own tokens (not its children's), whitespace and comments left out
+    tokens: func(n: SyntaxNode) -> list<SyntaxToken> { tree.own-tokens(n) }
+
+    // whether it has a token of its own that is the operator or word v
+    has: func(n: SyntaxNode, v: string) -> bool { tree.has-word(n, v) }
+
+    // whether a token is the operator or word v (a name written %name is no word)
+    is-word: func(t: SyntaxToken, v: string) -> bool {
+        (t.green.kind == TokenKind.op || t.green.kind == TokenKind.id) && t.green.text == v
+    }
+
+    // its first own token that is a name (its text past a %: the name's)
+    first-name: func(n: SyntaxNode) -> option<SyntaxToken> {
+        for t in tokens(n) {
+            if t.green.kind == TokenKind.id { return some(t); }
+        }
+        none
+    }
+
+    // a name token's name (%name: what follows the %)
+    token-name: func(t: SyntaxToken) -> string {
+        if t.green.text.starts-with("%") { t.green.text.substring(1, t.green.text.len()) } else { t.green.text }
+    }
+
+    // the first and the last token in it (its children's too), whitespace and comments left out
+    first-token: func(n: SyntaxNode) -> option<SyntaxToken> { tree.first-token(n) }
+
+    last-token: func(n: SyntaxNode) -> option<SyntaxToken> { tree.last-token(n) }
+
+    // the token (not trivia) right after n in its parent: none where a node or nothing is
+    token-after: func(n: SyntaxNode) -> option<SyntaxToken> {
+        match n.parent {
+            some(parent) => {
+                let seen = false;
+                for child in tree.children(parent) {
+                    match child {
+                        node(inner) => {
+                            if seen { return none; }
+                            if inner.index == n.index { seen = true; }
+                        }
+                        token(t) => { if seen && !tree.is-trivia(t.green.kind) { return some(t); } }
+                    }
+                }
+                none
+            }
+            none => none,
+        }
+    }
+
+    // the span of the first token at or past byte at in the file (the parser's next token there:
+    // the end of the file's, past its last)
+    next-token-span: func(l: Lowerer, at: s64) -> Span {
+        match tree.token-from(l.root, at) {
+            some(t) => token-span(l, t),
+            none => span(l, l.text.len(), l.text.len()),
+        }
+    }
+
+    // ================================================================ spans
+
+    // the line (from 1) byte at is on
+    @(private) line-at: func(l: Lowerer, at: s64) -> s64 {
+        let low = 0;
+        let high = l.lines.len() - 1;
+        loop {
+            if low >= high { break; }
+            let middle = (low + high + 1) / 2;
+            if l.lines[middle] <= at { low = middle; } else { high = middle - 1; }
+        }
+        low + 1
+    }
+
+    // bytes from start to end as a span: its first line and column, and those just past its end
+    span: func(l: Lowerer, start: s64, end: s64) -> Span {
+        let first = line-at(l, start);
+        let last = line-at(l, end);
+        {
+            source: l.source,
+            line: first,
+            col: start - l.lines[first - 1] + 1,
+            end-line: last,
+            end-col: end - l.lines[last - 1] + 1,
+        }
+    }
+
+    token-span: func(l: Lowerer, t: SyntaxToken) -> Span { span(l, t.offset, t.offset + t.green.text.len()) }
+
+    // a node's span: from its first token to the end of its last
+    node-span: func(l: Lowerer, n: SyntaxNode) -> Span {
+        match first-token(n) {
+            some(first) => from-to-end(l, token-span(l, first), n),
+            none => span(l, n.offset, n.offset),
+        }
+    }
+
+    // from where start starts to the end of n's last token (span-from: a span made of what its
+    // first part starts at, an operand's span looking past its parens)
+    from-to-end: func(l: Lowerer, start: Span, n: SyntaxNode) -> Span {
+        match last-token(n) {
+            some(last) => {
+                let end = token-span(l, last);
+                { source: start.source, line: start.line, col: start.col, end-line: end.end-line, end-col: end.end-col, }
+            }
+            none => start,
+        }
+    }
+
+    // the span of the token after n's first own token v (where a name follows a keyword)
+    @(private) after-word: func(l: Lowerer, n: SyntaxNode, v: string) -> Span {
+        let seen = false;
+        for child in tree.children(n) {
+            match child {
+                token(t) => {
+                    if tree.is-trivia(t.green.kind) { continue; }
+                    if seen { return token-span(l, t); }
+                    if is-word(t, v) { seen = true; }
+                }
+                node(inner) => {
+                    if seen {
+                        match first-token(inner) {
+                            some(first) => { return token-span(l, first); }
+                            none => {}
+                        }
+                    }
+                }
+            }
+        }
+        node-span(l, n)
+    }
+
+    // ================================================================ made of what the parser read
+
+    node: func(kind: ExprKind, span: Span) -> Expr { { kind: kind, span: span, ty: Type.unit-type, } }
+
+    // a binding's mark (not captured, until the checker finds it is), at the name it binds
+    new-mark: func(name: string, span: Span) -> Mark { { captured: false, unit: { env: false, }, ty: Type.unit-type, name: name, span: span, } }
+
+    new-marks: func(names: list<string>, spans: list<Span>) -> list<Mark> {
+        let out: list<Mark> = [];
+        for index in 0..names.len() { out.push(new-mark(names[index], spans[index])); }
+        out
+    }
+
+    name-pattern: func(n: string, binds: bool, span: Span) -> Pattern {
+        Pattern.name({ name: n, binds: binds, kind: "", key: "", value: none, mark: new-mark(n, span), span: span, })
+    }
+
+    // ================================================================ types
+
+    // a type node as the type it is (none there: unit)
+    type-of: func(l: Lowerer, n: option<SyntaxNode>) -> Type {
+        match n {
+            some(x) => parse-type(l, x),
+            none => Type.unit-type,
+        }
+    }
+
+    parse-type: func(l: Lowerer, n: SyntaxNode) -> Type {
+        let kind = tree.kind(n);
+        if kind == NodeKind.union-type {
+            let members: list<Type> = [];
+            for m in nodes(n) { members.push(parse-type(l, m)); }
+            return Type.union-type(members);
+        }
+        if kind == NodeKind.readonly-type { return Type.readonly-type(type-of(l, first-node(n))); }
+        if kind == NodeKind.unit-type { return Type.unit-type; }
+        if kind == NodeKind.record-type {
+            let fields: list<string> = [];
+            let types: list<Type> = [];
+            for f in nodes-of(n, NodeKind.record-type-field) {
+                match first-name(f) {
+                    some(t) => fields.push(token-name(t)),
+                    none => fields.push(""),
+                }
+                types.push(type-of(l, first-node(f)));
+            }
+            return Type.anon-record({ fields: fields, types: types, name: "", });
+        }
+        if kind == NodeKind.literal-type {
+            let e = expr-of(l, first-node(n));
+            return literal-type(e);
+        }
+        if kind == NodeKind.range-type {
+            let ends = nodes(n);
+            if ends.len() < 2 { return Type.unit-type; }
+            let lo = expr(l, ends[0]);
+            let hi = expr(l, ends[1]);
+            return range-type(lo, hi, has(n, "..="));
+        }
+        if kind == NodeKind.func-type {
+            // (where a built-in type's name is written)
+            note-built-in(l, n, "func");
+            let params: list<Type> = [];
+            let result = Type.unit-type;
+            let past-arrow = false;
+            for child in tree.children(n) {
+                match child {
+                    token(t) => { if is-word(t, "->") { past-arrow = true; } }
+                    node(inner) => {
+                        if past-arrow { result = parse-type(l, inner); } else { params.push(parse-type(l, inner)); }
+                    }
+                }
+            }
+            return Type.func-type({ params: params, result: result, });
+        }
+        named-type(l, n)
+    }
+
+    // a type named (module.name), its arguments as its name takes them
+    named-type: func(l: Lowerer, n: SyntaxNode) -> Type {
+        let parts: list<string> = [];
+        for t in tokens(n) {
+            if t.green.kind == TokenKind.id { parts.push(token-name(t)); }
+        }
+        let name = parts.join(".");
+        let args: list<SyntaxNode> = [];
+        let marks: list<SyntaxToken> = [];
+        match first-of(n, NodeKind.type-args) {
+            some(a) => {
+                args = nodes(a);
+                marks = tokens(a);
+            }
+            none => {}
+        }
+        note-built-in(l, n, name);
+        let arg = { index: s64 -> if index < args.len() { parse-type(l, args[index]) } else { Type.unit-type } };
+        if name == "map" { return Type.map-type({ key: arg(0), value: arg(1), }); }
+        if name == "set" { return Type.map-type({ key: arg(0), value: Type.unit-type, }); }
+        if name == "list" || name == "option" || name == "future" || name == "seq" || name == "stream" || name == "writer" {
+            let inner = arg(0);
+            // list<T, N> or list<T, ?>: fixed-length
+            for t in marks {
+                if name == "list" && t.green.kind == TokenKind.int { return Type.fixed-list({ item: inner, len: decimal(t.green.text), }); }
+                if name == "list" && is-word(t, "?") { return Type.fixed-list({ item: inner, len: -1, }); }
+            }
+            if name == "list" { return Type.list-type(inner); }
+            if name == "future" { return Type.future-type(inner); }
+            if name == "seq" { return Type.seq-type(inner); }
+            if name == "stream" || name == "writer" { return Type.stream-type({ item: inner, writer: name == "writer", }); }
+            return Type.option-type(inner);
+        }
+        if name == "tuple" {
+            let items: list<Type> = [];
+            for a in args { items.push(parse-type(l, a)); }
+            return Type.tuple-type(items);
+        }
+        if name == "result" {
+            let ok = if args.len() > 0 { result-part(l, args[0]) } else { Type.unit-type };
+            let err = if args.len() > 1 { result-part(l, args[1]) } else { Type.unit-type };
+            return Type.result-type({ ok: ok, err: err, });
+        }
+        let num = num-name(name);
+        if num != "" { return Type.num(num); }
+        if name == "bool" { return Type.bool-type; }
+        if name == "char" { return Type.char-type; }
+        if name == "string" { return Type.string-type; }
+        if name == "buffer" { return Type.buffer-type; }
+        if name == "never" { return Type.never-type; }
+        // (where a declared type's name is written: what it names the checker finds, once it knows)
+        if !l.context.exits { l.context.type-names.push({ name: name, span: node-span(l, n), scope: l.scope, }); }
+        Type.named(intern(name))
+    }
+
+    // a result's payload type, or _ for none
+    @(private) result-part: func(l: Lowerer, n: SyntaxNode) -> Type {
+        if tree.kind(n) == NodeKind.named-type && tokens(n).len() == 1 && tokens(n)[0].green.text == "_" { return Type.unit-type; }
+        parse-type(l, n)
+    }
+
+    // (where a built-in type's name is written: what it is a language server tells)
+    @(private) note-built-in: func(l: Lowerer, n: SyntaxNode, name: string) {
+        if l.context.exits || !built-in-type(name) { return; }
+        // (its name, module.name: from its first token to its last name's)
+        let names = tokens(n).filter({ t -> t.green.kind == TokenKind.id || is-word(t, ".") });
+        if names.len() == 0 { return; }
+        let first = token-span(l, names[0]);
+        let last = token-span(l, names[names.len() - 1]);
+        l.context.uses.push({
+            span: { source: first.source, line: first.line, col: first.col, end-line: last.end-line, end-col: last.end-col, },
+            key: "builtin:{name}",
+            local: none,
+            ty: Type.unit-type,
+            text: "",
+        });
+    }
+
+    // a decimal's value (a fixed-length list's length)
+    @(private) decimal: func(s: string) -> s64 {
+        let n = 0;
+        for k in 0..s.len() {
+            let c = s.byte-at(k);
+            if is-digit(c) { n = n * 10 + (c - 48); }
+        }
+        n
+    }
+
+    // a literal type: its one value's (a number's, a string's, a char's, a bool's)
+    literal-type: func(e: Expr) -> Type {
+        let base = match e.kind {
+            int-lit(x) => Type.num("s32"),
+            float-lit(x) => Type.num("f32"),
+            char-lit(x) => Type.char-type,
+            str-lit(x) => Type.string-type,
+            bool-lit(x) => Type.bool-type,
+            unary(u) => match u.value.kind {
+                float-lit(x) => Type.num("f32"),
+                _ => Type.num("s32"),
+            },
+            _ => Type.unit-type,
+        };
+        let key = semtype.literal-key(e);
+        let text = match e.kind {
+            str-lit(x) => "\"{x}\"",
+            char-lit(x) => "'{from-byte(x)}'",
+            _ => key,
+        };
+        Type.singleton({ base: base, key: key, text: text, })
+    }
+
+    // lo..=hi as a type: its keys (hi the last value: one before an exclusive range's end)
+    range-type: func(lo: Expr, hi: Expr, inclusive: bool) -> Type {
+        let base = match lo.kind {
+            char-lit(x) => Type.char-type,
+            int-lit(x) => Type.num("s32"),
+            unary(u) => Type.num("s32"),
+            _ => Type.unit-type,
+        };
+        let lk = semtype.literal-key(lo);
+        let hk = semtype.literal-key(hi);
+        let last = if inclusive { hk } else { semtype.decimal-before(hk) };
+        let text = "{range-end-text(lo)}{if inclusive { "..=" } else { ".." }}{range-end-text(hi)}";
+        Type.range-type({ base: base, lo: lk, hi: last, text: text, })
+    }
+
+    @(private) range-end-text: func(e: Expr) -> string {
+        match e.kind {
+            char-lit(x) => "'{from-byte(x)}'",
+            _ => semtype.literal-key(e),
+        }
+    }
+
+    // a number type's name (int is s32 and float f32; they are written as those)
+    num-name: func(n: string) -> string {
+        if n == "int" { return "s32"; }
+        if n == "float" { return "f32"; }
+        for k in ["s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64",] {
+            if n == k { return n; }
+        }
+        ""
+    }
+
+    // whether a type's name is yel's own (no declaration names it)
+    built-in-type: func(n: string) -> bool {
+        [
+            "bool", "char", "string", "buffer", "never", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64",
+            "f32", "f64", "list", "map", "set", "option", "result", "tuple", "stream", "writer", "future", "seq",
+        ].contains(n)
+    }
+
+    // ================================================================ patterns
+
+    // a pattern; binds: whether a bare name binds here
+    pattern: func(l: Lowerer, n: SyntaxNode, binds: bool) -> Pattern {
+        let kind = tree.kind(n);
+        if kind == NodeKind.alt-pattern {
+            let alts: list<Pattern> = [];
+            for p in nodes(n) { alts.push(pattern(l, p, binds)); }
+            return Pattern.alt(alts);
+        }
+        if kind == NodeKind.wild-pattern { return Pattern.wild; }
+        if kind == NodeKind.let-pattern {
+            match first-node(n) {
+                some(inner) => { return pattern(l, inner, true); }
+                none => { return Pattern.wild; }
+            }
+        }
+        if kind == NodeKind.typed-pattern {
+            // (its name's span the let's, where the pattern starts)
+            let start = node-span-first-token(l, n);
+            let named = match first-name(n) {
+                some(t) => name-text-after-let(n),
+                none => "",
+            };
+            return Pattern.typed({ ty: type-of(l, first-node(n)), sub: name-pattern(named, true, start), test: none, });
+        }
+        if kind == NodeKind.literal-pattern { return Pattern.literal(expr-of(l, first-node(n))); }
+        if kind == NodeKind.range-pattern {
+            let ends = nodes(n);
+            let lo = if ends.len() > 0 { expr(l, ends[0]) } else { node(ExprKind.unit, nowhere()) };
+            let hi = if ends.len() > 1 { expr(l, ends[1]) } else { node(ExprKind.unit, nowhere()) };
+            return Pattern.range({ lo: lo, hi: hi, inclusive: has(n, "..="), span: node-span(l, n), });
+        }
+        if kind == NodeKind.record-pattern {
+            let fields: list<string> = [];
+            let field-spans: list<Span> = [];
+            let patterns: list<Pattern> = [];
+            let rest = "";
+            for f in nodes(n) {
+                if tree.kind(f) == NodeKind.rest-pattern {
+                    match first-name(f) {
+                        some(t) => { rest = token-name(t); }
+                        none => {}
+                    }
+                    continue;
+                }
+                match first-name(f) {
+                    some(t) => {
+                        let field = token-name(t);
+                        fields.push(field);
+                        field-spans.push(token-span(l, t));
+                        match first-node(f) {
+                            some(sub) => patterns.push(pattern(l, sub, binds)),
+                            none => patterns.push(name-pattern(field, binds, token-span(l, t))),
+                        }
+                    }
+                    none => {}
+                }
+            }
+            let whole = node-span(l, n);
+            return Pattern.record({
+                fields: fields,
+                field-spans: field-spans,
+                patterns: patterns,
+                rest: rest,
+                rest-mark: new-mark(rest, whole),
+                span: whole,
+            });
+        }
+        if kind == NodeKind.tuple-pattern {
+            let items: list<Pattern> = [];
+            for p in nodes(n) { items.push(pattern(l, p, binds)); }
+            return Pattern.tuple(items);
+        }
+        if kind == NodeKind.paren-pattern {
+            match first-node(n) {
+                some(inner) => { return pattern(l, inner, binds); }
+                none => { return Pattern.wild; }
+            }
+        }
+        if kind == NodeKind.case-pattern {
+            let named = first-name(n);
+            let name = match named {
+                some(t) => token-name(t),
+                none => "",
+            };
+            let name-span = match named {
+                some(t) => token-span(l, t),
+                none => nowhere(),
+            };
+            let sub = match first-node(n) {
+                some(inner) => pattern(l, inner, true),
+                none => Pattern.wild,
+            };
+            return Pattern.case({ name: name, sub: sub, span: node-span(l, n), name-span: name-span, });
+        }
+        // a name
+        match first-name(n) {
+            some(t) => name-pattern(token-name(t), binds, token-span(l, t)),
+            none => Pattern.wild,
+        }
+    }
+
+    // the span of a node's first token
+    @(private) node-span-first-token: func(l: Lowerer, n: SyntaxNode) -> Span {
+        match first-token(n) {
+            some(t) => token-span(l, t),
+            none => nowhere(),
+        }
+    }
+
+    // let n: T: the name after its let
+    @(private) name-text-after-let: func(n: SyntaxNode) -> string {
+        for t in tokens(n) {
+            if t.green.kind == TokenKind.id && t.green.text != "let" { return token-name(t); }
+        }
+        ""
+    }
+
+    // a pattern as patterns whose alternatives bind nothing: each alternative that may bind taken
+    // out to the top (some(a(x) | b(x)) is some(a(x)) and some(b(x))), one pattern for each
+    alternatives: func(pat: Pattern) -> list<Pattern> {
+        match pat {
+            alt(ps) => {
+                if !may-bind(pat) { return [pat,]; }
+                let out: list<Pattern> = [];
+                for q in ps {
+                    for e in alternatives(q) { out.push(e); }
+                }
+                out
+            }
+            case(pc) => {
+                let out: list<Pattern> = [];
+                for e in alternatives(pc.sub) { out.push(Pattern.case({ name: pc.name, sub: e, span: pc.span, name-span: pc.name-span, })); }
+                out
+            }
+            typed(x) => {
+                let out: list<Pattern> = [];
+                for e in alternatives(x.sub) { out.push(Pattern.typed({ ty: x.ty, sub: e, test: x.test, })); }
+                out
+            }
+            member(x) => {
+                let out: list<Pattern> = [];
+                for e in alternatives(x.sub) { out.push(Pattern.member({ ty: x.ty, sub: e, })); }
+                out
+            }
+            tuple(ps) => {
+                let out: list<Pattern> = [];
+                for each in product(ps) { out.push(Pattern.tuple(each)); }
+                out
+            }
+            record(pr) => {
+                let out: list<Pattern> = [];
+                for each in product(pr.patterns) {
+                    out.push(Pattern.record({
+                        fields: pr.fields,
+                        field-spans: pr.field-spans,
+                        patterns: each,
+                        rest: pr.rest,
+                        rest-mark: pr.rest-mark,
+                        span: pr.span,
+                    }));
+                }
+                out
+            }
+            _ => [pat,],
+        }
+    }
+
+    // each choice of one alternative of each pattern, in order
+    product: func(ps: list<Pattern>) -> list<list<Pattern>> {
+        let out: list<list<Pattern>> = [[],];
+        for q in ps {
+            let next: list<list<Pattern>> = [];
+            for prefix in out {
+                for e in alternatives(q) {
+                    let one: list<Pattern> = [];
+                    for x in prefix { one.push(x); }
+                    one.push(e);
+                    next.push(one);
+                }
+            }
+            out = next;
+        }
+        out
+    }
+
+    // whether a pattern may bind a name (a name where one binds, ...rest, let n: T)
+    may-bind: func(pat: Pattern) -> bool {
+        match pat {
+            name(pn) => pn.binds,
+            case(pc) => may-bind(pc.sub),
+            record(pr) => {
+                if pr.rest != "" { return true; }
+                for q in pr.patterns {
+                    if may-bind(q) { return true; }
+                }
+                false
+            }
+            tuple(ps) => {
+                for q in ps {
+                    if may-bind(q) { return true; }
+                }
+                false
+            }
+            alt(ps) => {
+                for q in ps {
+                    if may-bind(q) { return true; }
+                }
+                false
+            }
+            typed(x) => true,
+            member(x) => may-bind(x.sub),
+            _ => false,
+        }
+    }
+
+    // ================================================================ expressions
+
+    expr-of: func(l: Lowerer, n: option<SyntaxNode>) -> Expr {
+        match n {
+            some(x) => expr(l, x),
+            none => node(ExprKind.unit, nowhere()),
+        }
+    }
+
+    expr: func(l: Lowerer, n: SyntaxNode) -> Expr {
+        let kind = tree.kind(n);
+        let parts = nodes(n);
+        let part = { index: s64 -> if index < parts.len() { expr(l, parts[index]) } else { node(ExprKind.unit, nowhere()) } };
+        if kind == NodeKind.literal {
+            let t = tokens(n)[0];
+            let at = token-span(l, t);
+            if t.green.kind == TokenKind.int { return node(ExprKind.int-lit(t.green.text), at); }
+            if t.green.kind == TokenKind.float { return node(ExprKind.float-lit(t.green.text), at); }
+            if t.green.kind == TokenKind.char { return node(ExprKind.char-lit(char-code(t.green.text.substring(1, t.green.text.len() - 1))), at); }
+            return node(ExprKind.bool-lit(t.green.text == "true"), at);
+        }
+        if kind == NodeKind.string-lit { return string(l, n); }
+        if kind == NodeKind.regex-lit { return regex(l, n); }
+        if kind == NodeKind.directive {
+            let written = tokens(n)[0].green.text;
+            return node(ExprKind.directive({ name: written.substring(1, written.len()), args: args(l, n), }), node-span(l, n));
+        }
+        if kind == NodeKind.unit-expr { return node(ExprKind.unit, node-span-first-token(l, n)); }
+        if kind == NodeKind.paren-expr { return part(0); }
+        if kind == NodeKind.tuple-expr {
+            let items: list<Expr> = [];
+            for x in parts { items.push(expr(l, x)); }
+            return node(ExprKind.tuple-lit(items), node-span(l, n));
+        }
+        if kind == NodeKind.list-expr {
+            let items: list<Expr> = [];
+            for x in parts { items.push(expr(l, x)); }
+            return node(ExprKind.list-lit(items), node-span(l, n));
+        }
+        if kind == NodeKind.if-expr {
+            let cond = part(0);
+            let then = if parts.len() > 1 { block(l, parts[1]) } else { empty-block() };
+            let otherwise: option<Block> = none;
+            if parts.len() > 2 {
+                let other = parts[2];
+                if tree.kind(other) == NodeKind.if-expr {
+                    let chained = expr(l, other);
+                    otherwise = some({
+                        stmts: [Stmt.expr-stmt({ value: chained, is-value: true, }),],
+                        spans: [chained.span,],
+                        span: chained.span,
+                    });
+                } else {
+                    otherwise = some(block(l, other));
+                }
+            }
+            return node(ExprKind.if-else({ cond: cond, then: then, otherwise: otherwise, }), node-span(l, n));
+        }
+        if kind == NodeKind.closure { return node(ExprKind.closure(closure(l, n)), node-span(l, n)); }
+        if kind == NodeKind.record-expr {
+            let fields: list<FieldInit> = [];
+            for f in nodes-of(n, NodeKind.record-field) {
+                match first-name(f) {
+                    some(t) => fields.push({ name: token-name(t), value: expr-of(l, first-node(f)), name-span: token-span(l, t), }),
+                    none => {}
+                }
+            }
+            return node(ExprKind.record-lit(fields), node-span(l, n));
+        }
+        if kind == NodeKind.match-expr {
+            let value = part(0);
+            let arms: list<Arm> = [];
+            for arm in nodes-of(n, NodeKind.match-arm) {
+                for a in arm-each(l, arm) { arms.push(a); }
+            }
+            return node(ExprKind.match-expr({ value: value, arms: arms, }), node-span(l, n));
+        }
+        if kind == NodeKind.block { return node(ExprKind.block(block(l, n)), node-span(l, n)); }
+        if kind == NodeKind.name-ref {
+            match first-name(n) {
+                some(t) => { return node(ExprKind.name(intern(token-name(t))), token-span(l, t)); }
+                none => { return node(ExprKind.unit, node-span(l, n)); }
+            }
+        }
+        if kind == NodeKind.field-expr {
+            let target = part(0);
+            let named = member-name(n);
+            match named {
+                some(t) => {
+                    let name = if t.green.kind == TokenKind.int { t.green.text } else { token-name(t) };
+                    return node(ExprKind.field({ target: target, name: name, name-span: token-span(l, t), }), from-to-end(l, target.span, n));
+                }
+                none => {
+                    // (x. with no name yet: kept, zero wide just past the dot)
+                    let dot = dot-span(l, n);
+                    let at: Span = { source: dot.source, line: dot.end-line, col: dot.end-col, end-line: dot.end-line, end-col: dot.end-col, };
+                    return node(ExprKind.field({ target: target, name: "", name-span: at, }), from-to-end(l, target.span, n));
+                }
+            }
+        }
+        if kind == NodeKind.method-call-expr {
+            let target = part(0);
+            let named = member-name(n);
+            let name = match named {
+                some(t) => token-name(t),
+                none => "",
+            };
+            let name-span = match named {
+                some(t) => token-span(l, t),
+                none => nowhere(),
+            };
+            return node(
+                ExprKind.method({ target: target, name: name, args: args(l, n), type-args: [], name-span: name-span, }),
+                from-to-end(l, target.span, n),
+            );
+        }
+        if kind == NodeKind.call-expr {
+            let callee = part(0);
+            return node(
+                ExprKind.call({ name: expr-name(callee), args: args(l, n), type-args: [], name-span: callee.span, }),
+                from-to-end(l, callee.span, n),
+            );
+        }
+        if kind == NodeKind.apply-expr {
+            let callee = part(0);
+            return node(ExprKind.apply({ callee: callee, args: args(l, n), }), from-to-end(l, callee.span, n));
+        }
+        if kind == NodeKind.index-expr {
+            let target = part(0);
+            return node(
+                ExprKind.method({ target: target, name: "at", args: [part(1),], type-args: [], name-span: nowhere(), }),
+                from-to-end(l, target.span, n),
+            );
+        }
+        if kind == NodeKind.binary-expr {
+            let left = part(0);
+            let op = tokens(n).map({ t -> t.green.text }).join("");
+            return node(ExprKind.binary({ op: op, left: left, right: part(1), }), from-to-end(l, left.span, n));
+        }
+        if kind == NodeKind.is-expr {
+            let value = part(0);
+            return node(ExprKind.is-test({ value: value, ty: type-of(l, if parts.len() > 1 { some(parts[1]) } else { none }), pattern: none, }), from-to-end(l, value.span, n));
+        }
+        if kind == NodeKind.cast-expr || kind == NodeKind.try-cast-expr {
+            let value = part(0);
+            let ty = type-of(l, if parts.len() > 1 { some(parts[1]) } else { none });
+            let made = if kind == NodeKind.cast-expr {
+                ExprKind.cast({ value: value, ty: ty, })
+            } else {
+                ExprKind.try-as({ value: value, ty: ty, pattern: none, })
+            };
+            return node(made, from-to-end(l, value.span, n));
+        }
+        if kind == NodeKind.unary-expr {
+            let op = tokens(n)[0].green.text;
+            return node(ExprKind.unary({ op: op, value: part(0), }), node-span(l, n));
+        }
+        if kind == NodeKind.yield-expr { return node(ExprKind.yield-expr(part(0)), node-span(l, n)); }
+        if kind == NodeKind.start-expr { return node(ExprKind.start-expr(part(0)), node-span(l, n)); }
+        if kind == NodeKind.wait-expr {
+            let fields: list<string> = [];
+            let values: list<Expr> = [];
+            if has(n, "\{") {
+                for f in nodes-of(n, NodeKind.wait-field) {
+                    match first-name(f) {
+                        some(t) => fields.push(token-name(t)),
+                        none => fields.push(""),
+                    }
+                    values.push(expr-of(l, first-node(f)));
+                }
+                return node(ExprKind.wait-expr({ mode: "all", values: values, fields: fields, }), node-span(l, n));
+            }
+            for x in parts { values.push(expr(l, x)); }
+            let mode: wait-mode = if values.len() > 1 { "any" } else { "one" };
+            return node(ExprKind.wait-expr({ mode: mode, values: values, fields: [], }), node-span(l, n));
+        }
+        node(ExprKind.unit, node-span(l, n))
+    }
+
+    // a call's arguments (its arg-list's)
+    args: func(l: Lowerer, n: SyntaxNode) -> list<Expr> {
+        let out: list<Expr> = [];
+        match first-of(n, NodeKind.arg-list) {
+            some(list) => { for a in nodes(list) { out.push(expr(l, a)); } }
+            none => {}
+        }
+        out
+    }
+
+    // a member's name: the name (or a tuple field's number) after its .
+    @(private) member-name: func(n: SyntaxNode) -> option<SyntaxToken> {
+        let dot = false;
+        for t in tokens(n) {
+            if is-word(t, ".") { dot = true; }
+            else if dot && (t.green.kind == TokenKind.id || t.green.kind == TokenKind.int) { return some(t); }
+        }
+        none
+    }
+
+    @(private) dot-span: func(l: Lowerer, n: SyntaxNode) -> Span {
+        for t in tokens(n) {
+            if is-word(t, ".") { return token-span(l, t); }
+        }
+        node-span(l, n)
+    }
+
+    // a match arm, an arm for each alternative of its pattern that binds (its guard and body
+    // lowered again for each: their own nodes, each checked with its own bindings' types)
+    arm-each: func(l: Lowerer, arm: SyntaxNode) -> list<Arm> {
+        let parts = nodes(arm);
+        let out: list<Arm> = [];
+        if parts.len() == 0 { return out; }
+        let guarded = has(arm, "if");
+        let count = alternatives(pattern(l, parts[0], false)).len();
+        for i in 0..count {
+            let chosen = alternatives(pattern(l, parts[0], false))[i];
+            let guard: option<Expr> = if guarded && parts.len() > 1 { some(expr(l, parts[1])) } else { none };
+            let body-node = parts[parts.len() - 1];
+            let body = if parts.len() < (if guarded { 3 } else { 2 }) {
+                node(ExprKind.unit, nowhere())
+            } else if tree.kind(body-node) == NodeKind.block {
+                node(ExprKind.block(block(l, body-node)), node-span(l, body-node))
+            } else {
+                expr(l, body-node)
+            };
+            out.push({ pattern: chosen, guard: guard, body: body, span: node-span(l, arm), });
+        }
+        out
+    }
+
+    // { params -> body }: a closure literal (its body's block from the -> to the })
+    closure: func(l: Lowerer, n: SyntaxNode) -> Closure {
+        let params: list<string> = [];
+        let spans: list<Span> = [];
+        let types: list<option<Type>> = [];
+        for p in nodes-of(n, NodeKind.closure-param) {
+            match first-name(p) {
+                some(t) => {
+                    params.push(token-name(t));
+                    spans.push(token-span(l, t));
+                }
+                none => {
+                    params.push("");
+                    spans.push(nowhere());
+                }
+            }
+            types.push(match first-node(p) {
+                some(ty) => some(parse-type(l, ty)),
+                none => none,
+            });
+        }
+        let arrow = nowhere();
+        for t in tokens(n) {
+            if is-word(t, "->") { arrow = token-span(l, t); }
+        }
+        let body = statements(l, n, from-to-end(l, arrow, n));
+        { params: params, types: types, body: body, marks: new-marks(params, spans), unit: { env: false, }, }
+    }
+
+    // ---- strings
+
+    // "text {expr} text": a string literal (one piece of text), or an interpolation of its pieces
+    // (the text between written nowhere of its own: the compiler's split of it)
+    string: func(l: Lowerer, n: SyntaxNode) -> Expr {
+        let at = node-span(l, n);
+        let kept = kept-bytes(l, n);
+        let parts: list<Expr> = [];
+        let chars = buffer(16);
+        for child in tree.children(n) {
+            match child {
+                token(t) => {
+                    if t.green.kind == TokenKind.string-text { decoded-into(t, kept, chars); }
+                }
+                node(inner) => {
+                    if tree.kind(inner) != NodeKind.interpolation { continue; }
+                    if chars.len() > 0 { parts.push(node(ExprKind.str-lit(chars.to-string()), nowhere())); }
+                    chars = buffer(16);
+                    let value = expr-of(l, first-node(inner));
+                    let spec = "";
+                    let has-spec = false;
+                    for t in tokens(inner) {
+                        if t.green.kind == TokenKind.format-spec {
+                            spec = t.green.text;
+                            has-spec = true;
+                        }
+                    }
+                    if !has-spec { parts.push(value); }
+                    else {
+                        parts.push(node(ExprKind.call({ name: "~format", args: [value, node(ExprKind.str-lit(spec), nowhere()),], type-args: [], name-span: nowhere(), }), at));
+                    }
+                }
+            }
+        }
+        if chars.len() > 0 || parts.len() == 0 { parts.push(node(ExprKind.str-lit(chars.to-string()), nowhere())); }
+        // (a string of no interpolation: its one piece, where the string is)
+        if parts.len() == 1 && is-str-lit(parts[0]) { return node(parts[0].kind, at); }
+        node(ExprKind.interp(parts), at)
+    }
+
+    // which of a string's bytes are its text's (a multiline one's: its lines past its indent, its
+    // first and last line breaks and each line's \r left out), as a range of the file: from, and
+    // a mark for each byte to its end
+    @(private) kept-bytes: func(l: Lowerer, n: SyntaxNode) -> KeptBytes {
+        let opening = tokens(n)[0];
+        let from = opening.offset + opening.green.text.len();
+        let to = match last-token(n) {
+            some(t) => if t.green.kind == TokenKind.string-end { t.offset } else { t.offset + t.green.text.len() },
+            none => from,
+        };
+        let marks: list<bool> = [];
+        for index in from..to { marks.push(true); }
+        if opening.green.text != "\"\"\"" { return { from: from, marks: marks, }; }
+        let place = token-span(l, opening);
+        let m = lexer.multiline(l.text, l.context, l.source, opening.offset, place.line, place.col, true);
+        let indent = m.indent;
+        for index in 0..marks.len() { marks[index] = false; }
+        // its lines: from past the line break after """ to the line break before the closing line
+        let first = from;
+        if l.text.byte-at(first) == 13 && l.text.byte-at(first + 1) == 10 { first += 2; }
+        else if l.text.byte-at(first) == 10 { first += 1; }
+        else { return { from: from, marks: marks, }; }
+        let brk = to - indent - 1;
+        if brk < first || l.text.byte-at(brk) != 10 { return { from: from, marks: marks, }; }
+        let stop = brk;
+        if stop > first && l.text.byte-at(stop - 1) == 13 { stop -= 1; }
+        let start = first;
+        loop {
+            if start > stop { break; }
+            let end = start;
+            loop {
+                if end >= stop || l.text.byte-at(end) == 10 { break; }
+                end += 1;
+            }
+            let line-end = if end > start && l.text.byte-at(end - 1) == 13 { end - 1 } else { end };
+            let text-start = if line-end > start { start + indent } else { start };
+            for index in text-start..line-end {
+                if index >= from && index < to { marks[index - from] = true; }
+            }
+            // the line break between two lines: the text's
+            if end < stop && end >= from && end < to { marks[end - from] = true; }
+            start = end + 1;
+        }
+        { from: from, marks: marks, }
+    }
+
+    // a string's text piece, what it says (its escapes undone), its bytes kept only, into out
+    @(private) decoded-into: func(t: SyntaxToken, kept: KeptBytes, out: buffer) {
+        let raw = t.green.text;
+        let index = 0;
+        loop {
+            if index >= raw.len() { break; }
+            let at = t.offset + index - kept.from;
+            let keep = at >= 0 && at < kept.marks.len() && kept.marks[at];
+            if !keep {
+                index += 1;
+                continue;
+            }
+            if raw.byte-at(index) == 92 {
+                let esc = escape(raw, index);
+                out.push(esc.text);
+                index += esc.width;
+            } else {
+                out.push-byte(raw.byte-at(index));
+                index += 1;
+            }
+        }
+    }
+
+    // the escape at raw[i] (a backslash): its text and how many bytes it takes (WAVE's \\ \"
+    // \' \n \r \t \u\{hex\}, and yel's \{ \} \0); one the parser told: nothing
+    escape: func(raw: string, i: s64) -> Escape {
+        let d = raw.byte-at(i + 1);
+        if d == 110 { return { text: from-byte(10), width: 2, }; }
+        if d == 116 { return { text: from-byte(9), width: 2, }; }
+        if d == 114 { return { text: from-byte(13), width: 2, }; }
+        if d == 48 { return { text: from-byte(0), width: 2, }; }
+        if d == 92 || d == 34 || d == 39 || d == 123 || d == 125 { return { text: from-byte(d), width: 2, }; }
+        if d == 117 && raw.byte-at(i + 2) == 123 {
+            let code = 0;
+            for j in i + 3..raw.len() {
+                let h = raw.byte-at(j);
+                if h == 125 { return { text: utf8(code), width: j + 1 - i, }; }
+                code = code * 16 + hex-value(h);
+            }
+        }
+        { text: "", width: 2, }
+    }
+
+    // a code point as UTF-8
+    utf8: func(code: s64) -> string {
+        if code < 128 { return from-byte(code); }
+        if code < 2048 { return from-byte(192 + code / 64) + from-byte(128 + code % 64); }
+        if code < 65536 {
+            return from-byte(224 + code / 4096) + from-byte(128 + (code / 64) % 64) + from-byte(128 + code % 64);
+        }
+        from-byte(240 + code / 262144) + from-byte(128 + (code / 4096) % 64) + from-byte(128 + (code / 64) % 64) + from-byte(128 + code % 64)
+    }
+
+    // a char literal's code point: its text (an escape, or one UTF-8 scalar)
+    char-code: func(raw: string) -> s64 {
+        let bytes = if raw.byte-at(0) == 92 { escape(raw, 0).text } else { raw };
+        let n = bytes.len();
+        if n == 0 { return 0; }
+        let b = bytes.byte-at(0);
+        let width = if b < 128 { 1 } else if b >= 240 { 4 } else if b >= 224 { 3 } else { 2 };
+        if width == 1 { return b; }
+        let code = if width == 2 { b - 192 } else if width == 3 { b - 224 } else { b - 240 };
+        for k in 1..width {
+            if k < n { code = code * 64 + bytes.byte-at(k) - 128; }
+        }
+        code
+    }
+
+    // a regex literal: its pattern compiled (regexp's: a bad one told where it is written), its
+    // matcher a func made (yel, parsed: the next declaration's place's), and its value std's
+    // regex.compiled(…) of them
+    regex: func(l: Lowerer, n: SyntaxNode) -> Expr {
+        let t = tokens(n)[0];
+        let at = token-span(l, t);
+        let written = t.green.text;
+        let close = written.find-last("/").unwrap-or(0);
+        let pattern = written.substring(1, close);
+        let flags = written.substring(close + 1, written.len());
+        let program = match regexp.compile(pattern, flags) {
+            ok(compiled) => compiled,
+            err(problem) => {
+                diagnostics.report(l.context, diagnostics.error(at, "the regex {written}: {problem}", ""));
+                return node(ExprKind.unit, at);
+            }
+        };
+        let name = "regex-at-{l.source}-{at.line}-{at.col}";
+        let text = regexp.matcher(program, name, flags.contains("m"));
+        l.context.sources.push({ path: "{l.context.sources[l.source].path} (regex at {at.line}:{at.col})", text: text, origin: some(at), });
+        let sub = reader(l.context, l.context.sources.len() - 1);
+        sub.scope = l.scope;
+        declarations(sub, l.made);
+        let names = program.names.map({ named -> quoted(named) });
+        let call = "regex.compiled({quoted(pattern)}, {quoted(flags)}, {program.groups}, {program.slots}, [{names.join(", ")}{if names.len() > 0 { "," } else { "" }}], {name})";
+        l.context.sources.push({ path: "{l.context.sources[l.source].path} (regex at {at.line}:{at.col})", text: call, origin: some(at), });
+        expression-source(l.context, l.context.sources.len() - 1)
+    }
+
+    // text as a yel string literal ("…": its \, " and braces escaped)
+    quoted: func(text: string) -> string {
+        let out = buffer(text.len() + 2);
+        out.push-byte(34);
+        for index in 0..text.len() {
+            let b = text.byte-at(index);
+            if b == 92 || b == 34 || b == 123 || b == 125 { out.push-byte(92); }
+            out.push-byte(b);
+        }
+        out.push-byte(34);
+        out.to-string()
+    }
+
+    // ================================================================ statements
+
+    empty-block: func() -> Block { { stmts: [], spans: [], span: nowhere(), } }
+
+    // a block's statements, its span from its { to its }
+    block: func(l: Lowerer, n: SyntaxNode) -> Block { statements(l, n, node-span(l, n)) }
+
+    // the statements in n (its statement nodes: what an error passed over left out), the block's
+    // span whole
+    statements: func(l: Lowerer, n: SyntaxNode, whole: Span) -> Block {
+        let stmts: list<Stmt> = [];
+        let spans: list<Span> = [];
+        for s in nodes(n) {
+            if !is-statement(tree.kind(s)) { continue; }
+            stmts.push(statement(l, s));
+            spans.push(node-span(l, s));
+        }
+        { stmts: stmts, spans: spans, span: whole, }
+    }
+
+    is-statement: func(kind: NodeKind) -> bool {
+        kind == NodeKind.let-stmt || kind == NodeKind.return-stmt || kind == NodeKind.wait-for-stmt || kind == NodeKind.loop-stmt
+            || kind == NodeKind.for-stmt || kind == NodeKind.break-stmt || kind == NodeKind.continue-stmt || kind == NodeKind.assign-stmt
+            || kind == NodeKind.expr-stmt
+    }
+
+    statement: func(l: Lowerer, n: SyntaxNode) -> Stmt {
+        let kind = tree.kind(n);
+        let parts = nodes(n);
+        if kind == NodeKind.let-stmt {
+            // (in the order written: its pattern, its type, its value)
+            let typed = has(n, ":");
+            let destructures = parts.len() > 0 && is-pattern(tree.kind(parts[0]));
+            let bound = if destructures { pattern(l, parts[0], true) } else { Pattern.wild };
+            let ty: option<Type> = if typed && parts.len() > (if destructures { 2 } else { 1 }) {
+                some(parse-type(l, parts[if destructures { 1 } else { 0 }]))
+            } else {
+                none
+            };
+            let value = if parts.len() > 0 { expr(l, parts[parts.len() - 1]) } else { node(ExprKind.unit, nowhere()) };
+            if destructures { return Stmt.let-pattern({ pattern: bound, ty: ty, value: value, }); }
+            let named-at = after-word(l, n, "let");
+            let name = match first-name-after(n, "let") {
+                some(t) => token-name(t),
+                none => "",
+            };
+            return Stmt.let-stmt({ name: name, ty: ty, value: value, mark: new-mark(name, named-at), });
+        }
+        if kind == NodeKind.return-stmt {
+            if parts.len() > 0 { return Stmt.return-stmt(expr(l, parts[0])); }
+            // (no value: unit, where the token after return is)
+            let after = tokens(n)[0];
+            return Stmt.return-stmt(node(ExprKind.unit, next-token-span(l, after.offset + after.green.text.len())));
+        }
+        if kind == NodeKind.wait-for-stmt { return wait-for(l, n); }
+        if kind == NodeKind.loop-stmt {
+            return Stmt.loop-stmt({ body: if parts.len() > 0 { block(l, parts[0]) } else { empty-block() }, unit: { env: false, }, });
+        }
+        if kind == NodeKind.for-stmt {
+            let named = first-name-after(n, "for");
+            let name = match named {
+                some(t) => token-name(t),
+                none => "",
+            };
+            let v-at = match named {
+                some(t) => token-span(l, t),
+                none => nowhere(),
+            };
+            let ranged = has(n, "..") || has(n, "..=");
+            let start = if parts.len() > 0 { expr(l, parts[0]) } else { node(ExprKind.unit, nowhere()) };
+            let stop: option<Expr> = if ranged && parts.len() > 1 { some(expr(l, parts[1])) } else { none };
+            let body = if parts.len() > 0 && tree.kind(parts[parts.len() - 1]) == NodeKind.block { block(l, parts[parts.len() - 1]) } else { empty-block() };
+            return Stmt.for-stmt({
+                name: name,
+                start: start,
+                stop: stop,
+                inclusive: has(n, "..="),
+                body: body,
+                mark: new-mark(name, v-at),
+                unit: { env: false, },
+            });
+        }
+        if kind == NodeKind.break-stmt { return Stmt.break-stmt; }
+        if kind == NodeKind.continue-stmt { return Stmt.continue-stmt; }
+        if kind == NodeKind.assign-stmt {
+            let e = if parts.len() > 0 { expr(l, parts[0]) } else { node(ExprKind.unit, nowhere()) };
+            let value = if parts.len() > 1 { expr(l, parts[1]) } else { node(ExprKind.unit, nowhere()) };
+            let op = "=";
+            for t in tokens(n) {
+                if t.green.kind == TokenKind.op && (t.green.text == "=" || t.green.text == "+=" || t.green.text == "-=" || t.green.text == "*="
+                    || t.green.text == "/=" || t.green.text == "%=") {
+                    op = t.green.text;
+                }
+            }
+            match e.kind {
+                name(name) => { return Stmt.assign({ name: name, op: op, value: value, name-span: e.span, }); }
+                field(f) => {
+                    return Stmt.assign-field({ target: f.target, name: f.name, op: op, value: value, name-span: f.name-span, });
+                }
+                // xs[i] = v: xs.set(i, v)
+                method(m) => {
+                    let first = if m.args.len() > 0 { m.args[0] } else { node(ExprKind.unit, nowhere()) };
+                    let set = node(ExprKind.method({ target: m.target, name: "set", args: [first, value,], type-args: [], name-span: nowhere(), }), e.span);
+                    return Stmt.expr-stmt({ value: set, is-value: false, });
+                }
+                _ => { return Stmt.expr-stmt({ value: e, is-value: false, }); }
+            }
+        }
+        // an expression statement: the block's value where it ends the block, written with no ;
+        let value = if parts.len() > 0 { expr(l, parts[0]) } else { node(ExprKind.unit, nowhere()) };
+        let closes = match token-after(n) {
+            some(t) => is-word(t, "\}"),
+            none => false,
+        };
+        Stmt.expr-stmt({ value: value, is-value: !has(n, ";") && closes, })
+    }
+
+    is-pattern: func(kind: NodeKind) -> bool {
+        kind == NodeKind.wild-pattern || kind == NodeKind.let-pattern || kind == NodeKind.typed-pattern || kind == NodeKind.literal-pattern
+            || kind == NodeKind.range-pattern || kind == NodeKind.record-pattern || kind == NodeKind.tuple-pattern
+            || kind == NodeKind.paren-pattern || kind == NodeKind.case-pattern || kind == NodeKind.name-pattern || kind == NodeKind.alt-pattern
+    }
+
+    // n's own name token right before its own token v (none: an empty list)
+    @(private) name-before: func(n: SyntaxNode, v: string) -> list<SyntaxToken> {
+        let own = tokens(n);
+        for index in 1..own.len() {
+            if is-word(own[index], v) && own[index - 1].green.kind == TokenKind.id { return [own[index - 1],]; }
+        }
+        []
+    }
+
+    // the first name token after n's own token v
+    @(private) first-name-after: func(n: SyntaxNode, v: string) -> option<SyntaxToken> {
+        let seen = false;
+        for t in tokens(n) {
+            if seen && t.green.kind == TokenKind.id { return some(t); }
+            if is-word(t, v) { seen = true; }
+        }
+        none
+    }
+
+    // wait for x in s { body }: the stream once, then a turn for each item, until it is closed:
+    // { let ~s = s; for ~t in 0..<s64 max> { match wait ~s.read() { some(let x) => { body }
+    // none => { break; } } } }
+    wait-for: func(l: Lowerer, n: SyntaxNode) -> Stmt {
+        let parts = nodes(n);
+        let named = first-name-after(n, "for");
+        let v = match named {
+            some(t) => token-name(t),
+            none => "",
+        };
+        // (the item's binding where the token after its name is: its in)
+        let vspan = match named {
+            some(t) => next-token-span(l, t.offset + t.green.text.len()),
+            none => nowhere(),
+        };
+        let source = if parts.len() > 0 { expr(l, parts[0]) } else { node(ExprKind.unit, nowhere()) };
+        let body = if parts.len() > 1 { block(l, parts[parts.len() - 1]) } else { empty-block() };
+        let sp = node-span(l, n);
+        let s-name = "~stream";
+        let read = node(ExprKind.method({
+            target: node(ExprKind.name(intern(s-name)), sp),
+            name: "read",
+            args: [],
+            type-args: [],
+            name-span: nowhere(),
+        }), sp,);
+        let waited = node(ExprKind.wait-expr({ mode: "one", values: [read,], fields: [], }), sp);
+        let item = Pattern.case({ name: "some", sub: name-pattern(v, true, vspan), span: sp, name-span: nowhere(), });
+        let done: Block = { stmts: [Stmt.break-stmt,], spans: [sp,], span: sp, };
+        let arms: list<Arm> = [
+            { pattern: item, guard: none, body: node(ExprKind.block(body), sp), span: sp, },
+            { pattern: name-pattern("none", false, sp), guard: none, body: node(ExprKind.block(done), sp), span: sp, },
+        ];
+        let each = node(ExprKind.match-expr({ value: waited, arms: arms, }), sp);
+        let turn: Block = { stmts: [Stmt.expr-stmt({ value: each, is-value: false, }),], spans: [sp,], span: sp, };
+        let turns = Stmt.loop-stmt({ body: turn, unit: { env: false, }, });
+        let bound = Stmt.let-stmt({ name: s-name, ty: none, value: source, mark: new-mark(s-name, nowhere()), });
+        let all: Block = { stmts: [bound, turns,], spans: [sp, sp,], span: sp, };
+        Stmt.expr-stmt({ value: node(ExprKind.block(all), sp), is-value: false, })
+    }
+
+    // ================================================================ declarations
+
+    // a declaration, into out: its attributes (@(private), @(observable), @(test), @(context))
+    // on what it declares
+    declaration: func(l: Lowerer, n: SyntaxNode, out: list<Decl>) {
+        let kind = tree.kind(n);
+        if kind == NodeKind.error { return; }
+        let attributes = nodes-of(n, NodeKind.attribute);
+        if attributes.len() == 0 {
+            declared(l, n, kind, out);
+            return;
+        }
+        let outer = l.scope;
+        let outer-observable = l.observable;
+        let outer-testing = l.testing;
+        let outer-context = l.in-context;
+        let level = outer.private;
+        for a in attributes {
+            let words = tokens(a);
+            for index in 0..words.len() {
+                let word = words[index];
+                if is-word(word, "private") {
+                    level = "package";
+                    if index + 1 < words.len() && is-word(words[index + 1], "=") { level = "file"; }
+                } else if is-word(word, "observable") {
+                    l.observable = true;
+                } else if is-word(word, "test") {
+                    l.testing = true;
+                } else if is-word(word, "context") {
+                    l.in-context = true;
+                }
+            }
+        }
+        l.scope = {
+            pkg: outer.pkg,
+            module: outer.module,
+            file: outer.file,
+            build: outer.build,
+            includes: outer.includes,
+            requests: outer.requests,
+            private: level,
+        };
+        declared(l, n, kind, out);
+        l.observable = outer-observable;
+        l.testing = outer-testing;
+        l.in-context = outer-context;
+        l.scope = outer;
+    }
+
+    // a declaration's name, noted (where a language server takes a definition to)
+    @(private) declared-name: func(l: Lowerer, n: SyntaxNode, after: string) -> tuple<string, Span> {
+        match first-name-after(n, after) {
+            some(t) => {
+                let at = token-span(l, t);
+                if !l.context.exits { l.context.declarations.push({ name: token-name(t), span: at, scope: l.scope, }); }
+                (token-name(t), at)
+            }
+            none => ("", nowhere()),
+        }
+    }
+
+    // a member's name noted (a field's, a flag's, a case's: owner#name)
+    @(private) note-member: func(l: Lowerer, owner: string, t: SyntaxToken) {
+        if !l.context.exits { l.context.declarations.push({ name: "{owner}#{token-name(t)}", span: token-span(l, t), scope: l.scope, }); }
+    }
+
+    // the span of a declaration's first token past its attributes (its keyword's)
+    @(private) keyword-span: func(l: Lowerer, n: SyntaxNode) -> Span {
+        let own = tokens(n);
+        if own.len() > 0 { token-span(l, own[0]) } else { node-span(l, n) }
+    }
+
+    // a string's text as written between its quotes, its tokens among n's own (an include's
+    // package, an attribute's value)
+    @(private) string-text-at: func(l: Lowerer, n: SyntaxNode, index: s64) -> string {
+        let all = tokens(n);
+        if index >= all.len() || all[index].green.kind != TokenKind.string-start { return ""; }
+        let opening = all[index];
+        let from = opening.offset + opening.green.text.len();
+        let depth = 0;
+        for at in index..all.len() {
+            let t = all[at];
+            if t.green.kind == TokenKind.string-start { depth += 1; }
+            if t.green.kind == TokenKind.string-end {
+                depth -= 1;
+                if depth == 0 { return l.text.substring(from, t.offset); }
+            }
+        }
+        l.text.substring(from, l.text.len())
+    }
+
+    // what a declaration node declares
+    @(private) declared: func(l: Lowerer, n: SyntaxNode, kind: NodeKind, out: list<Decl>) {
+        let parts = nodes(n).filter({ c -> tree.kind(c) != NodeKind.attribute && tree.kind(c) != NodeKind.c-attribute && tree.kind(c) != NodeKind.error });
+        if kind == NodeKind.package-decl {
+            let written: list<string> = [];
+            let past = false;
+            for t in tokens(n) {
+                if is-word(t, ";") { break; }
+                if past { written.push(t.green.text); }
+                if is-word(t, "package") { past = true; }
+            }
+            let full = written.join("");
+            let id = without-version(full);
+            let pkg = l.scope.pkg;
+            if pkg.id != "" && pkg.id != id {
+                let after = match last-token(n) {
+                    some(t) => next-token-span(l, t.offset + t.green.text.len()),
+                    none => node-span(l, n),
+                };
+                diagnostics.report(l.context, diagnostics.error(after, "this file says package {id}, but the package's others say {pkg.id}", ""));
+            }
+            pkg.id = id;
+            if full != id { pkg.version = full.substring(id.len() + 1, full.len()); }
+            return;
+        }
+        if kind == NodeKind.include-decl {
+            let from = keyword-span(l, n);
+            let names: list<string> = [];
+            let aliases: list<string> = [];
+            for included in nodes-of(n, NodeKind.include-name) {
+                let named = tokens(included).filter({ t -> t.green.kind == TokenKind.id && !is-word(t, "as") });
+                if named.len() == 0 { continue; }
+                names.push(token-name(named[0]));
+                aliases.push(token-name(named[named.len() - 1]));
+            }
+            l.scope.requests.push({ spec: string-text-at(l, n, 1), names: names, aliases: aliases, span: from, });
+            return;
+        }
+        if kind == NodeKind.module-decl {
+            let named = first-name-after(n, "module");
+            let m = match named {
+                some(t) => token-name(t),
+                none => "",
+            };
+            let named-at = match named {
+                some(t) => token-span(l, t),
+                none => nowhere(),
+            };
+            let outer = l.scope;
+            // (where its declarations start: what its errors point at)
+            let inside = match named {
+                some(t) => next-token-span(l, next-token-offset(l, t.offset + t.green.text.len()) + 1),
+                none => nowhere(),
+            };
+            if !l.context.exits { l.context.modules.push({ name: m, span: named-at, scope: outer, }); }
+            let direction: direction = "";
+            if outer.pkg.modules.has(m) && outer.pkg.modules[m] != direction {
+                diagnostics.report(l.context, diagnostics.error(inside, "module {m} is declared with another direction elsewhere", ""));
+            }
+            if outer.pkg.modules.has(m) && outer.pkg.private-modules.has(m) != (outer.private != "") {
+                diagnostics.report(l.context, diagnostics.error(inside, "module {m} is private in one of its blocks and not in another", ""));
+            }
+            outer.pkg.modules.set(m, direction);
+            if outer.private != "" {
+                outer.pkg.private-modules.set(m, { level: outer.private, pkg: outer.pkg, file: outer.file, span: inside, });
+            }
+            l.scope = {
+                pkg: outer.pkg,
+                module: m,
+                file: outer.file,
+                build: outer.build,
+                includes: outer.includes,
+                requests: outer.requests,
+                private: outer.private,
+            };
+            for inner in parts { declaration-made(l, inner, out); }
+            l.scope = outer;
+            return;
+        }
+        if kind == NodeKind.view-decl {
+            view-declaration(l, n, out);
+            return;
+        }
+        let decl-span = keyword-span(l, n);
+        if kind == NodeKind.record-decl {
+            let value = has(n, "record");
+            let (rname, _) = declared-name(l, n, if value { "record" } else { "resource" });
+            let fields: list<string> = [];
+            let types: list<Type> = [];
+            let ignored: list<string> = [];
+            for f in nodes-of(n, NodeKind.field-decl) {
+                // (its name: the one before its :, past an @(ignored))
+                let named = name-before(f, ":");
+                if named.len() == 0 { continue; }
+                let field = token-name(named[0]);
+                note-member(l, rname, named[0]);
+                fields.push(field);
+                if has(f, "@") { ignored.push(field); }
+                types.push(type-of(l, first-node(f)));
+            }
+            out.push(Decl.record-decl({
+                span: decl-span,
+                scope: l.scope,
+                name: rname,
+                fields: fields,
+                field-types: types,
+                value: value,
+                observable: l.observable,
+                ignored: ignored,
+            }));
+            return;
+        }
+        if kind == NodeKind.type-decl {
+            let (tname, _) = declared-name(l, n, "type");
+            out.push(Decl.type-decl({
+                span: decl-span,
+                scope: l.scope,
+                name: tname,
+                target: type-of(l, if parts.len() > 0 { some(parts[0]) } else { none }),
+                resolved: Type.unit-type,
+                distinct: has(n, "distinct"),
+            }));
+            return;
+        }
+        if kind == NodeKind.global-decl {
+            let (gname, _) = declared-name(l, n, "let");
+            let ty = type-of(l, if parts.len() > 0 { some(parts[0]) } else { none });
+            let value: option<Expr> = if parts.len() > 1 { some(expr(l, parts[1])) } else { none };
+            out.push(Decl.global-decl({
+                span: decl-span,
+                scope: l.scope,
+                name: gname,
+                ty: ty,
+                value: value,
+                context: l.in-context,
+            }));
+            return;
+        }
+        if kind == NodeKind.const-decl {
+            let (cname, _) = declared-name(l, n, "const");
+            let typed = has(n, ":");
+            let ty: option<Type> = if typed && parts.len() > 1 { some(parse-type(l, parts[0])) } else { none };
+            let value = if parts.len() > 0 { expr(l, parts[parts.len() - 1]) } else { node(ExprKind.unit, nowhere()) };
+            out.push(Decl.const-decl({ span: decl-span, scope: l.scope, name: cname, ty: ty, value: value, }));
+            return;
+        }
+        if kind == NodeKind.flags-decl {
+            let (fname, _) = declared-name(l, n, "flags");
+            let flags: list<string> = [];
+            for f in nodes-of(n, NodeKind.flag) {
+                match first-name(f) {
+                    some(t) => {
+                        note-member(l, fname, t);
+                        flags.push(token-name(t));
+                    }
+                    none => {}
+                }
+            }
+            out.push(Decl.flags-decl({ span: decl-span, scope: l.scope, name: fname, flags: flags, }));
+            return;
+        }
+        if kind == NodeKind.variant-decl {
+            let (tname, _) = declared-name(l, n, if has(n, "variant") { "variant" } else { "enum" });
+            let cases: list<CaseDecl> = [];
+            for c in nodes-of(n, NodeKind.case-decl) {
+                match first-name(c) {
+                    some(t) => {
+                        note-member(l, tname, t);
+                        let payload = first-node(c);
+                        cases.push({ name: token-name(t), has-payload: payload.is-some(), payload: type-of(l, payload), });
+                    }
+                    none => {}
+                }
+            }
+            out.push(Decl.variant-decl({ span: decl-span, scope: l.scope, name: tname, cases: cases, }));
+            return;
+        }
+        if kind == NodeKind.func-decl { func-declaration(l, n, out); }
+    }
+
+    // where the token at or past byte at starts
+    @(private) next-token-offset: func(l: Lowerer, at: s64) -> s64 {
+        match tree.token-from(l.root, at) {
+            some(t) => t.offset,
+            none => l.text.len(),
+        }
+    }
+
+    // name: func<T>(params) -> R { body }, or an extern's (@c(…) name: extern func(…) -> R;)
+    @(private) func-declaration: func(l: Lowerer, n: SyntaxNode, out: list<Decl>) {
+        let cfunc: CFunc = { name: "", keeps: [], gives: [], };
+        match first-of(n, NodeKind.c-attribute) {
+            some(c) => {
+                let words = tokens(c);
+                for index in 0..words.len() {
+                    if words[index].green.kind == TokenKind.id && index + 2 < words.len() && is-word(words[index + 1], "=") {
+                        let key = token-name(words[index]);
+                        let v = string-text-at(l, c, index + 2);
+                        if key == "name" { cfunc.name = v; }
+                        else if key == "keeps" { cfunc.keeps.push(v); }
+                        else if key == "gives" { cfunc.gives.push(v); }
+                    }
+                }
+            }
+            none => {}
+        }
+        let named = first-name(n);
+        let fname = match named {
+            some(t) => token-name(t),
+            none => "",
+        };
+        let decl-span = match named {
+            some(t) => token-span(l, t),
+            none => node-span(l, n),
+        };
+        let is-extern = has(n, "extern");
+        let is-async = has(n, "async");
+        let tps: list<string> = [];
+        match first-of(n, NodeKind.type-params) {
+            some(tp) => {
+                for t in tokens(tp) {
+                    if t.green.kind == TokenKind.id { tps.push(token-name(t)); }
+                }
+            }
+            none => {}
+        }
+        let params: list<string> = [];
+        let spans: list<Span> = [];
+        let types: list<Type> = [];
+        let defaults: list<option<Expr>> = [];
+        match first-of(n, NodeKind.param-list) {
+            some(list) => {
+                for p in nodes-of(list, NodeKind.param) {
+                    let parts = nodes(p);
+                    match first-name(p) {
+                        some(t) => {
+                            params.push(token-name(t));
+                            spans.push(token-span(l, t));
+                        }
+                        none => {
+                            params.push("");
+                            spans.push(nowhere());
+                        }
+                    }
+                    types.push(if parts.len() > 0 { parse-type(l, parts[0]) } else { Type.unit-type });
+                    defaults.push(if parts.len() > 1 { some(expr(l, parts[1])) } else { none });
+                }
+            }
+            none => {}
+        }
+        // its result: the type after its parameters, its body the block after that
+        let result = Type.unit-type;
+        let body: option<SyntaxNode> = none;
+        let past-params = false;
+        for c in nodes(n) {
+            let kind = tree.kind(c);
+            if kind == NodeKind.param-list { past-params = true; }
+            else if past-params && kind == NodeKind.block { body = some(c); }
+            else if past-params && kind != NodeKind.error { result = parse-type(l, c); }
+        }
+        if is-extern {
+            out.push(Decl.extern-decl({
+                span: decl-span,
+                scope: l.scope,
+                name: fname,
+                type-params: tps,
+                params: params,
+                param-types: types,
+                result: result,
+                c-name: cfunc.name,
+                keeps: cfunc.keeps,
+                gives: cfunc.gives,
+                wit-module: "",
+                wit-name: "",
+                is-async: is-async,
+                defaults: defaults,
+            }));
+            return;
+        }
+        out.push(Decl.func-decl({
+            span: decl-span,
+            scope: l.scope,
+            name: fname,
+            type-params: tps,
+            params: params,
+            param-types: types,
+            result: result,
+            body: match body {
+                some(b) => block(l, b),
+                none => empty-block(),
+            },
+            marks: new-marks(params, spans),
+            unit: { env: false, },
+            is-async: is-async,
+            is-generator: false,
+            bindings: { exprs: map.new(), assigns: map.new(), },
+            defaults: defaults,
+            is-test: l.testing,
+        }));
+    }
+
+    // view Name { fields; its element }: its fields and element as written, then the yel it is
+    // (lower-view)
+    @(private) view-declaration: func(l: Lowerer, n: SyntaxNode, out: list<Decl>) {
+        let named = first-name-after(n, "view");
+        let vname = match named {
+            some(t) => token-name(t),
+            none => "",
+        };
+        let named-at = match named {
+            some(t) => token-span(l, t),
+            none => nowhere(),
+        };
+        let fields: list<ViewField> = [];
+        let top: option<ViewElement> = none;
+        for c in nodes(n) {
+            let kind = tree.kind(c);
+            if kind == NodeKind.view-field {
+                let parts = nodes(c);
+                let field-name = name-before(c, ":");
+                if field-name.len() == 0 { continue; }
+                note-member(l, vname, field-name[0]);
+                fields.push({
+                    name: token-name(field-name[0]),
+                    ty: if parts.len() > 0 { parse-type(l, parts[0]) } else { Type.unit-type },
+                    value: if parts.len() > 1 { expr(l, parts[1]) } else { node(ExprKind.unit, nowhere()) },
+                    private: has(c, "private"),
+                });
+            } else if kind == NodeKind.view-element {
+                top = some(view-element(l, c));
+            }
+        }
+        match top {
+            some(element) => lower-view(l, vname, named-at, fields, element, out),
+            none => {}
+        }
+    }
+
+    // Name { items }: an element as written
+    @(private) view-element: func(l: Lowerer, n: SyntaxNode) -> ViewElement {
+        let tag = match first-name(n) {
+            some(t) => token-name(t),
+            none => "",
+        };
+        let element: ViewElement = { tag: tag, attributes: [], items: [], handlers: [], };
+        view-items(l, n, some(element), element.items);
+        element
+    }
+
+    // the items in n: text, elements, ifs, fors; and an element's attributes and handlers
+    @(private) view-items: func(l: Lowerer, n: SyntaxNode, where: option<ViewElement>, items: list<ViewItem>) {
+        for c in nodes(n) {
+            let kind = tree.kind(c);
+            if kind == NodeKind.view-text { items.push(ViewItem.text(expr-of(l, first-node(c)))); }
+            else if kind == NodeKind.view-if { items.push(ViewItem.if-item(view-if(l, c))); }
+            else if kind == NodeKind.view-for { items.push(ViewItem.for-item(view-for(l, c))); }
+            else if kind == NodeKind.view-element { items.push(ViewItem.element(view-element(l, c))); }
+            else if kind == NodeKind.view-handler {
+                match where {
+                    some(element) => {
+                        let event = match first-name-after(c, "on") {
+                            some(t) => token-name(t),
+                            none => "",
+                        };
+                        let body = match first-node(c) {
+                            some(b) => block(l, b),
+                            none => empty-block(),
+                        };
+                        element.handlers.push({ event: event, body: body, span: node-span-first-token(l, c), });
+                    }
+                    none => {}
+                }
+            } else if kind == NodeKind.view-attribute {
+                match where {
+                    some(element) => {
+                        let style = has(c, "style");
+                        let named = tokens(c).filter({ t -> t.green.kind == TokenKind.id && !(style && is-word(t, "style")) });
+                        let aname = if named.len() > 0 { token-name(named[0]) } else { "" };
+                        element.attributes.push({ name: aname, style: style, value: expr-of(l, first-node(c)), });
+                    }
+                    none => {}
+                }
+            }
+        }
+    }
+
+    // if cond { items } else { items }
+    @(private) view-if: func(l: Lowerer, n: SyntaxNode) -> ViewIf {
+        let parts = nodes(n);
+        let cond = if parts.len() > 0 { expr(l, parts[0]) } else { node(ExprKind.unit, nowhere()) };
+        let then: list<ViewItem> = [];
+        let otherwise: list<ViewItem> = [];
+        // (the items before the else its then's; an else if, the else's)
+        let past-else = false;
+        let index = 0;
+        for child in tree.children(n) {
+            match child {
+                token(t) => { if is-word(t, "else") { past-else = true; } }
+                node(c) => {
+                    index += 1;
+                    if index == 1 { continue; }
+                    let one: list<ViewItem> = [];
+                    let wrapper = c;
+                    view-items-one(l, wrapper, one);
+                    for item in one {
+                        if past-else { otherwise.push(item); } else { then.push(item); }
+                    }
+                }
+            }
+        }
+        { cond: cond, then: then, otherwise: otherwise, }
+    }
+
+    // one item node as items (an if's branch holds them directly)
+    @(private) view-items-one: func(l: Lowerer, c: SyntaxNode, out: list<ViewItem>) {
+        let kind = tree.kind(c);
+        if kind == NodeKind.view-text { out.push(ViewItem.text(expr-of(l, first-node(c)))); }
+        else if kind == NodeKind.view-if { out.push(ViewItem.if-item(view-if(l, c))); }
+        else if kind == NodeKind.view-for { out.push(ViewItem.for-item(view-for(l, c))); }
+        else if kind == NodeKind.view-element { out.push(ViewItem.element(view-element(l, c))); }
+    }
+
+    // for name in items key(key) { body }
+    @(private) view-for: func(l: Lowerer, n: SyntaxNode) -> ViewFor {
+        let parts = nodes(n);
+        let named = first-name-after(n, "for");
+        let body: list<ViewItem> = [];
+        for index in 2..parts.len() { view-items-one(l, parts[index], body); }
+        {
+            name: match named {
+                some(t) => token-name(t),
+                none => "",
+            },
+            items: if parts.len() > 0 { expr(l, parts[0]) } else { node(ExprKind.unit, nowhere()) },
+            key: if parts.len() > 1 { expr(l, parts[1]) } else { node(ExprKind.unit, nowhere()) },
+            body: body,
+            span: node-span-first-token(l, n),
+        }
+    }
+
+    // ================================================================ views (lowered to yel)
+
+
+    // the yel a view is (see view-declaration), parsed into out: its resource, observable (an effect for
+    // each binding that reads a field: the host told only of what changed), and its funcs
+    lower-view: func(l: Lowerer, vname: string, named-at: Span, fields: list<ViewField>, top: ViewElement, out: list<Decl>) {
+        let w: ViewWriter = { lines: [], holes: map.new(), types: map.new(), fields: [], count: 0, };
+        for f in fields { w.fields.push(f.name); }
+        let r = vname;
+        view-line(w, "@(observable) resource {r} \{");
+        for f in fields { view-line(w, "{f.name}: {view-type(w, f.ty)},"); }
+        // the owner of what mount made (unmount lets it go), the top node, whether mounted
+        view-line(w, "@(ignored) view-owner: reactive.Owner,");
+        view-line(w, "@(ignored) view-tree: u32,");
+        view-line(w, "@(ignored) view-mounted: bool,");
+        view-line(w, "\}");
+        let starts: list<string> = [];
+        for f in fields { starts.push("{f.name}: {view-hole(w, f.value)}, "); }
+        view-line(w, "new: func() -> {r} \{ \{ {starts.join("")}view-owner: reactive.new-owner(), view-tree: 0, view-mounted: false, \} \}");
+        view-line(w, "mount: func(self: {r}, root: u32) \{");
+        view-line(w, "self.view-owner = reactive.new-owner();");
+        view-line(w, "self.view-mounted = true;");
+        view-line(w, "reactive.within(self.view-owner, \{ ->");
+        let tree = view-element-lines(l, w, top, { parent: "", anchor: "", nodes: "", });
+        view-line(w, "self.view-tree = {tree};");
+        view-line(w, "\});");
+        view-line(w, "dom.append-child(root, self.view-tree);");
+        view-line(w, "\}");
+        // (not mounted: what is let go removes no nodes of its own, the tree goes at once)
+        view-line(w, "unmount: func(self: {r}) \{ self.view-mounted = false; reactive.dispose(self.view-owner); dom.remove(self.view-tree); \}");
+        view-line(w, "dispatch: func(self: {r}, handler-id: u32) \{ view-events.dispatch(handler-id); \}");
+        for f in fields {
+            if f.private { continue; }
+            view-line(w, "get-{f.name}: func(self: {r}) -> {view-type(w, f.ty)} \{ self.{f.name} \}");
+            view-line(w, "set-{f.name}: func(self: {r}, value: {view-type(w, f.ty)}) \{ self.{f.name} = value; reactive.flush(); \}");
+        }
+        // a handler, let go with the owner it is made under
+        view-line(w, "@(private) view-listen: func(node: u32, event: string, run: func()) \{");
+        view-line(w, "let id = view-events.handler(run);");
+        view-line(w, "reactive.on-cleanup(\{ -> view-events.release(id); \});");
+        view-line(w, "dom.add-event-listener(node, event, id);");
+        view-line(w, "\}");
+        // an attribute's or a style's value as the host takes it
+        view-line(w, "@(private) view-value: func(v: string | bool | s32 | f64 | dom.color) -> dom.attribute-value \{");
+        view-line(w, "match v \{");
+        view-line(w, "let s: string => dom.attribute-value.str(s),");
+        view-line(w, "let b: bool => dom.attribute-value.bool(b),");
+        view-line(w, "let n: s32 => dom.attribute-value.s32(n),");
+        view-line(w, "let x: f64 => dom.attribute-value.f64(x),");
+        view-line(w, "let c: dom.color => dom.attribute-value.color(c),");
+        view-line(w, "\}");
+        view-line(w, "\}");
+        let text = w.lines.join("\n");
+        l.context.sources.push({ path: "{l.context.sources[l.source].path} (view {vname})", text: text, origin: some(named-at), });
+        let sub = reader(l.context, l.context.sources.len() - 1);
+        sub.scope = l.scope;
+        let made: list<Decl> = [];
+        declarations(sub, made);
+        for d in made {
+            match d {
+                record-decl(x) => { for i in 0..x.field-types.len() { x.field-types[i] = view-typed(w, x.field-types[i]); } }
+                func-decl(f) => {
+                    for i in 0..f.param-types.len() { f.param-types[i] = view-typed(w, f.param-types[i]); }
+                    f.result = view-typed(w, f.result);
+                    view-fill-block(w, f.body);
+                }
+                _ => {}
+            }
+            out.push(d);
+        }
+    }
+
+    view-line: func(w: ViewWriter, line: string) { w.lines.push(line); }
+
+    // an error in what a view names (the view still lowered: each such error told)
+    view-error: func(l: Lowerer, at: Span, message: string) {
+        diagnostics.report(l.context, diagnostics.error(at, message, ""));
+    }
+
+    // a new name of the view's yel (view-<what><n>)
+    view-local: func(w: ViewWriter, what: string) -> string {
+        w.count += 1;
+        "view-{what}{w.count}"
+    }
+
+    // where e goes in the view's yel (its name there)
+    view-hole: func(w: ViewWriter, e: Expr) -> string {
+        let at = "view-hole-{w.holes.len()}";
+        w.holes.set(at, e);
+        at
+    }
+
+    view-type: func(w: ViewWriter, t: Type) -> string {
+        let at = "view-type-{w.types.len()}";
+        w.types.set(at, t);
+        at
+    }
+
+    // a type of the view's yel: the view's own, where it holds its place
+    view-typed: func(w: ViewWriter, t: Type) -> Type {
+        match t {
+            named(n) => w.types.get(name-text(n)).unwrap-or(t),
+            _ => t,
+        }
+    }
+
+    // what the view's yel holds in place of its expressions, put in
+    view-fill-expr: func(w: ViewWriter, e: Expr) {
+        match e.kind {
+            name(n) => {
+                match w.holes.get(name-text(n)) {
+                    some(h) => {
+                        e.kind = h.kind;
+                        e.span = h.span;
+                        return;
+                    }
+                    none => {}
+                }
+            }
+            _ => {}
+        }
+        let xs: list<Expr> = [];
+        let bs: list<Block> = [];
+        walk.expr-parts(e, xs, bs);
+        for x in xs { view-fill-expr(w, x); }
+        for b in bs { view-fill-block(w, b); }
+    }
+
+    view-fill-block: func(w: ViewWriter, b: Block) {
+        for s in b.stmts {
+            let xs: list<Expr> = [];
+            let bs: list<Block> = [];
+            walk.stmt-parts(s, xs, bs);
+            for x in xs { view-fill-expr(w, x); }
+            for inner in bs { view-fill-block(w, inner); }
+        }
+    }
+
+    // e, each field it names bare (count) the view's (self.count); whether it names one (so reads
+    // the view's state: a binding of it is kept current)
+    view-bind: func(l: Lowerer, w: ViewWriter, e: Expr) -> bool {
+        match e.kind {
+            name(n) => {
+                if w.fields.contains(name-text(n)) {
+                    e.kind = ExprKind.field({ target: node(ExprKind.name(intern("self")), nowhere()), name: name-text(n), name-span: e.span, });
+                    return true;
+                }
+                return false;
+            }
+            closure(cl) => {
+                for q in cl.params {
+                    if w.fields.contains(q) { view-error(l, e.span, "{q} is a field of the view: name the parameter otherwise"); }
+                }
+            }
+            _ => {}
+        }
+        let xs: list<Expr> = [];
+        let bs: list<Block> = [];
+        walk.expr-parts(e, xs, bs);
+        let named = false;
+        for x in xs { if view-bind(l, w, x) { named = true; } }
+        for b in bs { if view-bind-block(l, w, b) { named = true; } }
+        named
+    }
+
+    // a block's statements, as view-bind: a field assigned (count += 1) the view's
+    view-bind-block: func(l: Lowerer, w: ViewWriter, b: Block) -> bool {
+        let named = false;
+        for i in 0..b.stmts.len() {
+            match b.stmts[i] {
+                assign(a) => {
+                    let field = name-text(a.name);
+                    if w.fields.contains(field) {
+                        b.stmts[i] = Stmt.assign-field({ target: node(ExprKind.name(intern("self")), nowhere()), name: field, op: a.op, value: a.value, name-span: a.name-span, });
+                        named = true;
+                    }
+                }
+                let-stmt(x) => {
+                    if w.fields.contains(x.name) { view-error(l, b.spans[i], "{x.name} is a field of the view: name the local otherwise"); }
+                }
+                for-stmt(x) => {
+                    if w.fields.contains(x.name) { view-error(l, b.spans[i], "{x.name} is a field of the view: name the for's variable otherwise"); }
+                }
+                _ => {}
+            }
+            let xs: list<Expr> = [];
+            let bs: list<Block> = [];
+            walk.stmt-parts(b.stmts[i], xs, bs);
+            for x in xs { if view-bind(l, w, x) { named = true; } }
+            for inner in bs { if view-bind-block(l, w, inner) { named = true; } }
+        }
+        named
+    }
+
+    // n where it goes
+    view-place: func(w: ViewWriter, n: string, at: ViewPlace) {
+        if at.parent == "" { return; }
+        if at.anchor == "" {
+            view-line(w, "dom.append-child({at.parent}, {n});");
+        } else {
+            view-line(w, "dom.insert-before({at.parent}, {n}, {at.anchor});");
+            view-line(w, "{at.nodes}.push({n});");
+        }
+    }
+
+    // an element: made, its attributes set, its children made in it, its handlers added, and it
+    // put where it goes; its node's name
+    view-element-lines: func(l: Lowerer, w: ViewWriter, element: ViewElement, at: ViewPlace) -> string {
+        let n = view-local(w, "node");
+        view-line(w, "let {n} = dom.create-element(\"{element.tag}\");");
+        for a in element.attributes {
+            let set = if a.style { "dom.set-style" } else { "dom.set-attribute" };
+            let reads = view-bind(l, w, a.value);
+            let value = view-hole(w, a.value);
+            if !reads {
+                view-line(w, "{set}({n}, \"{a.name}\", view-value({value}));");
+            } else {
+                // its value again each time what it reads changes, the host told only where it differs
+                let f = view-local(w, "value");
+                let last = view-local(w, "last");
+                view-line(w, "let {f} = \{ -> view-value({value}) \};");
+                view-line(w, "let {last} = {f}();");
+                view-line(w, "{set}({n}, \"{a.name}\", {last});");
+                view-line(w, "let _ = reactive.effect(\{ -> let now = {f}(); if now != {last} \{ {set}({n}, \"{a.name}\", now); {last} = now; \} \{ -> \} \});");
+            }
+        }
+        for item in element.items { view-item-lines(l, w, item, { parent: n, anchor: "", nodes: "", }); }
+        for h in element.handlers {
+            view-bind-block(l, w, h.body);
+            let run = node(ExprKind.closure({ params: [], types: [], body: h.body, marks: new-marks([], []), unit: { env: false, }, }), h.span);
+            view-line(w, "view-listen({n}, \"{h.event}\", {view-hole(w, run)});");
+        }
+        view-place(w, n, at);
+        n
+    }
+
+    view-item-lines: func(l: Lowerer, w: ViewWriter, item: ViewItem, at: ViewPlace) {
+        match item {
+            text(e) => {
+                let reads = view-bind(l, w, e);
+                let value = view-hole(w, e);
+                let t = view-local(w, "text");
+                if !reads {
+                    view-line(w, "let {t} = dom.create-text({value});");
+                } else {
+                    let f = view-local(w, "value");
+                    let last = view-local(w, "last");
+                    view-line(w, "let {f} = \{ -> {value} \};");
+                    view-line(w, "let {last} = {f}();");
+                    view-line(w, "let {t} = dom.create-text({last});");
+                    view-line(w, "let _ = reactive.effect(\{ -> let now = {f}(); if now != {last} \{ dom.set-text-content({t}, now); {last} = now; \} \{ -> \} \});");
+                }
+                view-place(w, t, at);
+            }
+            element(x) => { let _ = view-element-lines(l, w, x, at); }
+            if-item(x) => view-if-lines(l, w, x, at),
+            for-item(x) => view-for-lines(l, w, x, at),
+        }
+    }
+
+    // if: an anchor where its branch goes, and an effect showing the branch its condition picks
+    // (made again only when that changes: what the branch made let go with it)
+    view-if-lines: func(l: Lowerer, w: ViewWriter, x: ViewIf, at: ViewPlace) {
+        let anchor = view-local(w, "anchor");
+        let shown = view-local(w, "shown");
+        let nodes = view-local(w, "nodes");
+        let owner = view-local(w, "owner");
+        let cond = view-local(w, "cond");
+        let want = view-local(w, "want");
+        let gone = view-local(w, "gone");
+        view-line(w, "let {anchor} = dom.create-comment(\"if\");");
+        view-place(w, anchor, at);
+        view-line(w, "let {shown} = 0;");
+        view-line(w, "let {nodes}: list<u32> = [];");
+        view-line(w, "let {owner} = reactive.new-owner();");
+        view-line(w, "reactive.on-cleanup(\{ -> reactive.dispose({owner}); if self.view-mounted \{ for {gone} in {nodes} \{ dom.remove({gone}); \} \} \});");
+        view-bind(l, w, x.cond);
+        view-line(w, "let {cond} = \{ -> {view-hole(w, x.cond)} \};");
+        view-line(w, "let _ = reactive.effect(\{ ->");
+        view-line(w, "let {want} = if {cond}() \{ 1 \} else \{ 2 \};");
+        view-line(w, "if {want} != {shown} \{");
+        view-line(w, "reactive.dispose({owner});");
+        view-line(w, "for {gone} in {nodes} \{ dom.remove({gone}); \}");
+        view-line(w, "{nodes} = [];");
+        view-line(w, "{shown} = {want};");
+        view-line(w, "observe.untracked(\{ -> reactive.within({owner}, \{ ->");
+        view-line(w, "if {want} == 1 \{");
+        let inside: ViewPlace = { parent: at.parent, anchor: anchor, nodes: nodes, };
+        for item in x.then { view-item-lines(l, w, item, inside); }
+        view-line(w, "\} else \{");
+        for item in x.otherwise { view-item-lines(l, w, item, inside); }
+        view-line(w, "\}");
+        view-line(w, "\}); \});");
+        view-line(w, "\}");
+        view-line(w, "\{ -> \}");
+        view-line(w, "\});");
+    }
+
+    // for: an anchor where its rows go, and an effect keeping a row for each item (by its key: a
+    // row kept, moved where its item now is; one made for a new key; one let go for a key gone)
+    view-for-lines: func(l: Lowerer, w: ViewWriter, x: ViewFor, at: ViewPlace) {
+        if w.fields.contains(x.name) { view-error(l, x.span, "{x.name} is a field of the view: name the for's variable otherwise"); }
+        let anchor = view-local(w, "anchor");
+        let keys = view-local(w, "keys");
+        let owners = view-local(w, "owners");
+        let rows = view-local(w, "rows");
+        let items = view-local(w, "items");
+        let now = view-local(w, "now");
+        let next-keys = view-local(w, "next-keys");
+        let next-owners = view-local(w, "next-owners");
+        let next-rows = view-local(w, "next-rows");
+        let used = view-local(w, "used");
+        let key = view-local(w, "key");
+        let found = view-local(w, "found");
+        let i = view-local(w, "i");
+        let gone = view-local(w, "gone");
+        let row = view-local(w, "row");
+        let owner = view-local(w, "owner");
+        view-line(w, "let {anchor} = dom.create-comment(\"for\");");
+        view-place(w, anchor, at);
+        view-line(w, "let {keys} = [];");
+        view-line(w, "let {owners}: list<reactive.Owner> = [];");
+        view-line(w, "let {rows}: list<list<u32>> = [];");
+        view-line(w, "reactive.on-cleanup(\{ -> for {owner} in {owners} \{ reactive.dispose({owner}); \} if self.view-mounted \{ for {row} in {rows} \{ for {gone} in {row} \{ dom.remove({gone}); \} \} \} \});");
+        view-bind(l, w, x.items);
+        view-line(w, "let {items} = \{ -> {view-hole(w, x.items)} \};");
+        view-line(w, "let _ = reactive.effect(\{ ->");
+        view-line(w, "let {now} = {items}();");
+        view-line(w, "observe.untracked(\{ ->");
+        view-line(w, "let {next-keys} = [];");
+        view-line(w, "let {next-owners}: list<reactive.Owner> = [];");
+        view-line(w, "let {next-rows}: list<list<u32>> = [];");
+        view-line(w, "let {used}: list<bool> = [];");
+        view-line(w, "for {i} in 0..{keys}.len() \{ {used}.push(false); \}");
+        view-line(w, "for {x.name} in {now} \{");
+        view-bind(l, w, x.key);
+        view-line(w, "let {key} = {view-hole(w, x.key)};");
+        view-line(w, "let {found} = -1;");
+        view-line(w, "for {i} in 0..{keys}.len() \{ if {found} < 0 && !{used}[{i}] && {keys}[{i}] == {key} \{ {found} = {i}; \} \}");
+        view-line(w, "if {found} >= 0 \{");
+        view-line(w, "{used}[{found}] = true;");
+        view-line(w, "for {gone} in {rows}[{found}] \{ dom.insert-before({at.parent}, {gone}, {anchor}); \}");
+        view-line(w, "{next-keys}.push({key}); {next-owners}.push({owners}[{found}]); {next-rows}.push({rows}[{found}]);");
+        view-line(w, "\} else \{");
+        view-line(w, "let {owner} = reactive.new-owner();");
+        view-line(w, "let {row}: list<u32> = [];");
+        view-line(w, "reactive.within({owner}, \{ ->");
+        let inside: ViewPlace = { parent: at.parent, anchor: anchor, nodes: row, };
+        for item in x.body { view-item-lines(l, w, item, inside); }
+        view-line(w, "\});");
+        view-line(w, "{next-keys}.push({key}); {next-owners}.push({owner}); {next-rows}.push({row});");
+        view-line(w, "\}");
+        view-line(w, "\}");
+        view-line(w, "for {i} in 0..{keys}.len() \{ if !{used}[{i}] \{ reactive.dispose({owners}[{i}]); for {gone} in {rows}[{i}] \{ dom.remove({gone}); \} \} \}");
+        view-line(w, "{keys} = {next-keys}; {owners} = {next-owners}; {rows} = {next-rows};");
+        view-line(w, "\});");
+        view-line(w, "\{ -> \}");
+        view-line(w, "\});");
+    }
+}
+
+// which of a string's bytes are its text's: from (a byte of the file), and for each byte from
+// there whether it is kept
+record KeptBytes { from: s64, marks: list<bool>, }
+
+// an escape in a string's or char's text: its bytes, and how many bytes of the text it takes
+record Escape { text: string, width: s64, }
+
+// a view as written (view Name { fields; its element }), before it is lowered to the yel it is
+// (parser.view-decl): its fields (each a prop, but those @(private)), and its element's tree
+resource ViewField { name: string, ty: Type, value: Expr, private: bool, }
+
+resource ViewElement { tag: string, attributes: list<ViewAttribute>, items: list<ViewItem>, handlers: list<ViewHandler>, }
+
+// name: value (style: style.name: value, a style of the host's vocabulary)
+resource ViewAttribute { name: string, style: bool, value: Expr, }
+
+// on event { … }
+resource ViewHandler { event: string, body: Block, span: Span, }
+
+record ViewIf { cond: Expr, then: list<ViewItem>, otherwise: list<ViewItem>, }
+
+// for name in items key(key) { body }
+resource ViewFor { name: string, items: Expr, key: Expr, body: list<ViewItem>, span: Span, }
+
+variant ViewItem { text(Expr), element(ViewElement), if-item(ViewIf), for-item(ViewFor), }
+
+// what lowering a view writes: its yel's lines, what is written where each view-hole-N and
+// view-type-N is (the view's own expressions and types, put in once its yel is parsed), its
+// fields' names, and how many names it has made
+resource ViewWriter {
+    lines: list<string>,
+    holes: map<string, Expr>,
+    types: map<string, Type>,
+    fields: list<string>,
+    count: s64,
+}
+
+// where a node goes: appended to parent ("": the view's top), or (anchor) put before anchor in
+// parent and kept in the list nodes names (what a branch or a row shows, let go with it)
+record ViewPlace { parent: string, anchor: string, nodes: string, }
+
+// a regex's tree: the empty pattern; a code point; any (.); a class (its ranges, closed, as code
+// points: lo, hi, ...); ^ and $ (at a line's too, under m); \b (\B: not); a group (index -1: not
+// one that captures); one after another; one of several; one repeated (max -1: no bound)
+variant RegexNode {
+    empty,
+    code(s64),
+    class(list<s64>),
+    line-start,
+    line-end,
+    boundary(bool),
+    group(RegexGroup),
+    sequence(list<RegexNode>),
+    choice(list<RegexNode>),
+    repeat(RegexRepeat),
+}
+
+record RegexGroup { index: s64, body: RegexNode, }
+
+record RegexRepeat { body: RegexNode, min: s64, max: s64, greedy: bool, }
+
+// an instruction: what it does (op: below), its operands, its class's ranges
+resource RegexInst { op: s64, a: s64, b: s64, ranges: list<s64>, }
+
+// what a pattern compiles to: its instructions, its groups (the whole match the first), the slots
+// its matcher keeps (two for each group, then one for each loop that may match nothing), and each
+// group's name ("" for none)
+resource RegexProgram { insts: list<RegexInst>, groups: s64, slots: s64, names: list<string>, }
+
+// the pattern being read: its code points, where, its flags, its groups so far and their names
+resource RegexReader {
+    codes: list<s64>,
+    at: s64,
+    fold: bool,
+    lines: bool,
+    dot-all: bool,
+    groups: s64,
+    names: list<string>,
+    error: string,
+}
+
+module regexp {
+    // the instructions' ops
+    const CODE: s64 = 0;
+    const CLASS: s64 = 1;
+    const SPLIT: s64 = 2;
+    const JUMP: s64 = 3;
+    const SAVE: s64 = 4;
+    const LINE-START: s64 = 5;
+    const LINE-END: s64 = 6;
+    const BOUNDARY: s64 = 7;
+    const ENTER: s64 = 8;
+    const PROGRESS: s64 = 9;
+    const DONE: s64 = 10;
+
+    // the largest code point
+    const MAX-CODE: s64 = 1114111;
+
+    // a pattern and its flags compiled, or what is wrong with them
+    compile: func(pattern: string, flags: string) -> result<RegexProgram, string> {
+        let r: RegexReader = {
+            codes: [],
+            at: 0,
+            fold: false,
+            lines: false,
+            dot-all: false,
+            groups: 1,
+            names: ["",],
+            error: "",
+        };
+        for index in 0..flags.len() {
+            let flag = flags.byte-at(index);
+            if flag == 105 { r.fold = true; }
+            else if flag == 109 { r.lines = true; }
+            else if flag == 115 { r.dot-all = true; }
+            else if flag == 103 { return err("no flag g: find-all, replace-all and split take each match"); }
+            else { return err("no flag {from-byte(flag)}: the flags are i, m and s"); }
+        }
+        for c in pattern.chars() { r.codes.push(c as s64); }
+        let tree = alternatives(r);
+        if r.error == "" && r.at < r.codes.len() { r.error = "an unmatched ) at {r.at}"; }
+        if r.error != "" { return err(r.error); }
+        let program: RegexProgram = { insts: [], groups: r.groups, slots: r.groups * 2, names: r.names, };
+        emit(program, SAVE, 0, 0, []);
+        compile-node(program, tree);
+        emit(program, SAVE, 1, 0, []);
+        emit(program, DONE, 0, 0, []);
+        if program.insts.len() > 20000 { return err("too large: {program.insts.len()} instructions (a smaller count, \{n,m\}, makes fewer)"); }
+        ok(program)
+    }
+
+    // ---- reading
+
+    // one of several (a | b), as far as a ) or the end
+    @(private) alternatives: func(r: RegexReader) -> RegexNode {
+        let options: list<RegexNode> = [sequence(r),];
+        loop {
+            if r.error != "" || r.at >= r.codes.len() || r.codes[r.at] != 124 { break; }
+            r.at += 1;
+            options.push(sequence(r));
+        }
+        if options.len() == 1 { options[0] } else { RegexNode.choice(options) }
+    }
+
+    // one after another, each repeated as a quantifier after it says
+    @(private) sequence: func(r: RegexReader) -> RegexNode {
+        let parts: list<RegexNode> = [];
+        loop {
+            if r.error != "" || r.at >= r.codes.len() { break; }
+            let c = r.codes[r.at];
+            if c == 124 || c == 41 { break; }
+            let atom = atom(r);
+            parts.push(quantified(r, atom));
+        }
+        if parts.len() == 1 { parts[0] } else if parts.len() == 0 { RegexNode.empty } else { RegexNode.sequence(parts) }
+    }
+
+    // an atom, and the quantifier after it if any (*, +, ?, {n}, {n,}, {n,m}; a ? after: lazy)
+    @(private) quantified: func(r: RegexReader, atom: RegexNode) -> RegexNode {
+        if r.at >= r.codes.len() { return atom; }
+        let c = r.codes[r.at];
+        let min = -1;
+        let max = -1;
+        if c == 42 { min = 0; max = -1; r.at += 1; }
+        else if c == 43 { min = 1; max = -1; r.at += 1; }
+        else if c == 63 { min = 0; max = 1; r.at += 1; }
+        else if c == 123 {
+            let start = r.at;
+            r.at += 1;
+            let low = number(r);
+            if low < 0 {
+                // ({ not a count: itself)
+                r.at = start;
+                return atom;
+            }
+            min = low;
+            max = low;
+            if r.at < r.codes.len() && r.codes[r.at] == 44 {
+                r.at += 1;
+                max = if r.at < r.codes.len() && r.codes[r.at] == 125 { -1 } else { number(r) };
+            }
+            if r.at >= r.codes.len() || r.codes[r.at] != 125 {
+                r.error = "a count not closed at {start}";
+                return atom;
+            }
+            r.at += 1;
+            if max >= 0 && max < min {
+                r.error = "a count {min} past its most, {max}";
+                return atom;
+            }
+            if max > 1000 || min > 1000 {
+                r.error = "a count past 1000";
+                return atom;
+            }
+        } else { return atom; }
+        match atom {
+            line-start => { r.error = "nothing to repeat: ^"; }
+            line-end => { r.error = "nothing to repeat: $"; }
+            boundary(_) => { r.error = "nothing to repeat: \\b"; }
+            _ => {}
+        }
+        let greedy = true;
+        if r.at < r.codes.len() && r.codes[r.at] == 63 {
+            greedy = false;
+            r.at += 1;
+        }
+        RegexNode.repeat({ body: atom, min: min, max: max, greedy: greedy, })
+    }
+
+    // a decimal count (-1 for none)
+    @(private) number: func(r: RegexReader) -> s64 {
+        let value = -1;
+        loop {
+            if r.at >= r.codes.len() { break; }
+            let c = r.codes[r.at];
+            if c < 48 || c > 57 { break; }
+            value = (if value < 0 { 0 } else { value }) * 10 + c - 48;
+            if value > 100000 { value = 100000; }
+            r.at += 1;
+        }
+        value
+    }
+
+    // a group, a class, ., ^, $, an escape, or a code point
+    @(private) atom: func(r: RegexReader) -> RegexNode {
+        let c = r.codes[r.at];
+        r.at += 1;
+        if c == 40 { return group(r); }
+        if c == 91 { return RegexNode.class(class(r)); }
+        if c == 46 {
+            // . : any but a line break (s: any)
+            return RegexNode.class(if r.dot-all { [0, MAX-CODE,] } else { complement([10, 10, 13, 13, 8232, 8233,]) });
+        }
+        if c == 94 { return RegexNode.line-start; }
+        if c == 36 { return RegexNode.line-end; }
+        if c == 92 { return escape(r); }
+        if c == 42 || c == 43 || c == 63 {
+            r.error = "nothing to repeat at {r.at - 1}";
+            return RegexNode.empty;
+        }
+        if c == 123 && r.at < r.codes.len() && is-digit(r.codes[r.at]) {
+            r.error = "nothing to repeat at {r.at - 1}";
+            return RegexNode.empty;
+        }
+        literal(r, c)
+    }
+
+    // ( … ): a group that captures, (?: … ) one that does not, (?<name> … ) one named
+    @(private) group: func(r: RegexReader) -> RegexNode {
+        let index = -1;
+        if r.at + 1 < r.codes.len() && r.codes[r.at] == 63 {
+            let kind = r.codes[r.at + 1];
+            if kind == 58 {
+                r.at += 2;
+            } else if kind == 60 && r.at + 2 < r.codes.len() && r.codes[r.at + 2] != 61 && r.codes[r.at + 2] != 33 {
+                r.at += 2;
+                let name = buffer(8);
+                loop {
+                    if r.at >= r.codes.len() {
+                        r.error = "a group's name not closed";
+                        return RegexNode.empty;
+                    }
+                    let n = r.codes[r.at];
+                    r.at += 1;
+                    if n == 62 { break; }
+                    if !(is-digit(n) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || n == 95 || n == 45) {
+                        r.error = "a group's name is letters, digits, - and _";
+                        return RegexNode.empty;
+                    }
+                    name.push-char(n as char);
+                }
+                let named = name.to-string();
+                if named == "" || r.names.contains(named) {
+                    r.error = if named == "" { "a group's name is empty" } else { "two groups named {named}" };
+                    return RegexNode.empty;
+                }
+                index = r.groups;
+                r.groups += 1;
+                r.names.push(named);
+            } else {
+                r.error = "(?{from-byte(kind)}: no such group (lookaround is not compiled: (?: … ) and (?<name> … ) are)";
+                return RegexNode.empty;
+            }
+        } else {
+            index = r.groups;
+            r.groups += 1;
+            r.names.push("");
+        }
+        let body = alternatives(r);
+        if r.error != "" { return RegexNode.empty; }
+        if r.at >= r.codes.len() || r.codes[r.at] != 41 {
+            r.error = "a group not closed";
+            return RegexNode.empty;
+        }
+        r.at += 1;
+        RegexNode.group({ index: index, body: body, })
+    }
+
+    // [ … ]: its ranges ([^ … ]: those not in it), each a code point, a range a-z, or an escape
+    @(private) class: func(r: RegexReader) -> list<s64> {
+        let negated = r.at < r.codes.len() && r.codes[r.at] == 94;
+        if negated { r.at += 1; }
+        let ranges: list<s64> = [];
+        let first = true;
+        loop {
+            if r.at >= r.codes.len() {
+                r.error = "a class not closed";
+                return [];
+            }
+            let c = r.codes[r.at];
+            if c == 93 && !first { break; }
+            first = false;
+            r.at += 1;
+            let low = c;
+            if c == 92 {
+                if r.at >= r.codes.len() {
+                    r.error = "a \\ at the end";
+                    return [];
+                }
+                let e = r.codes[r.at];
+                r.at += 1;
+                match class-escape(e) {
+                    some(set) => {
+                        for x in set { ranges.push(x); }
+                        continue;
+                    }
+                    none => {}
+                }
+                low = escaped-code(r, e);
+            }
+            // a range a-z (a - before ] is itself)
+            if r.at + 1 < r.codes.len() && r.codes[r.at] == 45 && r.codes[r.at + 1] != 93 {
+                r.at += 1;
+                let high = r.codes[r.at];
+                r.at += 1;
+                if high == 92 && r.at < r.codes.len() {
+                    let e = r.codes[r.at];
+                    r.at += 1;
+                    high = escaped-code(r, e);
+                }
+                if high < low {
+                    r.error = "a range out of order: {low as char}-{high as char}";
+                    return [];
+                }
+                ranges.push(low);
+                ranges.push(high);
+            } else {
+                ranges.push(low);
+                ranges.push(low);
+            }
+        }
+        r.at += 1;
+        let set = if r.fold { folded(normal(ranges)) } else { normal(ranges) };
+        if negated { complement(set) } else { set }
+    }
+
+    // \ and what follows: a class (\d \w \s and their complements), \b \B, or a code point
+    @(private) escape: func(r: RegexReader) -> RegexNode {
+        if r.at >= r.codes.len() {
+            r.error = "a \\ at the end";
+            return RegexNode.empty;
+        }
+        let e = r.codes[r.at];
+        r.at += 1;
+        if e == 98 { return RegexNode.boundary(false); }
+        if e == 66 { return RegexNode.boundary(true); }
+        if e >= 49 && e <= 57 {
+            r.error = "\\{from-byte(e)}: back references are not compiled";
+            return RegexNode.empty;
+        }
+        match class-escape(e) {
+            some(set) => { return RegexNode.class(normal(set)); }
+            none => {}
+        }
+        literal(r, escaped-code(r, e))
+    }
+
+    // a code point as the pattern says it (i: a letter in either case)
+    @(private) literal: func(r: RegexReader, c: s64) -> RegexNode {
+        if r.fold && ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { return RegexNode.class(folded([c, c,])); }
+        RegexNode.code(c)
+    }
+
+    // \d \D \w \W \s \S: their ranges (none: another escape)
+    @(private) class-escape: func(e: s64) -> option<list<s64>> {
+        let digits = [48, 57,];
+        let word = [48, 57, 65, 90, 95, 95, 97, 122,];
+        let space = [9, 13, 32, 32, 160, 160, 5760, 5760, 8192, 8202, 8232, 8233, 8239, 8239, 8287, 8287, 12288, 12288, 65279, 65279,];
+        if e == 100 { return some(digits); }
+        if e == 68 { return some(complement(digits)); }
+        if e == 119 { return some(word); }
+        if e == 87 { return some(complement(word)); }
+        if e == 115 { return some(space); }
+        if e == 83 { return some(complement(space)); }
+        none
+    }
+
+    // the code point an escape is: \n \t \r \f \v \0, \xHH, \uHHHH, \u{H…}, or the code point
+    // itself (\. \/ \\ …)
+    @(private) escaped-code: func(r: RegexReader, e: s64) -> s64 {
+        if e == 110 { return 10; }
+        if e == 116 { return 9; }
+        if e == 114 { return 13; }
+        if e == 102 { return 12; }
+        if e == 118 { return 11; }
+        if e == 48 { return 0; }
+        if e == 120 { return hex(r, 2); }
+        if e == 117 {
+            if r.at < r.codes.len() && r.codes[r.at] == 123 {
+                r.at += 1;
+                let value = 0;
+                let digits = 0;
+                loop {
+                    if r.at >= r.codes.len() || r.codes[r.at] == 125 { break; }
+                    match to-digit(r.codes[r.at], 16) {
+                        some(d) => { value = value * 16 + d; }
+                        none => {
+                            r.error = "\\u\{…\} takes hex digits";
+                            return 0;
+                        }
+                    }
+                    digits += 1;
+                    r.at += 1;
+                }
+                r.at += 1;
+                if digits == 0 || value > MAX-CODE { r.error = "\\u\{…\} is a code point, up to 10FFFF"; }
+                return value;
+            }
+            return hex(r, 4);
+        }
+        e
+    }
+
+    // n hex digits' value
+    @(private) hex: func(r: RegexReader, n: s64) -> s64 {
+        let value = 0;
+        for index in 0..n {
+            if r.at >= r.codes.len() {
+                r.error = "{n} hex digits were expected";
+                return 0;
+            }
+            match to-digit(r.codes[r.at], 16) {
+                some(d) => { value = value * 16 + d; }
+                none => {
+                    r.error = "{n} hex digits were expected";
+                    return 0;
+                }
+            }
+            r.at += 1;
+        }
+        value
+    }
+
+    // ---- ranges (pairs lo, hi of code points)
+
+    // sorted and joined: none overlapping or touching
+    @(private) normal: func(ranges: list<s64>) -> list<s64> {
+        let pairs: list<tuple<s64, s64>> = [];
+        let index = 0;
+        loop {
+            if index + 1 >= ranges.len() { break; }
+            pairs.push((ranges[index], ranges[index + 1]));
+            index += 2;
+        }
+        pairs.sort({ a, b -> a.0 < b.0 });
+        let out: list<s64> = [];
+        for pair in pairs {
+            let (low, high) = pair;
+            if out.len() > 0 && low <= out[out.len() - 1] + 1 {
+                if high > out[out.len() - 1] { out[out.len() - 1] = high; }
+            } else {
+                out.push(low);
+                out.push(high);
+            }
+        }
+        out
+    }
+
+    // what a set does not hold, of every code point
+    @(private) complement: func(ranges: list<s64>) -> list<s64> {
+        let set = normal(ranges);
+        let out: list<s64> = [];
+        let next = 0;
+        let index = 0;
+        loop {
+            if index + 1 >= set.len() { break; }
+            if set[index] > next {
+                out.push(next);
+                out.push(set[index] - 1);
+            }
+            next = set[index + 1] + 1;
+            index += 2;
+        }
+        if next <= MAX-CODE {
+            out.push(next);
+            out.push(MAX-CODE);
+        }
+        out
+    }
+
+    // a set with each ASCII letter's other case too (i)
+    @(private) folded: func(ranges: list<s64>) -> list<s64> {
+        let out: list<s64> = [];
+        let index = 0;
+        loop {
+            if index + 1 >= ranges.len() { break; }
+            let low = ranges[index];
+            let high = ranges[index + 1];
+            out.push(low);
+            out.push(high);
+            // the letters in it, the other case
+            let upper-low = if low > 65 { low } else { 65 };
+            let upper-high = if high < 90 { high } else { 90 };
+            if upper-low <= upper-high {
+                out.push(upper-low + 32);
+                out.push(upper-high + 32);
+            }
+            let lower-low = if low > 97 { low } else { 97 };
+            let lower-high = if high < 122 { high } else { 122 };
+            if lower-low <= lower-high {
+                out.push(lower-low - 32);
+                out.push(lower-high - 32);
+            }
+            index += 2;
+        }
+        normal(out)
+    }
+
+    // ---- compiling
+
+    @(private) emit: func(program: RegexProgram, op: s64, a: s64, b: s64, ranges: list<s64>) -> s64 {
+        program.insts.push({ op: op, a: a, b: b, ranges: ranges, });
+        program.insts.len() - 1
+    }
+
+    // a node's instructions, at the end of program's
+    @(private) compile-node: func(program: RegexProgram, node: RegexNode) {
+        match node {
+            empty => {}
+            code(c) => { let _ = emit(program, CODE, c, 0, []); }
+            class(ranges) => { let _ = emit(program, CLASS, 0, 0, ranges); }
+            line-start => { let _ = emit(program, LINE-START, 0, 0, []); }
+            line-end => { let _ = emit(program, LINE-END, 0, 0, []); }
+            boundary(negated) => { let _ = emit(program, BOUNDARY, if negated { 1 } else { 0 }, 0, []); }
+            group(g) => {
+                if g.index >= 0 { let _ = emit(program, SAVE, g.index * 2, 0, []); }
+                compile-node(program, g.body);
+                if g.index >= 0 { let _ = emit(program, SAVE, g.index * 2 + 1, 0, []); }
+            }
+            sequence(parts) => { for part in parts { compile-node(program, part); } }
+            choice(options) => {
+                // split to each, the first tried first; each jumps past the others when it is done
+                let jumps: list<s64> = [];
+                for index in 0..options.len() {
+                    if index + 1 < options.len() {
+                        let split = emit(program, SPLIT, 0, 0, []);
+                        program.insts[split].a = program.insts.len();
+                        compile-node(program, options[index]);
+                        jumps.push(emit(program, JUMP, 0, 0, []));
+                        program.insts[split].b = program.insts.len();
+                    } else {
+                        compile-node(program, options[index]);
+                    }
+                }
+                for jump in jumps { program.insts[jump].a = program.insts.len(); }
+            }
+            repeat(x) => repeated(program, x),
+        }
+    }
+
+    // body min times, then up to max more (any more: a loop), the ones past min each a choice (a
+    // greedy one tried first, a lazy one last); a loop whose body may match nothing ends where it
+    // does (as JavaScript's)
+    @(private) repeated: func(program: RegexProgram, x: RegexRepeat) {
+        for index in 0..x.min { compile-node(program, x.body); }
+        if x.max < 0 {
+            let empty = nullable(x.body);
+            let slot = program.slots;
+            if empty { program.slots += 1; }
+            let top = emit(program, SPLIT, 0, 0, []);
+            let body = program.insts.len();
+            if empty { let _ = emit(program, ENTER, slot, 0, []); }
+            compile-node(program, x.body);
+            if empty { let _ = emit(program, PROGRESS, slot, 0, []); }
+            let _ = emit(program, JUMP, top, 0, []);
+            choose(program, top, body, program.insts.len(), x.greedy);
+            return;
+        }
+        let splits: list<s64> = [];
+        for index in x.min..x.max {
+            let split = emit(program, SPLIT, 0, 0, []);
+            splits.push(split);
+            program.insts[split].a = program.insts.len();
+            compile-node(program, x.body);
+        }
+        for split in splits { choose(program, split, program.insts[split].a, program.insts.len(), x.greedy); }
+    }
+
+    // a split's two ways: the body's first where greedy, else past it first
+    @(private) choose: func(program: RegexProgram, split: s64, body: s64, past: s64, greedy: bool) {
+        program.insts[split].a = if greedy { body } else { past };
+        program.insts[split].b = if greedy { past } else { body };
+    }
+
+    // whether a node may match nothing
+    @(private) nullable: func(node: RegexNode) -> bool {
+        match node {
+            empty => true,
+            code(_) => false,
+            class(_) => false,
+            line-start => true,
+            line-end => true,
+            boundary(_) => true,
+            group(g) => nullable(g.body),
+            sequence(parts) => parts.all({ part -> nullable(part) }),
+            choice(options) => options.any({ option -> nullable(option) }),
+            repeat(x) => x.min == 0 || nullable(x.body),
+        }
+    }
+
+    // ---- writing
+
+    // program's matcher as yel: name(text, start, slots) -> bool, its states a match on pc. A
+    // choice is kept on a stack of threes (where to go on, at, and -1), as is a slot's value before
+    // it was set (-1, the slot, its value): a failure goes back to the last choice, the slots set
+    // since given back their values
+    matcher: func(program: RegexProgram, name: string, lines: bool) -> string {
+        let out: list<string> = [
+            "@(private) {name}: func(text: string, start: s64, slots: list<s64>) -> bool \{",
+            "    let stack: list<s64> = [];",
+            "    let pc = 0;",
+            "    let at = start;",
+            "    let size = text.len();",
+            "    loop \{",
+            "        match pc \{",
+        ];
+        for index in 0..program.insts.len() {
+            let inst = program.insts[index];
+            let next = index + 1;
+            let arm = if inst.op == CODE {
+                code-test(inst.a, next)
+            } else if inst.op == CLASS {
+                "if at < size \{ let step = regex.next-code(text, at); let c = step >> 3; if {ranges-test(inst.ranges)} \{ at += step & 7; pc = {next}; \} else \{ pc = -1; \} \} else \{ pc = -1; \}"
+            } else if inst.op == SPLIT {
+                "stack.push({inst.b}); stack.push(at); stack.push(-1); pc = {inst.a};"
+            } else if inst.op == JUMP {
+                "pc = {inst.a};"
+            } else if inst.op == SAVE || inst.op == ENTER {
+                "stack.push(-1); stack.push({inst.a}); stack.push(slots[{inst.a}]); slots[{inst.a}] = at; pc = {next};"
+            } else if inst.op == PROGRESS {
+                "pc = if at == slots[{inst.a}] \{ -1 \} else \{ {next} \};"
+            } else if inst.op == LINE-START {
+                if lines { "pc = if at == 0 || text.byte-at(at - 1) == 10 \{ {next} \} else \{ -1 \};" } else { "pc = if at == 0 \{ {next} \} else \{ -1 \};" }
+            } else if inst.op == LINE-END {
+                if lines { "pc = if at == size || text.byte-at(at) == 10 \{ {next} \} else \{ -1 \};" } else { "pc = if at == size \{ {next} \} else \{ -1 \};" }
+            } else if inst.op == BOUNDARY {
+                "pc = if regex.boundary(text, at) {if inst.a == 1 { "!=" } else { "==" }} true \{ {next} \} else \{ -1 \};"
+            } else {
+                "return true;"
+            };
+            out.push("            {index} => \{ {arm} \}");
+        }
+        out.push("            _ => \{");
+        out.push("                // a failure: back to the last choice, the slots set since given back");
+        out.push("                loop \{");
+        out.push("                    if stack.len() == 0 \{ return false; \}");
+        out.push("                    let value = stack.pop();");
+        out.push("                    let where = stack.pop();");
+        out.push("                    let to = stack.pop();");
+        out.push("                    if to == -1 \{ slots[where] = value; \} else \{ pc = to; at = where; break; \}");
+        out.push("                \}");
+        out.push("            \}");
+        out.push("        \}");
+        out.push("    \}");
+        out.push("\}");
+        out.join("\n")
+    }
+
+    // a code point's test: its UTF-8 bytes there, one after another
+    @(private) code-test: func(c: s64, next: s64) -> string {
+        let bytes = "{c as char}".bytes();
+        let tests: list<string> = ["at + {bytes.len()} <= size",];
+        for index in 0..bytes.len() { tests.push("text.byte-at(at + {index}) == {bytes[index]}"); }
+        "if {tests.join(" && ")} \{ at += {bytes.len()}; pc = {next}; \} else \{ pc = -1; \}"
+    }
+
+    // whether c is in ranges, as yel
+    @(private) ranges-test: func(ranges: list<s64>) -> string {
+        if ranges.len() == 0 { return "false"; }
+        let tests: list<string> = [];
+        let index = 0;
+        loop {
+            if index + 1 >= ranges.len() { break; }
+            let low = ranges[index];
+            let high = ranges[index + 1];
+            tests.push(if low == high { "c == {low}" } else if low == 0 { "c <= {high}" } else if high == MAX-CODE { "c >= {low}" } else { "(c >= {low} && c <= {high})" });
+            index += 2;
+        }
+        "({tests.join(" || ")})"
+    }
+}

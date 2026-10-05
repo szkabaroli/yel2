@@ -1,7 +1,7 @@
 // Fixed-length lists: list<T, N> holds N items by value (WIT's fixed-length list), list<T, ?> takes
 // its length from the let's value.
 
-record Particle { name: string, pos: list<f64, 3>, }
+resource Particle { name: string, pos: list<f64, 3>, }
 
 // passed and returned by value: the caller's copy is its own
 scaled: func(v: list<s32, 3>, k: s32) -> list<s32, 3> {

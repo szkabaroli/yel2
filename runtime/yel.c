@@ -2,10 +2,32 @@
 // each program (the C backend's, the bitcode backend's alike).
 #include "yel.h"
 
+// Y_HOSTED: a component built for a host that grants only the streams and the clocks (the shell's
+// UI hosts: no wasi:cli/environment, no wasi:cli/exit). Nothing is read from the environment (the
+// YEL_GC_* switches, NO_COLOR), and what stops the program traps: the host sees the component's
+// call fail, as a component's fatal error is told
+#if defined(Y_HOSTED)
+#define y_getenv(name) ((const char *)0)
+#define y_stop() __builtin_trap()
+#else
+#define y_getenv(name) getenv(name)
+// a forked child (std:process) stops without its parent's teardown (libuv's thread pool, which
+// exit's handlers join, is the parent's): _exit, its output flushed
+static bool y_forked = false;
+Y_NORETURN static void y_stop_now(void) {
+	if (y_forked) {
+		fflush(NULL);
+		_exit(1);
+	}
+	exit(1);
+}
+#define y_stop() y_stop_now()
+#endif
+
 Y_NORETURN void y_die(const char *message) {
 	fflush(stdout);
 	fprintf(stderr, "yel: %s\n", message);
-	exit(1);
+	y_stop();
 }
 
 // memory the runtime keeps for itself (never collected)
@@ -57,6 +79,70 @@ void y_globals(void (*init)(void), void (*mark)(void)) {
 	y_globals_made = true;
 	y_tracer(mark);
 	init();
+}
+
+// ---- exported resources: the objects the host holds handles to, each resource's in a table by
+// rep (its index: the handle's, natively; the host's handle names it in a component)
+
+typedef struct {
+	void **objects;
+	int32_t len, cap;
+	int32_t *free;
+	int32_t nfree, free_cap;
+} y_res_table;
+
+static y_res_table *y_res_tables;
+static int32_t y_nres_tables;
+
+// every table's objects: the collector's roots (a host holding a handle keeps its object)
+static void y_res_mark(void) {
+	for (int32_t t = 0; t < y_nres_tables; t++)
+		for (int32_t i = 0; i < y_res_tables[t].len; i++) y_mark(y_res_tables[t].objects[i]);
+}
+
+static y_res_table *y_res_at(int32_t table) {
+	if (table >= y_nres_tables) {
+		if (y_nres_tables == 0) y_tracer(y_res_mark);
+		y_res_tables = realloc(y_res_tables, sizeof(y_res_table) * (size_t)(table + 1));
+		memset(y_res_tables + y_nres_tables, 0, sizeof(y_res_table) * (size_t)(table + 1 - y_nres_tables));
+		y_nres_tables = table + 1;
+	}
+	return &y_res_tables[table];
+}
+
+/** An object given the host (an own handle made): its rep, a free slot of its resource's table. */
+int32_t y_res_new(int32_t table, void *object) {
+	y_res_table *t = y_res_at(table);
+	if (t->nfree > 0) {
+		int32_t rep = t->free[--t->nfree];
+		t->objects[rep] = object;
+		return rep;
+	}
+	if (t->len == t->cap) {
+		t->cap = t->cap ? t->cap * 2 : 8;
+		t->objects = realloc(t->objects, sizeof(void *) * (size_t)t->cap);
+	}
+	t->objects[t->len] = object;
+	return t->len++;
+}
+
+/** The object a rep names (a borrowed handle's, a method's self). */
+void *y_res_get(int32_t table, int32_t rep) {
+	y_res_table *t = y_res_at(table);
+	if (rep < 0 || rep >= t->len || !t->objects[rep]) y_die("a resource's handle the component did not give");
+	return t->objects[rep];
+}
+
+/** A rep let go (the host dropped its handle): its slot free again, its object no longer held. */
+void y_res_free(int32_t table, int32_t rep) {
+	y_res_table *t = y_res_at(table);
+	if (rep < 0 || rep >= t->len || !t->objects[rep]) return;
+	t->objects[rep] = NULL;
+	if (t->nfree == t->free_cap) {
+		t->free_cap = t->free_cap ? t->free_cap * 2 : 8;
+		t->free = realloc(t->free, sizeof(int32_t) * (size_t)t->free_cap);
+	}
+	t->free[t->nfree++] = rep;
 }
 
 y_pte *y_pt;
@@ -355,7 +441,7 @@ ystr yel_buffer_string(ybuffer *b) { return b->len ? (ystr){ b->len, b->data } :
 
 // whether stderr may be colored: a terminal, and NO_COLOR not set
 bool yel_stderr_color(void) {
-	const char *no = getenv("NO_COLOR");
+	const char *no = y_getenv("NO_COLOR");
 	return (no == NULL || no[0] == 0) && isatty(2);
 }
 
@@ -363,7 +449,7 @@ bool yel_stderr_color(void) {
 Y_NORETURN void yel_no_match(ystr shown) {
 	fflush(stdout);
 	fprintf(stderr, "yel: no match arm for %.*s\n", (int)shown.len, shown.data);
-	exit(1);
+	y_stop();
 }
 
 // ---------------------------------------------------------------- lists
@@ -549,7 +635,7 @@ Y_NORETURN yunit yel_panic(ystr message) {
 	fputs("panic: ", stderr);
 	yel_eprint(message);
 	fputc('\n', stderr);
-	exit(1);
+	y_stop();
 }
 
 char *y_cstr(ystr s) {
@@ -650,15 +736,15 @@ ylist *y_start(int argc, char **argv) {
 	y_started = true;
 	y_argc = argc;
 	y_argv = argv;
-	const char *stress = getenv("YEL_GC_STRESS");
+	const char *stress = y_getenv("YEL_GC_STRESS");
 	if (stress) y_stress = y_stress_left = y_env_count(stress);
-	const char *stats = getenv("YEL_GC_STATS");
+	const char *stats = y_getenv("YEL_GC_STATS");
 	if (stats) {
 		atexit(y_stats);
 		// YEL_GC_STATS=2: each collection too
 		y_verbose = y_env_count(stats) > 1;
 	}
-	const char *min = getenv("YEL_GC_MIN_MB");
+	const char *min = y_getenv("YEL_GC_MIN_MB");
 	if (min) {
 		const long mb = y_env_count(min);
 		y_heap_min = y_heap_limit = (size_t)(mb > 1024 * 1024 ? 1024 * 1024 : mb) << 20;
@@ -690,9 +776,117 @@ ylist *y_async_rooted(ylist **l) {
 
 ylist *yel_async_tasks(void) { return y_async_rooted(&y_async_list); }
 
+// ---- YEL_ASYNC_TRACE: what the executor does with tasks, told on stderr. 1: each task started
+// (by which), each time it parks and what it waits for, and once it is done (how long it was
+// stepped, in how many steps, how long it lived); the tasks still waiting at a deadlock, and those
+// never done at the program's end. 2: each step and each wake too. Unset (or 0): nothing told,
+// nothing kept
+
+// (waits: what it waits for, kept where it parks in this step; last: what it waited for last)
+typedef struct { int64_t started, stepped, steps; char waits[120]; char last[120]; } y_task_trace;
+static int y_trace_level = -1;
+static y_task_trace *y_traces;
+static int64_t y_ntraces, y_traces_cap, y_task_count;
+
+/** How much is told (YEL_ASYNC_TRACE, read once). */
+static int y_async_tracing(void) {
+	if (y_trace_level < 0) {
+		const char *v = y_getenv("YEL_ASYNC_TRACE");
+		y_trace_level = v ? atoi(v) : 0;
+	}
+	return y_trace_level;
+}
+
+static int64_t y_trace_ns(void) {
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (int64_t)now.tv_sec * 1000000000 + (int64_t)now.tv_nsec;
+}
+
+/** What is kept of a task (none: not traced). */
+static y_task_trace *y_trace_of(y_async *t) {
+	if (!t || t->id <= 0 || t->id > y_ntraces) return NULL;
+	return &y_traces[t->id - 1];
+}
+
+static const char *y_task_name(y_async *t) { return t && t->name ? t->name : "a task"; }
+
+/** What the task being stepped now waits for (where it parks: told when it does). */
+static void y_trace_waits(const char *format, ...) {
+	y_task_trace *tr = y_async_tracing() ? y_trace_of(y_async_now) : NULL;
+	if (!tr) return;
+	va_list args;
+	va_start(args, format);
+	vsnprintf(tr->waits, sizeof tr->waits, format, args);
+	va_end(args);
+}
+
+/** A task started: numbered, and told (with the one that started it). */
+static void y_trace_started(y_async *t) {
+	t->id = ++y_task_count;
+	if (!y_async_tracing()) return;
+	if (y_ntraces == y_traces_cap) {
+		y_traces_cap = y_traces_cap ? y_traces_cap * 2 : 64;
+		y_traces = realloc(y_traces, (size_t)y_traces_cap * sizeof(y_task_trace));
+		if (!y_traces) y_die("out of memory");
+	}
+	y_traces[y_ntraces++] = (y_task_trace){ y_trace_ns(), 0, 0, "", "" };
+	if (y_async_now && y_async_now->id) {
+		fprintf(stderr, "async: task %lld (%s) started by task %lld (%s)\n", (long long)t->id, y_task_name(t), (long long)y_async_now->id, y_task_name(y_async_now));
+	} else {
+		fprintf(stderr, "async: task %lld (%s) started\n", (long long)t->id, y_task_name(t));
+	}
+}
+
+/** A task stepped: its time kept, and what came of it told (done, or parked and on what). */
+static void y_trace_stepped(y_async *t, int64_t began) {
+	y_task_trace *tr = y_trace_of(t);
+	if (!tr) return;
+	const int64_t now = y_trace_ns();
+	tr->stepped += now - began;
+	tr->steps++;
+	if (t->done) {
+		fprintf(stderr, "async: task %lld (%s) done: stepped %.3f ms in %lld steps, alive %.3f ms\n", (long long)t->id, y_task_name(t),
+			(double)tr->stepped / 1e6, (long long)tr->steps, (double)(now - tr->started) / 1e6);
+	} else if (y_trace_level >= 2 || tr->waits[0]) {
+		fprintf(stderr, "async: task %lld (%s) parked: waits for %s\n", (long long)t->id, y_task_name(t), tr->waits[0] ? tr->waits : "a wake");
+		if (tr->waits[0]) memcpy(tr->last, tr->waits, sizeof tr->last);
+		tr->waits[0] = 0;
+	}
+}
+
+/** Each task in the task list not done, and what it waits for, told after what. */
+static void y_trace_waiting(const char *what) {
+	if (!y_async_list) return;
+	for (int64_t i = 0; i < y_async_list->len; i++) {
+		y_async *t = ((y_async **)y_async_list->items)[i];
+		y_task_trace *tr = y_trace_of(t);
+		if (t->done || !tr) continue;
+		fprintf(stderr, "async:   task %lld (%s) %s %s\n", (long long)t->id, y_task_name(t), what, tr->last[0] ? tr->last : "a wake");
+	}
+}
+
+yunit yel_async_trace_deadlock(void) {
+	if (!y_async_tracing()) {
+		fflush(stdout);
+		fprintf(stderr, "yel: YEL_ASYNC_TRACE=1 tells each task and what it waits for\n");
+		return 0;
+	}
+	fflush(stdout);
+	fprintf(stderr, "async: a deadlock: every task waits, and nothing will wake one\n");
+	y_trace_waiting("waits for");
+	return 0;
+}
+
+yunit yel_async_trace_end(void) {
+	if (y_async_tracing()) y_trace_waiting("never done: it waits for");
+	return 0;
+}
+
 /** A task back in the ready queue (once; not once done). */
 void y_wake(y_async *t) {
 	if (!t || t->done || t->queued) return;
+	if (y_trace_level >= 2 && y_trace_of(t)) fprintf(stderr, "async: task %lld (%s) woken\n", (long long)t->id, y_task_name(t));
 	t->queued = 1;
 	*(void **)y_list_push_slot(y_async_rooted(&y_async_ready)) = t;
 }
@@ -713,14 +907,75 @@ void y_async_finished(y_async *t) {
 	w->len = kept;
 }
 
+// ---- async context: the program's @(context) globals, each task's own. The globals hold the
+// values of the task being stepped; the executor keeps each task's while another runs (its
+// header's context: a copy of each, traced) and puts them back when it steps it again. A task
+// started takes its starter's, as they are then
+
+typedef struct { void *place; uint64_t size; uint64_t at; void (*scan)(void *); } y_context_var;
+static y_context_var *y_context_vars;
+static int64_t y_ncontext, y_context_cap;
+static uint64_t y_context_bytes;
+
+/** A context's values traced: each that holds a pointer. */
+static void y_trace_context(void *obj) {
+	for (int64_t i = 0; i < y_ncontext; i++) {
+		if (y_context_vars[i].scan) y_context_vars[i].scan((char *)obj + y_context_vars[i].at);
+	}
+}
+
+/** The started tasks' contexts, marked (the collector's: a task's header is the runtime's). */
+static void y_trace_task_contexts(void) {
+	if (!y_async_list) return;
+	for (int64_t i = 0; i < y_async_list->len; i++) {
+		y_async *t = ((y_async **)y_async_list->items)[i];
+		if (t->context) y_mark(t->context);
+	}
+}
+
+void y_context_global(void *place, size_t size, void (*scan)(void *)) {
+	if (y_ncontext == 0) y_tracer(y_trace_task_contexts);
+	if (y_ncontext == y_context_cap) {
+		y_context_cap = y_context_cap ? y_context_cap * 2 : 4;
+		y_context_vars = realloc(y_context_vars, (size_t)y_context_cap * sizeof(y_context_var));
+		if (!y_context_vars) y_die("out of memory");
+	}
+	// (each at a 16-byte boundary: any value's alignment)
+	y_context_vars[y_ncontext++] = (y_context_var){ place, (uint64_t)size, y_context_bytes, scan };
+	y_context_bytes += (size + 15) & ~(uint64_t)15;
+}
+
+/** The globals' values now, copied into ctx. */
+static void y_context_keep(void *ctx) {
+	for (int64_t i = 0; i < y_ncontext; i++) memcpy((char *)ctx + y_context_vars[i].at, y_context_vars[i].place, y_context_vars[i].size);
+}
+
+/** The globals given ctx's values. */
+static void y_context_enter(void *ctx) {
+	for (int64_t i = 0; i < y_ncontext; i++) memcpy(y_context_vars[i].place, (char *)ctx + y_context_vars[i].at, y_context_vars[i].size);
+}
+
+/** A copy of the globals' values now (a context of its own). */
+static void *y_context_copy(void) {
+	void *ctx = y_new(y_context_bytes ? y_context_bytes : 1, y_trace_context);
+	y_context_keep(ctx);
+	return ctx;
+}
+
 /** A task started: its own, the executor's to step (ready at once); its owner the starter's (a
-root's: itself). */
+root's: itself); its async context a copy of its starter's. */
 y_async *yel_async_spawn(y_async *t) {
-	// rooted while the task list grows (the caller may hold it nowhere else)
-	Y_FRAME(1);
+	// rooted while the task list grows (the caller may hold it nowhere else), its context too
+	// (traced through the task list only once the task is in it)
+	Y_FRAME(2);
 	ys_[0] = t;
 	t->spawned = 1;
+	if (y_ncontext > 0) {
+		ys_[1] = y_context_copy();
+		t->context = ys_[1];
+	}
 	t->owner = y_async_now && y_async_now->owner ? y_async_now->owner : t;
+	y_trace_started(t);
 	*(void **)y_list_push_slot(yel_async_tasks()) = t;
 	y_wake(t);
 	Y_POP();
@@ -762,17 +1017,32 @@ y_async *yel_async_take_ready(void) {
 	return t;
 }
 
-/** A task stepped by the executor (the one a wait in it parks); done: its waiters woken. */
+/** A task stepped by the executor (the one a wait in it parks); done: its waiters woken. Its async
+context's values are the globals' while it runs (the ones before kept, and given back after). */
 yunit yel_async_run(y_async *t) {
 	if (t->done) return 0;
+	Y_FRAME(1);
+	ys_[0] = NULL;
+	if (t->context) {
+		ys_[0] = y_context_copy();
+		y_context_enter(t->context);
+	}
 	y_async *was = y_async_now;
 	y_async_now = t;
+	const int64_t began = y_trace_level > 0 ? y_trace_ns() : 0;
+	if (y_trace_level >= 2 && y_trace_of(t)) fprintf(stderr, "async: task %lld (%s) stepped\n", (long long)t->id, y_task_name(t));
 	if (t->step(t)) {
 		t->done = 1;
 		t->order = ++y_async_order;
 		y_async_finished(t);
 	}
+	if (y_trace_level > 0) y_trace_stepped(t, began);
 	y_async_now = was;
+	if (ys_[0]) {
+		y_context_keep(t->context);
+		y_context_enter(ys_[0]);
+	}
+	Y_POP();
 	return 0;
 }
 
@@ -789,6 +1059,7 @@ bool yel_async_step(y_async *f) {
 		}
 		*(void **)y_list_push_slot(w) = f;
 		*(void **)y_list_push_slot(w) = y_async_now;
+		y_trace_waits("task %lld (%s)", (long long)f->id, y_task_name(f));
 		return false;
 	}
 	if (f->step(f)) {
@@ -843,6 +1114,7 @@ int32_t y_export_drive(y_async *root, bool (*run)(y_async *)) {
 		break;
 	}
 	if (y_async_host_pending(root)) return (int32_t)(2u | (y_host_root(root)->set << 4));
+	yel_async_trace_deadlock();
 	y_die("every task of this call waits, and nothing will wake one: a deadlock");
 }
 
@@ -883,6 +1155,7 @@ int32_t y_async_yield_step(void *self) {
 	if (a->state == 0) {
 		a->state = 1;
 		y_wake(y_async_now);
+		y_trace_waits("its next turn (a yield)");
 		return 0;
 	}
 	return 1;
@@ -933,6 +1206,7 @@ yunit yel_async_timer(int64_t at) {
 		if (!y_timers) y_die("out of memory");
 	}
 	y_timers[y_ntimers++] = (y_timer){ at, y_async_now };
+	y_trace_waits("a timer (%lld ms from now)", (long long)(at - yel_async_now_ms()));
 	return 0;
 }
 
@@ -953,6 +1227,16 @@ void y_trace_stream(void *obj) {
 	y_mark(s->items);
 	y_mark(s->reader);
 	y_mark(s->writer);
+}
+
+void yel_stream_park_reader(ystream *s) {
+	s->reader = y_async_now;
+	y_trace_waits("a stream's items");
+}
+
+void yel_stream_park_writer(ystream *w) {
+	w->writer = y_async_now;
+	y_trace_waits("room in a stream (its reader to read)");
 }
 
 ystream *y_stream_new(int64_t size, y_scan scan, int64_t cap) {
@@ -1044,6 +1328,7 @@ void y_async_host_wait(uint32_t waitable) {
 		if (!y_hostwaits) y_die("out of memory");
 	}
 	y_hostwaits[y_nhostwaits++] = (y_hostwait){ waitable, y_async_now, root, 0, 0 };
+	y_trace_waits("the host (waitable %u)", waitable);
 }
 
 /** The task being stepped waits, in place of the one that did, for a waitable already waited for
@@ -1288,6 +1573,7 @@ int32_t y_stream_pump_step(void *self) {
 			continue;
 		}
 		s->reader = y_async_now;
+		y_trace_waits("a stream's items");
 		return 0;
 	}
 }
@@ -1363,6 +1649,416 @@ bool yel_async_await(void) {
 	}
 	y_ntimers = kept;
 	return true;
+}
+
+// ---- descriptors watched: a task waiting for one to be readable or writable (yel_async_ready).
+// libuv allows one poll to a descriptor, so each has one watch: who waits to read, who to write,
+// the poll narrowed to what is waited for, and stopped (its handle closed) once nothing is
+
+// the descriptors listening (yel_host_socket_listen's)
+static int *y_listening;
+static int64_t y_listening_count;
+
+typedef struct y_watch {
+	uv_poll_t poll;
+	int fd;
+	y_async *reader;
+	y_async *writer;
+	struct y_watch *next;
+} y_watch;
+
+static y_watch *y_watches;
+
+static void y_trace_watches(void) {
+	for (y_watch *w = y_watches; w; w = w->next) {
+		if (w->reader) y_mark(w->reader);
+		if (w->writer) y_mark(w->writer);
+	}
+}
+
+static void y_watch_closed(uv_handle_t *handle) { free(handle->data); }
+
+// the watch let go: out of the list, its poll stopped and closed (its memory freed once libuv is done)
+static void y_watch_end(y_watch *done) {
+	for (y_watch **at = &y_watches; *at; at = &(*at)->next) {
+		if (*at == done) {
+			*at = done->next;
+			break;
+		}
+	}
+	uv_poll_stop(&done->poll);
+	uv_close((uv_handle_t *)&done->poll, y_watch_closed);
+}
+
+// the poll asks for what its waiters wait for; none, and the watch ends
+static void y_watch_update(y_watch *w);
+
+static void y_watch_fired(uv_poll_t *poll, int status, int events) {
+	y_watch *w = poll->data;
+	// an error or a hang-up wakes both: their read or write then says what happened
+	const bool all = status < 0 || (events & UV_DISCONNECT);
+	if (w->reader && (all || (events & UV_READABLE))) {
+		y_uv_pending--;
+		y_wake(w->reader);
+		w->reader = NULL;
+	}
+	if (w->writer && (all || (events & UV_WRITABLE))) {
+		y_uv_pending--;
+		y_wake(w->writer);
+		w->writer = NULL;
+	}
+	y_watch_update(w);
+}
+
+static void y_watch_update(y_watch *w) {
+	const int events = (w->reader ? UV_READABLE : 0) | (w->writer ? UV_WRITABLE : 0);
+	if (events == 0) {
+		y_watch_end(w);
+		return;
+	}
+	uv_poll_start(&w->poll, events | UV_DISCONNECT, y_watch_fired);
+}
+
+/** The task being stepped, to be woken once fd can be read (events 1) or written (2) without
+blocking, or is at its end, or failed (the call then tells); true when it waits so (it parks next).
+False for a descriptor libuv cannot poll (a regular file, which never waits): it goes on at once. */
+bool yel_async_ready(int64_t fd, int64_t events) {
+	static bool traced;
+	if (!traced) {
+		y_tracer(y_trace_watches);
+		traced = true;
+	}
+	y_watch *w = y_watches;
+	while (w && w->fd != (int)fd) w = w->next;
+	if (!w) {
+		w = malloc(sizeof(y_watch));
+		if (!w) y_die("out of memory");
+		if (uv_poll_init(uv_default_loop(), &w->poll, (int)fd) != 0) {
+			free(w);
+			return false;
+		}
+		w->poll.data = w;
+		w->fd = (int)fd;
+		w->reader = NULL;
+		w->writer = NULL;
+		w->next = y_watches;
+		y_watches = w;
+	}
+	if (events & 1) {
+		if (!w->reader) y_uv_pending++;
+		w->reader = y_async_now;
+		y_trace_waits("descriptor %d to be read", (int)fd);
+	}
+	if (events & 2) {
+		if (!w->writer) y_uv_pending++;
+		w->writer = y_async_now;
+		y_trace_waits("descriptor %d to be written", (int)fd);
+	}
+	y_watch_update(w);
+	return true;
+}
+
+/** fd about to be closed: its watch (if any) ended first, its waiters woken (their call then fails),
+and it listens no more. */
+yunit yel_async_forget(int64_t fd) {
+	for (int64_t index = 0; index < y_listening_count; index++) {
+		if (y_listening[index] == (int)fd) {
+			y_listening[index] = y_listening[--y_listening_count];
+			break;
+		}
+	}
+	for (y_watch *w = y_watches; w; w = w->next) {
+		if (w->fd != (int)fd) continue;
+		if (w->reader) {
+			y_uv_pending--;
+			y_wake(w->reader);
+		}
+		if (w->writer) {
+			y_uv_pending--;
+			y_wake(w->writer);
+		}
+		y_watch_end(w);
+		break;
+	}
+	return 0;
+}
+
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
+// ---- the reactor's requests: a blocking call of the system run on libuv's thread pool, the task
+// that asked woken when it is done (yel_pool_*). The call's own: its result and errno, numbers only
+// (a worker touches nothing of yel's heap: a path is C's, a buffer one the waiting task's frame holds)
+
+enum { Y_POOL_PREAD, Y_POOL_PWRITE, Y_POOL_OPENAT, Y_POOL_MKDIRAT, Y_POOL_UNLINKAT, Y_POOL_RENAMEAT, Y_POOL_STAT, Y_POOL_LOOKUP };
+
+typedef struct y_request {
+	uv_work_t work;
+	int op;
+	int64_t args[4];
+	y_async *task;
+	int64_t result;
+	int64_t error;
+	bool done;
+	struct y_request *next;
+} y_request;
+
+// every request not freed yet, so the collector keeps the tasks they wake
+static y_request *y_requests;
+
+static void y_trace_requests(void) {
+	for (y_request *r = y_requests; r; r = r->next) y_mark(r->task);
+}
+
+// fstatat or fstat (path NULL), written as the native helpers number a stat (yn_fs_stat's)
+static int y_stat_into(int fd, const char *path, bool follow, int64_t *o) {
+	struct stat st;
+	const int r = path ? fstatat(fd, path, &st, follow ? 0 : AT_SYMLINK_NOFOLLOW) : fstat(fd, &st);
+	if (r != 0) return -1;
+	o[0] = yn_fs_kind(st.st_mode);
+	o[1] = (int64_t)st.st_nlink;
+	o[2] = (int64_t)st.st_size;
+#if defined(__APPLE__)
+	o[3] = st.st_atimespec.tv_sec, o[4] = st.st_atimespec.tv_nsec;
+	o[5] = st.st_mtimespec.tv_sec, o[6] = st.st_mtimespec.tv_nsec;
+	o[7] = st.st_ctimespec.tv_sec, o[8] = st.st_ctimespec.tv_nsec;
+#else
+	o[3] = st.st_atim.tv_sec, o[4] = st.st_atim.tv_nsec;
+	o[5] = st.st_mtim.tv_sec, o[6] = st.st_mtim.tv_nsec;
+	o[7] = st.st_ctim.tv_sec, o[8] = st.st_ctim.tv_nsec;
+#endif
+	return 0;
+}
+
+// a name's addresses (getaddrinfo: TCP's, any family), into out: each 9 numbers, its family (4 or 6)
+// then its 4 bytes or 8 segments, in the order given, each once and none an IPv4-mapped IPv6
+// address (wasi:sockets' ip-name-lookup says so), at most capacity. Their count, or what failed:
+// -1 no such name, -2 a temporary failure, -3 a permanent one, -4 another
+static int64_t y_lookup_into(const char *name, int64_t *out, int64_t capacity) {
+	struct addrinfo hints;
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	struct addrinfo *found = NULL;
+	const int code = getaddrinfo(name, NULL, &hints, &found);
+	if (code != 0) {
+		if (code == EAI_NONAME) return -1;
+#if defined(EAI_NODATA) && EAI_NODATA != EAI_NONAME
+		if (code == EAI_NODATA) return -1;
+#endif
+#if defined(EAI_ADDRFAMILY)
+		if (code == EAI_ADDRFAMILY) return -1;
+#endif
+		if (code == EAI_AGAIN) return -2;
+		if (code == EAI_FAIL) return -3;
+		return -4;
+	}
+	int64_t count = 0;
+	for (struct addrinfo *a = found; a && count < capacity; a = a->ai_next) {
+		int64_t one[9] = { 0 };
+		if (a->ai_family == AF_INET) {
+			const uint8_t *b = (const uint8_t *)&((struct sockaddr_in *)a->ai_addr)->sin_addr;
+			one[0] = 4;
+			for (int i = 0; i < 4; i++) one[1 + i] = b[i];
+		} else if (a->ai_family == AF_INET6) {
+			const uint8_t *b = ((struct sockaddr_in6 *)a->ai_addr)->sin6_addr.s6_addr;
+			// (::ffff:a.b.c.d: an IPv4 address, which wasi:sockets never gives this way)
+			bool mapped = true;
+			for (int i = 0; i < 10; i++) mapped = mapped && b[i] == 0;
+			if (mapped && b[10] == 0xff && b[11] == 0xff) continue;
+			one[0] = 6;
+			for (int i = 0; i < 8; i++) one[1 + i] = (int64_t)b[2 * i] << 8 | b[2 * i + 1];
+		} else {
+			continue;
+		}
+		bool seen = false;
+		for (int64_t k = 0; k < count && !seen; k++) seen = memcmp(out + k * 9, one, sizeof one) == 0;
+		if (!seen) memcpy(out + (count++) * 9, one, sizeof one);
+	}
+	freeaddrinfo(found);
+	return count > 0 ? count : -1;
+}
+
+// on a worker: the call, and its errno where it fails
+static void y_request_run(uv_work_t *work) {
+	y_request *r = work->data;
+	const int64_t *a = r->args;
+	int64_t result = -1;
+	errno = 0;
+	switch (r->op) {
+	case Y_POOL_PREAD: result = pread((int)a[0], (void *)(uintptr_t)a[1], (size_t)a[2], (off_t)a[3]); break;
+	case Y_POOL_PWRITE: result = pwrite((int)a[0], (const void *)(uintptr_t)a[1], (size_t)a[2], (off_t)a[3]); break;
+	case Y_POOL_OPENAT: result = openat((int)a[0], (const char *)(uintptr_t)a[1], (int)a[2], 0666); break;
+	case Y_POOL_MKDIRAT: result = mkdirat((int)a[0], (const char *)(uintptr_t)a[1], 0777); break;
+	case Y_POOL_UNLINKAT: result = unlinkat((int)a[0], (const char *)(uintptr_t)a[1], (int)a[2]); break;
+	case Y_POOL_RENAMEAT:
+		result = renameat((int)a[0], (const char *)(uintptr_t)a[1], (int)a[2], (const char *)(uintptr_t)a[3]);
+		break;
+	case Y_POOL_STAT:
+		result = y_stat_into((int)a[0], a[1] ? (const char *)(uintptr_t)a[1] : NULL, a[2] != 0, (int64_t *)(uintptr_t)a[3]);
+		break;
+	case Y_POOL_LOOKUP:
+		result = y_lookup_into((const char *)(uintptr_t)a[0], (int64_t *)(uintptr_t)a[1], a[2]);
+		break;
+	}
+	r->result = result;
+	r->error = result < 0 ? errno : 0;
+}
+
+// on the loop's thread: done, its task woken
+static void y_request_finished(uv_work_t *work, int status) {
+	(void)status;
+	y_request *r = work->data;
+	r->done = true;
+	y_uv_pending--;
+	y_wake(r->task);
+}
+
+static int64_t y_pool(int op, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {
+	static bool traced;
+	if (!traced) {
+		y_tracer(y_trace_requests);
+		traced = true;
+	}
+	y_request *r = calloc(1, sizeof(y_request));
+	if (!r) y_die("out of memory");
+	r->work.data = r;
+	r->op = op;
+	r->args[0] = a0, r->args[1] = a1, r->args[2] = a2, r->args[3] = a3;
+	r->task = y_async_now;
+	y_trace_waits(op == Y_POOL_LOOKUP ? "a name's addresses (getaddrinfo, on the thread pool)" : "a file operation (on the thread pool)");
+	r->next = y_requests;
+	y_requests = r;
+	y_uv_pending++;
+	if (uv_queue_work(uv_default_loop(), &r->work, y_request_run, y_request_finished) != 0) {
+		// (not queued: done at once, as an error)
+		y_uv_pending--;
+		r->done = true;
+		r->result = -1;
+		r->error = EAGAIN;
+	}
+	return (int64_t)(uintptr_t)r;
+}
+
+/** pread, pwrite, openat, mkdirat, unlinkat, renameat and fstatat begun on the thread pool: the
+request, which its task parks for until yel_request_done (its result and errno then read, and the
+request freed with yel_request_free). Paths are C strings, freed by the caller after it is done. */
+int64_t yel_pool_pread(int64_t fd, int64_t at, int64_t count, int64_t offset) { return y_pool(Y_POOL_PREAD, fd, at, count, offset); }
+int64_t yel_pool_pwrite(int64_t fd, int64_t at, int64_t count, int64_t offset) { return y_pool(Y_POOL_PWRITE, fd, at, count, offset); }
+int64_t yel_pool_openat(int64_t dir, int64_t path, int64_t options) { return y_pool(Y_POOL_OPENAT, dir, path, options, 0); }
+int64_t yel_pool_mkdirat(int64_t dir, int64_t path) { return y_pool(Y_POOL_MKDIRAT, dir, path, 0, 0); }
+int64_t yel_pool_unlinkat(int64_t dir, int64_t path, int64_t flags) { return y_pool(Y_POOL_UNLINKAT, dir, path, flags, 0); }
+int64_t yel_pool_renameat(int64_t from_dir, int64_t from, int64_t to_dir, int64_t to) { return y_pool(Y_POOL_RENAMEAT, from_dir, from, to_dir, to); }
+int64_t yel_pool_stat(int64_t fd, int64_t path, int64_t follow, int64_t out) { return y_pool(Y_POOL_STAT, fd, path, follow, out); }
+/** A name's addresses looked up on the thread pool (y_lookup_into: into out, at most capacity; the name a C string). */
+int64_t yel_pool_lookup(int64_t name, int64_t out, int64_t capacity) { return y_pool(Y_POOL_LOOKUP, name, out, capacity, 0); }
+
+bool yel_request_done(int64_t request) { return ((y_request *)(uintptr_t)request)->done; }
+int64_t yel_request_result(int64_t request) { return ((y_request *)(uintptr_t)request)->result; }
+int64_t yel_request_error(int64_t request) { return ((y_request *)(uintptr_t)request)->error; }
+
+yunit yel_request_free(int64_t request) {
+	y_request *done = (y_request *)(uintptr_t)request;
+	for (y_request **at = &y_requests; *at; at = &(*at)->next) {
+		if (*at == done) {
+			*at = done->next;
+			break;
+		}
+	}
+	free(done);
+	return 0;
+}
+
+// ---- sockets that never block: their calls give EAGAIN (EINPROGRESS for a connect) where they
+// would, and the task waits on the descriptor's watch
+
+/** fd made non-blocking (and, where the system has it, never a SIGPIPE on a write to a closed peer). */
+int64_t yel_host_nonblocking(int64_t fd) {
+	const int flags = fcntl((int)fd, F_GETFL, 0);
+	if (flags < 0 || fcntl((int)fd, F_SETFL, flags | O_NONBLOCK) < 0) return -errno;
+#if defined(SO_NOSIGPIPE)
+	int one = 1;
+	setsockopt((int)fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+	return 0;
+}
+
+/** Up to count bytes at at sent on socket fd: how many, or -errno (-EAGAIN: none fit now). */
+int64_t yel_host_socket_send(int64_t fd, int64_t at, int64_t count) {
+#if defined(MSG_NOSIGNAL)
+	const ssize_t sent = send((int)fd, (const void *)(uintptr_t)at, (size_t)count, MSG_NOSIGNAL);
+#else
+	const ssize_t sent = send((int)fd, (const void *)(uintptr_t)at, (size_t)count, 0);
+#endif
+	return sent < 0 ? -errno : (int64_t)sent;
+}
+
+/** Up to count bytes of socket fd into at: how many, 0 at its end, or -errno (-EAGAIN: none yet). */
+int64_t yel_host_socket_receive(int64_t fd, int64_t at, int64_t count) {
+	const ssize_t got = recv((int)fd, (void *)(uintptr_t)at, (size_t)count, 0);
+	return got < 0 ? -errno : (int64_t)got;
+}
+
+// (the descriptors listening, y_listening: what get-is-listening answers by where the system
+// cannot say, as macOS has no SO_ACCEPTCONN; one leaves it when it is closed: yel_async_forget)
+
+/** fd listening, backlog connections queued at most: 0, or -errno. */
+int64_t yel_host_socket_listen(int64_t fd, int64_t backlog) {
+	if (listen((int)fd, (int)backlog) < 0) return -errno;
+	int *grown = realloc(y_listening, (size_t)(y_listening_count + 1) * sizeof(int));
+	if (!grown) y_die("out of memory");
+	y_listening = grown;
+	y_listening[y_listening_count++] = (int)fd;
+	return 0;
+}
+
+/** Whether fd listens: the system's answer (SO_ACCEPTCONN), else whether it was made to. */
+bool yel_host_socket_is_listening(int64_t fd) {
+	int value = 0;
+	socklen_t length = sizeof value;
+	if (getsockopt((int)fd, SOL_SOCKET, SO_ACCEPTCONN, &value, &length) == 0) return value != 0;
+	for (int64_t index = 0; index < y_listening_count; index++) {
+		if (y_listening[index] == (int)fd) return true;
+	}
+	return false;
+}
+
+/** A connection fd has queued, non-blocking: its descriptor, or -errno (-EAGAIN: none yet). */
+int64_t yel_host_socket_accept(int64_t fd) {
+	const int accepted = accept((int)fd, NULL, NULL);
+	if (accepted < 0) return -errno;
+	const int64_t made = yel_host_nonblocking(accepted);
+	if (made < 0) {
+		close(accepted);
+		return made;
+	}
+	return accepted;
+}
+
+/** fd's writing ended (the peer reads its end): 0, or -errno. */
+int64_t yel_host_socket_shutdown_write(int64_t fd) { return shutdown((int)fd, SHUT_WR) < 0 ? -errno : 0; }
+
+/** What a non-blocking connect ended with: 0, or the errno (SO_ERROR). */
+int64_t yel_host_socket_error(int64_t fd) {
+	int error = 0;
+	socklen_t length = sizeof error;
+	if (getsockopt((int)fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0) return errno;
+	return error;
+}
+
+int64_t yel_host_e_again(void) { return EAGAIN; }
+int64_t yel_host_e_in_progress(void) { return EINPROGRESS; }
+
+/** Up to count bytes of fd at at (read(2)): how many, 0 at its end, -1 for an error. */
+int64_t yel_host_read(int64_t fd, int64_t at, int64_t count) { return (int64_t)read((int)fd, (void *)(uintptr_t)at, (size_t)count); }
+
+/** count bytes at at written to stdout or stderr (2 for stderr), after what print wrote, and flushed. */
+int64_t yel_host_write_out(int64_t fd, int64_t at, int64_t count) {
+	FILE *out = fd == 2 ? stderr : stdout;
+	const size_t wrote = fwrite((const void *)(uintptr_t)at, 1, (size_t)count, out);
+	if (fflush(out) != 0 || wrote != (size_t)count) return -1;
+	return (int64_t)wrote;
 }
 
 Y_NORETURN void y_no_host(void) { y_die("this waits for a host: build it as a component (WASI 0.3)"); }
@@ -1498,17 +2194,16 @@ ystr yn_fs_dir_next(int64_t dir, int64_t kind) {
   return (ystr){0, ""};
 }
 
-// ---- wasi:sockets natively: what std's host (runtime/std/host-sockets.yel) cannot say in yel, a
+// ---- wasi:sockets natively: what std's host (runtime/std/core/host/host-sockets.yel) cannot say in yel, a
 // socket address as numbers (12 of them): its family (0 ipv4, 1 ipv6), port, flow info and scope
 // id, then the address's 4 bytes or 8 segments
 
-// fd bound to the address the numbers at say (the address reusable at once); 0, or -errno
-int64_t yn_socket_bind(int64_t fd, int64_t at) {
+// the address the numbers at say, as the system's (its length)
+static socklen_t y_socket_address(int64_t at, struct sockaddr_storage *storage) {
   const int64_t *parts = (const int64_t *)(uintptr_t)at;
-  struct sockaddr_storage storage = {0};
   socklen_t length;
   if (parts[0] == 0) {
-    struct sockaddr_in *address = (struct sockaddr_in *)&storage;
+    struct sockaddr_in *address = (struct sockaddr_in *)storage;
     address->sin_family = AF_INET;
     address->sin_port = htons((uint16_t)parts[1]);
     uint8_t *bytes = (uint8_t *)&address->sin_addr;
@@ -1516,7 +2211,7 @@ int64_t yn_socket_bind(int64_t fd, int64_t at) {
       bytes[index] = (uint8_t)parts[4 + index];
     length = sizeof *address;
   } else {
-    struct sockaddr_in6 *address = (struct sockaddr_in6 *)&storage;
+    struct sockaddr_in6 *address = (struct sockaddr_in6 *)storage;
     address->sin6_family = AF_INET6;
     address->sin6_port = htons((uint16_t)parts[1]);
     address->sin6_flowinfo = htonl((uint32_t)parts[2]);
@@ -1527,18 +2222,52 @@ int64_t yn_socket_bind(int64_t fd, int64_t at) {
     }
     length = sizeof *address;
   }
+  return length;
+}
+
+// fd bound to the address the numbers at say (the address reusable at once); 0, or -errno
+int64_t yn_socket_bind(int64_t fd, int64_t at) {
+  struct sockaddr_storage storage = {0};
+  const socklen_t length = y_socket_address(at, &storage);
   int one = 1;
   setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
   return bind((int)fd, (struct sockaddr *)&storage, length) < 0 ? -errno : 0;
 }
 
+// fd's connection to the address the numbers at say begun (a non-blocking socket's: -EINPROGRESS
+// while it goes on); 0, or -errno
+int64_t yn_socket_connect(int64_t fd, int64_t at) {
+  struct sockaddr_storage storage = {0};
+  const socklen_t length = y_socket_address(at, &storage);
+  return connect((int)fd, (struct sockaddr *)&storage, length) < 0 ? -errno : 0;
+}
+
+// an address as numbers, written at
+static void y_socket_parts(const struct sockaddr_storage *storage_at, int64_t at);
+
 // fd's local address as numbers, written at (before it is bound: its family, port 0); 0, or -errno
 int64_t yn_socket_name(int64_t fd, int64_t at) {
-  int64_t *parts = (int64_t *)(uintptr_t)at;
   struct sockaddr_storage storage = {0};
   socklen_t length = sizeof storage;
   if (getsockname((int)fd, (struct sockaddr *)&storage, &length) < 0)
     return -errno;
+  y_socket_parts(&storage, at);
+  return 0;
+}
+
+// the address fd is connected to, as numbers written at; 0, or -errno (-ENOTCONN: none)
+int64_t yn_socket_peer(int64_t fd, int64_t at) {
+  struct sockaddr_storage storage = {0};
+  socklen_t length = sizeof storage;
+  if (getpeername((int)fd, (struct sockaddr *)&storage, &length) < 0)
+    return -errno;
+  y_socket_parts(&storage, at);
+  return 0;
+}
+
+static void y_socket_parts(const struct sockaddr_storage *storage_at, int64_t at) {
+  int64_t *parts = (int64_t *)(uintptr_t)at;
+  const struct sockaddr_storage storage = *storage_at;
   if (storage.ss_family == AF_INET) {
     const struct sockaddr_in *address = (const struct sockaddr_in *)&storage;
     const uint8_t *bytes = (const uint8_t *)&address->sin_addr;
@@ -1555,7 +2284,6 @@ int64_t yn_socket_name(int64_t fd, int64_t at) {
     for (int index = 0; index < 8; index++)
       parts[4 + index] = address->sin6_addr.s6_addr[2 * index] << 8 | address->sin6_addr.s6_addr[2 * index + 1];
   }
-  return 0;
 }
 
 // ---- std's native hosts' calls of the system (wasi-native.h declares them)
@@ -1608,7 +2336,6 @@ int64_t yel_host_random_fill(int64_t a1, int64_t a2) { return ((int64_t)getentro
 int64_t yel_host_sockets_inet(void) { return ((int64_t)AF_INET); }
 int64_t yel_host_sockets_inet6(void) { return ((int64_t)AF_INET6); }
 int64_t yel_host_sockets_socket(int64_t a1) { return ((int64_t)socket((int)(a1), SOCK_STREAM, 0)); }
-yunit yel_host_sockets_accepting(int64_t a1, int64_t a2) { return (getsockopt((int)(a1), SOL_SOCKET, SO_ACCEPTCONN, (void *)(uintptr_t)(a2), &(socklen_t){ sizeof(int) }), (yunit)0); }
 int64_t yel_host_sockets_e_not_supported(void) { return ((int64_t)EOPNOTSUPP); }
 int64_t yel_host_sockets_e_family_not_supported(void) { return ((int64_t)EAFNOSUPPORT); }
 int64_t yel_host_sockets_e_protocol_not_supported(void) { return ((int64_t)EPROTONOSUPPORT); }
@@ -1627,4 +2354,46 @@ int64_t yel_host_sockets_e_connection_reset(void) { return ((int64_t)ECONNRESET)
 int64_t yel_host_sockets_e_connection_aborted(void) { return ((int64_t)ECONNABORTED); }
 int64_t yel_host_sockets_e_message_size(void) { return ((int64_t)EMSGSIZE); }
 bool yel_host_terminal_is_terminal(int64_t a1) { return (isatty((int)(a1)) != 0); }
+#endif
+
+// std:process: a child process (fork), how one ended (waitpid), and a process's end as it is (no
+// exit handlers: a child's, once its work is done). A target without processes (wasm) has no child:
+// fork gives -1 there
+#if defined(__wasm__)
+int64_t yel_process_fork(void) { return -1; }
+int64_t yel_process_wait(int64_t child) {
+	(void)child;
+	return -1;
+}
+Y_NORETURN void yel_process_end(int64_t code) {
+	fflush(NULL);
+	exit((int)code);
+}
+#else
+#include <sys/wait.h>
+/** A child (0 in the child, its pid in the parent, -1 for none), every output flushed first (so the child repeats none). */
+int64_t yel_process_fork(void) {
+	fflush(NULL);
+	const pid_t child = fork();
+	// the child's event loop made again: a kqueue (macOS, the BSDs) is not a child's, nor are the
+	// loop's threads (libuv's thread pool starts again itself)
+	if (child == 0) {
+		y_forked = true;
+		uv_loop_fork(uv_default_loop());
+	}
+	return (int64_t)child;
+}
+/** How a child ended: its exit status, 128 + the signal that ended it, or -1 (no such child). */
+int64_t yel_process_wait(int64_t child) {
+	int status = 0;
+	if (waitpid((pid_t)child, &status, 0) < 0) return -1;
+	if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
+	if (WIFSIGNALED(status)) return 128 + (int64_t)WTERMSIG(status);
+	return -1;
+}
+/** The process ends with code, its output flushed, and nothing more of it runs (_exit: no exit handlers). */
+Y_NORETURN void yel_process_end(int64_t code) {
+	fflush(NULL);
+	_exit((int)code);
+}
 #endif

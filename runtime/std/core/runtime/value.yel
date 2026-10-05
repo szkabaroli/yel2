@@ -1,0 +1,341 @@
+// Values as std reads them, whatever their type, as Ballerina's lang.value: a value's text (debug:
+// WAVE; display: an interpolation's). A type is its descriptor (the compiler's static ytype,
+// runtime/yel.h) and a value is where it is held, both as addresses (s64); the compiler hands them
+// to these funcs. What reads them is below: intrinsics (C written in place, as Porffor's
+// Porffor.IR.*), the only C. Nothing here may be collected while it is read: the compiler holds the
+// collector around a call.
+
+module value {
+    // a value's kind, as its descriptor says (runtime/yel.h's Y_K_*, in order)
+    enum value-kind {
+        unit-value, bool-value, char-value, signed-value, unsigned-value, f32-value, f64-value,
+        string-value, buffer-value, map-value, list-value, fixed-value, option-value, result-value,
+        tuple-value, anon-record-value, record-value, variant-value, enum-value, flags-value,
+        handle-value, union-value, func-value, future-value, seq-value, stream-value,
+        // a record (a value): in place, as an anonymous record; shown as a declared record (WAVE)
+        value-record-value,
+    }
+
+    // a descriptor's kind; its count (of fields, cases, kinds or flags; a fixed-length list's
+    // length); its values' size; its part (a list's item, a field's, a case's: 0 for none); where
+    // that part is (an option's has and value, a result's is_err, ok and err, a union's or variant's
+    // tag then each case); and its name (a field's, case's or flag's; a handle's resource)
+    @c(name = "((const ytype *)(uintptr_t)($1))->kind") type-kind: extern func(desc: s64) -> value-kind;
+    @c(name = "((int32_t)((const ytype *)(uintptr_t)($1))->count)") type-count: extern func(desc: s64) -> s32;
+    @c(name = "((int64_t)((const ytype *)(uintptr_t)($1))->size)") type-size: extern func(desc: s64) -> s64;
+    @c(name = "((int64_t)(uintptr_t)((const ytype *)(uintptr_t)($1))->parts[($2)])") type-part: extern func(desc: s64, index: s32) -> s64;
+    @c(name = "((int64_t)((const ytype *)(uintptr_t)($1))->offsets[($2)])") part-offset: extern func(desc: s64, index: s32) -> s64;
+    @c(name = "y_str_of(((const ytype *)(uintptr_t)($1))->names[($2)], (int64_t)strlen(((const ytype *)(uintptr_t)($1))->names[($2)]))") part-name: extern func(desc: s64, index: s32) -> string;
+
+    // the T held at an address ($1 its C type)
+    @c(name = "(*($1 *)(uintptr_t)($4))") load-at: extern func<T>(at: s64) -> T;
+
+    // a list's length and its items' address; a map's length
+    @c(name = "((int32_t)((const ylist *)(uintptr_t)($1))->len)") list-length: extern func(list: s64) -> s32;
+    @c(name = "((int64_t)(uintptr_t)((const ylist *)(uintptr_t)($1))->items)") list-items: extern func(list: s64) -> s64;
+    @c(name = "((int32_t)((const ymap *)(uintptr_t)($1))->len)") map-length: extern func(map: s64) -> s32;
+
+    // equal bytes; a hash's bits mixed, two hashes mixed, a string's hash (the runtime's)
+    @c(name = "y_hash_bits($1)") hash-bits: extern func(bits: u64) -> u64;
+    @c(name = "y_hash_mix($1, $2)") hash-mix: extern func(hash: u64, more: u64) -> u64;
+
+    // a value's text: debug, as WAVE ({x: 1}, "a", some(2)); display, a string, char or buffer as
+    // its text and a union's kind as it displays ("{x}")
+    render: func(desc: s64, at: s64, display: bool) -> string {
+        let out = buffer.buffer(16);
+        write-value(out, desc, at, display);
+        out.to-string()
+    }
+
+    write-value: func(out: buffer, desc: s64, at: s64, display: bool) {
+        let width = type-size(desc);
+        match type-kind(desc) {
+            unit-value => out.push("unit"),
+            bool-value => out.push(if load-integer(at, 1, false) != 0 { "true" } else { "false" }),
+            char-value => {
+                let code: char = load-at(at);
+                if display { out.push-char(code); } else { out.push("{code:?}"); }
+            }
+            signed-value => out.push("{load-integer(at, width, true)}"),
+            unsigned-value => {
+                if width == 8 {
+                    let wide: u64 = load-at(at);
+                    out.push("{wide}");
+                } else {
+                    out.push("{load-integer(at, width, false)}");
+                }
+            }
+            f32-value => {
+                let number: f32 = load-at(at);
+                out.push("{number}");
+            }
+            f64-value => {
+                let number: f64 = load-at(at);
+                out.push("{number}");
+            }
+            string-value => {
+                let content: string = load-at(at);
+                out.push(if display { content } else { "{content:?}" });
+            }
+            buffer-value => {
+                let bytes: buffer = load-at(at);
+                if display { out.push(bytes.to-string()); } else { out.push("{bytes:?}"); }
+            }
+            map-value => {
+                let map: s64 = load-at(at);
+                out.push("map({map-length(map)})");
+            }
+            func-value => out.push("<func>"),
+            future-value => out.push("<future>"),
+            seq-value => out.push("<seq>"),
+            stream-value => out.push("<stream>"),
+            list-value | fixed-value => write-list(out, desc, at),
+            option-value => {
+                if load-integer(at + part-offset(desc, 0), 1, false) == 0 { out.push("none"); }
+                else {
+                    out.push("some(");
+                    write-value(out, type-part(desc, 0), at + part-offset(desc, 1), false);
+                    out.push(")");
+                }
+            }
+            result-value => {
+                let side = if load-integer(at + part-offset(desc, 0), 1, false) != 0 { 1 } else { 0 };
+                out.push(if side == 1 { "err" } else { "ok" });
+                let payload = type-part(desc, side);
+                // a unit side shows as its name alone
+                if type-kind(payload) != value-kind.unit-value {
+                    out.push("(");
+                    write-value(out, payload, at + part-offset(desc, side + 1), false);
+                    out.push(")");
+                }
+            }
+            tuple-value => {
+                out.push("(");
+                for index in 0..type-count(desc) {
+                    if index > 0 { out.push(", "); }
+                    write-value(out, type-part(desc, index), at + part-offset(desc, index), false);
+                }
+                out.push(")");
+            }
+            anon-record-value | record-value | value-record-value => write-fields(out, desc, at),
+            union-value => {
+                let tag = load-integer(at + part-offset(desc, 0), 4, true) as s32;
+                write-value(out, type-part(desc, tag), at + part-offset(desc, tag + 1), display);
+            }
+            enum-value => out.push(wave-label(part-name(desc, load-integer(at, 4, true) as s32))),
+            variant-value => {
+                let object: s64 = load-at(at);
+                let tag = load-integer(object + part-offset(desc, 0), 4, true) as s32;
+                out.push(wave-label(part-name(desc, tag)));
+                let payload = type-part(desc, tag);
+                if payload != 0 {
+                    out.push("(");
+                    write-value(out, payload, object + part-offset(desc, tag + 1), false);
+                    out.push(")");
+                }
+            }
+            flags-value => {
+                let bits: u64 = if width == 8 { load-at(at) } else { load-integer(at, 4, false) as u64 };
+                let first = true;
+                out.push("\{");
+                for index in 0..type-count(desc) {
+                    if (bits >> (index as u64)) & 1 != 0 {
+                        if !first { out.push(", "); }
+                        first = false;
+                        out.push(wave-label(part-name(desc, index)));
+                    }
+                }
+                out.push("\}");
+            }
+            handle-value => out.push("{part-name(desc, 0)}#{load-integer(at, 4, false)}"),
+        }
+    }
+
+    // a list's or fixed-length list's items: [1, 2]
+    write-list: func(out: buffer, desc: s64, at: s64) {
+        let item = type-part(desc, 0);
+        let fixed = type-kind(desc) == value-kind.fixed-value;
+        let list: s64 = if fixed { 0 } else { load-at(at) };
+        let length = if fixed { type-count(desc) } else { list-length(list) };
+        let items = if fixed { at } else { list-items(list) };
+        out.push("[");
+        for index in 0..length {
+            if index > 0 { out.push(", "); }
+            write-value(out, item, items + (index as s64) * type-size(item), false);
+        }
+        out.push("]");
+    }
+
+    // a record's fields: an anonymous one's as { x: 1 }, a declared one's (a record's, a
+    // resource's) as WAVE's {x: 1} ({:} for none); a resource's through its pointer, the others' in
+    // place
+    write-fields: func(out: buffer, desc: s64, at: s64) {
+        let kind = type-kind(desc);
+        let anon = kind == value-kind.anon-record-value;
+        let object: s64 = if kind == value-kind.record-value { load-at(at) } else { at };
+        let fields = type-count(desc);
+        if fields == 0 {
+            out.push(if anon { "\{\}" } else { "\{:\}" });
+            return;
+        }
+        out.push(if anon { "\{ " } else { "\{" });
+        for index in 0..fields {
+            if index > 0 { out.push(", "); }
+            let field = part-name(desc, index);
+            out.push(if anon { field } else { wave-label(field) });
+            out.push(": ");
+            write-value(out, type-part(desc, index), object + part-offset(desc, index), false);
+        }
+        out.push(if anon { " \}" } else { "\}" });
+    }
+
+    // an integer of size bytes at at (sign-extended where signed)
+    load-integer: func(at: s64, size: s64, signed: bool) -> s64 {
+        if size == 1 {
+            if signed {
+                let narrow: s8 = load-at(at);
+                return narrow as s64;
+            }
+            let narrow: u8 = load-at(at);
+            return narrow as s64;
+        }
+        if size == 2 {
+            if signed {
+                let narrow: s16 = load-at(at);
+                return narrow as s64;
+            }
+            let narrow: u16 = load-at(at);
+            return narrow as s64;
+        }
+        if size == 4 {
+            if signed {
+                let narrow: s32 = load-at(at);
+                return narrow as s64;
+            }
+            let narrow: u32 = load-at(at);
+            return narrow as s64;
+        }
+        let wide: s64 = load-at(at);
+        wide
+    }
+
+    // a label as WAVE writes it: one that is also a WAVE keyword takes a %
+    wave-label: func(name: string) -> string {
+        if contains(["true", "false", "inf", "nan", "some", "none", "ok", "err",], name) { "%" + name } else { name }
+    }
+
+    // whether two values of a type are equal, as == says: an option, result, tuple, record of
+    // fields, union, fixed-length list or variant by its parts, a float or string by its value,
+    // anything else (a number, a char, a list's or declared record's identity) by its bits
+    value-equal: func(desc: s64, left: s64, right: s64) -> bool {
+        match type-kind(desc) {
+            unit-value => true,
+            f32-value => {
+                let one: f32 = load-at(left);
+                let other: f32 = load-at(right);
+                one == other
+            }
+            f64-value => {
+                let one: f64 = load-at(left);
+                let other: f64 = load-at(right);
+                one == other
+            }
+            string-value => {
+                let one: string = load-at(left);
+                let other: string = load-at(right);
+                one == other
+            }
+            option-value => {
+                let has = load-integer(left + part-offset(desc, 0), 1, false);
+                if has != load-integer(right + part-offset(desc, 0), 1, false) { return false; }
+                has == 0 || value-equal(type-part(desc, 0), left + part-offset(desc, 1), right + part-offset(desc, 1))
+            }
+            result-value => {
+                let side = load-integer(left + part-offset(desc, 0), 1, false) as s32;
+                if side != load-integer(right + part-offset(desc, 0), 1, false) as s32 { return false; }
+                value-equal(type-part(desc, side), left + part-offset(desc, side + 1), right + part-offset(desc, side + 1))
+            }
+            tuple-value | anon-record-value | value-record-value => {
+                for index in 0..type-count(desc) {
+                    if !value-equal(type-part(desc, index), left + part-offset(desc, index), right + part-offset(desc, index)) { return false; }
+                }
+                true
+            }
+            fixed-value => {
+                let item = type-part(desc, 0);
+                for index in 0..type-count(desc) {
+                    let at = (index as s64) * type-size(item);
+                    if !value-equal(item, left + at, right + at) { return false; }
+                }
+                true
+            }
+            union-value | variant-value => {
+                let one = parts-at(desc, left);
+                let other = parts-at(desc, right);
+                let tag = load-integer(one + part-offset(desc, 0), 4, true) as s32;
+                if tag != load-integer(other + part-offset(desc, 0), 4, true) as s32 { return false; }
+                let payload = type-part(desc, tag);
+                payload == 0 || value-equal(payload, one + part-offset(desc, tag + 1), other + part-offset(desc, tag + 1))
+            }
+            _ => memory.same-bytes(left, right, type-size(desc)),
+        }
+    }
+
+    // a value's hash, as equal compares it (0.0 and -0.0 one hash)
+    value-hash: func(desc: s64, at: s64) -> u64 {
+        let width = type-size(desc);
+        match type-kind(desc) {
+            unit-value => 1,
+            f32-value => {
+                let number: f32 = load-at(at);
+                hash-bits(if number == 0.0 { 0 } else { load-integer(at, 4, false) as u64 })
+            }
+            f64-value => {
+                let number: f64 = load-at(at);
+                hash-bits(if number == 0.0 { 0 } else { load-integer(at, 8, false) as u64 })
+            }
+            string-value => {
+                let content: string = load-at(at);
+                text.hash(content)
+            }
+            signed-value => hash-bits(load-integer(at, width, true) as u64),
+            option-value => {
+                if load-integer(at + part-offset(desc, 0), 1, false) == 0 { return 1; }
+                hash-mix(2, value-hash(type-part(desc, 0), at + part-offset(desc, 1)))
+            }
+            result-value => {
+                let side = load-integer(at + part-offset(desc, 0), 1, false) as s32;
+                hash-mix(if side == 1 { 3 } else { 5 }, value-hash(type-part(desc, side), at + part-offset(desc, side + 1)))
+            }
+            tuple-value | anon-record-value | value-record-value => {
+                let out: u64 = 1;
+                for index in 0..type-count(desc) { out = hash-mix(out, value-hash(type-part(desc, index), at + part-offset(desc, index))); }
+                out
+            }
+            fixed-value => {
+                let item = type-part(desc, 0);
+                let out: u64 = 1;
+                for index in 0..type-count(desc) { out = hash-mix(out, value-hash(item, at + (index as s64) * type-size(item))); }
+                out
+            }
+            union-value | variant-value => {
+                let parts = parts-at(desc, at);
+                let tag = load-integer(parts + part-offset(desc, 0), 4, true) as s32;
+                let payload = type-part(desc, tag);
+                let out = hash-bits(tag as u64);
+                if payload == 0 { out } else { hash-mix(out, value-hash(payload, parts + part-offset(desc, tag + 1))) }
+            }
+            // anything else by its bits (a list's or record's identity; a func's first word)
+            _ => hash-bits(load-integer(at, width, false) as u64),
+        }
+    }
+
+    // where a value's parts are: in the value, or a variant's in the object it points to
+    parts-at: func(desc: s64, at: s64) -> s64 {
+        if type-kind(desc) == value-kind.variant-value {
+            let object: s64 = load-at(at);
+            return object;
+        }
+        at
+    }
+}

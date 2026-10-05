@@ -1,0 +1,10 @@
+// error: tests/vis-file/b.yel:6:9: type Cell is private to its file (@(private="file"))
+// error: tests/vis-file/b.yel:7:19: type Bit is private to its file (@(private="file"))
+// error: tests/vis-file/b.yel:8:9: type Inches is private to its file (@(private="file"))
+// error: tests/vis-file/b.yel:9:17: variant Bit is private to its file (@(private="file"))
+// error: tests/vis-file/b.yel:10:9: global mine is private to its file (@(private="file"))
+// error: tests/vis-file/b.yel:11:17: func twice is private to its file (@(private="file"))
+// error: tests/vis-file/b.yel:12:17: const MINE is private to its file (@(private="file"))
+// error: tests/vis-file/b.yel:13:9: module local is private to its file (@(private="file"))
+from "../vis-file" include a;
+main: func() -> s32 { a.uses() }

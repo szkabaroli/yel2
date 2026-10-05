@@ -2,7 +2,7 @@
 // for an async call; start f(x) begins one, its future<T>; wait a | b waits for the first done (a
 // union of their results), wait { a: x, b: y } for all (an anonymous record)
 
-record Job { name: string, steps: s32, }
+resource Job { name: string, steps: s32, }
 
 double: async func(x: s32) -> s32 {
     wait yield-turn();

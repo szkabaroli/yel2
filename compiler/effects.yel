@@ -18,7 +18,7 @@ type site-kind = "read" | "borrow" | "freeze" | "move";
 
 // such a place: the call (callee, the parameter's index) for read and borrow, and the value given:
 // a local (local) or a call's result (source), else neither
-record EffectSite {
+resource EffectSite {
     file: string,
     span: Span,
     in-func: string,
@@ -38,7 +38,7 @@ record EffectSite {
 
 // what a local made readonly is given, and where it is: whether everything given it is new,
 // how many loops deep it is made and made readonly (the walk's depth now), and a use after
-record LocalFacts {
+resource LocalFacts {
     // the local (its binding), and its func's bindings (which names are it)
     binding: Mark,
     bindings: Bindings,
@@ -66,7 +66,7 @@ record IrLocalRef { func: Name, local: s64, }
 // the program's flow as the checks read it: what each func (by key: its instances together) does
 // with each parameter and whether its result is new, what each extern does (by name), and the IR
 // locals each binding is
-record FlowView {
+resource FlowView {
     // the compile's context: its sources, the errors found so far, what was asked for
     context: Context,
     facts: Facts,

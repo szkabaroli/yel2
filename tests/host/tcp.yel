@@ -1,0 +1,68 @@
+// wasi:sockets' TCP, natively over sockets that never block (std's host), in a component the host's:
+// a server task listens on a port of its own, and a client task in the same program connects to it,
+// sends, and reads back what the server echoed, upper-cased. Neither blocks the other: each waits on
+// the reactor (an accept, a connect, a read, a write), so both go on in turn
+
+from "std:testing" include expect;
+from "wasi:sockets" include types;
+
+module tcp-tests {
+    // the loopback address, at port
+    loopback: func(port: u16) -> types.ip-socket-address {
+        types.ip-socket-address.ipv4({ port: port, address: (127, 0, 0, 1), })
+    }
+
+    // one connection taken from the listening stream, and what it sends echoed back upper-cased:
+    // how its receiving and sending ended
+    serve: async func(connections: stream<types.tcp-socket>) -> string {
+        match wait read(connections) {
+            some(peer) => {
+                let (incoming, received) = peer.receive();
+                let (reply, out) = stream-pair(64);
+                let sending = peer.send(reply);
+                wait for byte in incoming {
+                    wait out.write(if byte >= 97 && byte <= 122 { byte - 32 } else { byte });
+                }
+                out.close();
+                let outcome = "received: {wait received}, replied: {wait sending}";
+                peer.drop();
+                outcome
+            }
+            none => "no connection",
+        }
+    }
+
+    // connected to port, the message sent, the reply read to its end
+    ask: async func(port: u16, message: string) -> string {
+        let socket = expect.ok(types.tcp-socket.create(types.ip-address-family.ipv4));
+        expect.ok(wait socket.connect(loopback(port)));
+        let (request, out) = stream-pair(64);
+        let sending = socket.send(request);
+        let (incoming, received) = socket.receive();
+        wait out.write-all(message.bytes());
+        out.close();
+        let reply = buffer.buffer(64);
+        wait for byte in incoming { reply.push-byte(byte as s64); }
+        expect.ok(wait sending);
+        expect.ok(wait received);
+        socket.drop();
+        reply.to-string()
+    }
+
+    @(test) echoes-over-tcp: async func() {
+        let listener = expect.ok(types.tcp-socket.create(types.ip-address-family.ipv4));
+        // port 0: one the system picks
+        expect.ok(listener.bind(loopback(0)));
+        let port = match expect.ok(listener.get-local-address()) {
+            ipv4(address) => address.port,
+            _ => 0,
+        };
+        expect.holds(port > 0);
+        let connections = expect.ok(listener.listen());
+        expect.holds(listener.get-is-listening());
+        let server = start serve(connections);
+        expect.equal(wait ask(port, "hello over tcp"), "HELLO OVER TCP");
+        expect.equal(wait server, "received: ok, replied: ok");
+        listener.drop();
+    }
+}

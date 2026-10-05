@@ -1,4 +1,4 @@
 // error: 3:5: "a" | "b" crosses WIT as an enum, which needs a name: type name = "a" | "b";
-export module api {
+module api {
     pick: func(m: "a" | "b") -> s32 { 0 }
 }

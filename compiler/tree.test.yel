@@ -1,0 +1,126 @@
+// The syntax tree's foundations, tested (yelc test compiler): a whole file's tokens as the tree
+// reads them (lexer.lex-file: each string in pieces), for every file of the repository
+
+from "std:testing" include expect;
+
+// the repository's files, as the compiler's tests read them
+module repository {
+    // every .yel file in the repository's folders (its build output, editors' and fetched
+    // packages' left out), each folder's in order
+    yel-files: async func() -> list<string> {
+        let out: list<string> = [];
+        for dir in ["bench", "compiler", "examples", "runtime", "tests", "tools",] { wait walk(dir, out); }
+        out
+    }
+
+    @(private) walk: async func(dir: string, out: list<string>) {
+        for name in wait diagnostics.entries(dir) {
+            let path = "{dir}/{name}";
+            if name.ends-with(".yel") { out.push(path); }
+            else if name != "node_modules" && name != "libuv" && !name.starts-with(".") && wait diagnostics.is-dir(path) { wait walk(path, out); }
+        }
+    }
+}
+
+module tree-tests {
+    @(private) every-file: async func() -> list<string> { wait repository.yel-files() }
+
+    // a file's tokens, lexed whole
+    @(private) lexed: async func(path: string, text: string) -> list<Token> {
+        let overlays: map<string, string> = map.new();
+        overlays.set(path, text);
+        let reading = analysis.context(path, overlays);
+        let source = wait diagnostics.read-source(reading, path);
+        lexer.lex-file(text, reading, source)
+    }
+
+    // each token where it is: its bytes its text (a char's between its quotes, %name's past its %),
+    // in order, none overlapping, its span its line
+    // and column, and nothing between two but whitespace and comments
+    @(test) tokens-cover-every-file: async func() {
+        let files = wait every-file();
+        expect.holds(files.len() > 100);
+        for path in files {
+            let text = expect.ok(wait diagnostics.read-file(path));
+            let at = 0;
+            for t in wait lexed(path, text) {
+                if t.kind == TokenKind.eof { continue; }
+                if t.start < at { expect.fail("{path}: a token at byte {t.start} overlaps the one before (to {at})"); }
+                let between = text.substring(at, t.start);
+                if !trivia(between) { expect.fail("{path}: {between:?} before byte {t.start} is not whitespace or a comment"); }
+                // (a char's text is what is between its quotes, an escaped name's what follows its
+                // %: the tree takes their bytes)
+                let written = if t.kind == TokenKind.char { "'{t.text}'" } else if t.escaped { "%{t.text}" } else { t.text };
+                if text.substring(t.start, t.end) != written { expect.fail("{path}: the token at byte {t.start} is {t.text:?}, its bytes {text.substring(t.start, t.end):?}"); }
+                let (line, col) = tree.place(text, t.start);
+                if t.span.line != line || t.span.col != col {
+                    expect.fail("{path}: the token {t.text:?} at byte {t.start} says {t.span.line}:{t.span.col}, it is at {line}:{col}");
+                }
+                at = t.end;
+            }
+            if !trivia(text.substring(at, text.len())) { expect.fail("{path}: its end is no token's"); }
+        }
+    }
+
+    // a string in pieces: its quotes, its text, each interpolation's braces, expression and format
+    @(test) strings-in-pieces: async func() {
+        let text = "let s = \"a \{x + f(\"b\")\} c \{n:>4\}\";";
+        let kinds: list<string> = [];
+        for t in wait lexed("test.yel", text) {
+            if t.kind != TokenKind.eof { kinds.push("{t.kind:?}".replace("TokenKind.", "") + " " + t.text); }
+        }
+        expect.equal(kinds, [
+            "id let", "id s", "op =", "string-start \"", "string-text a ", "interp-start \{", "id x", "op +", "id f",
+            "op (", "string-start \"", "string-text b", "string-end \"", "op )", "interp-end \}", "string-text  c ",
+            "interp-start \{", "id n", "op :", "format-spec >4", "interp-end \}", "string-end \"", "op ;",
+        ]);
+    }
+
+    // a C template's { is an interpolation's only before a name or a paren
+    @(test) templates-keep-their-braces: async func() {
+        let pieces: list<string> = [];
+        for t in wait lexed("test.yel", "c\"if (a) \{ \{b\} \}\"") {
+            if t.kind != TokenKind.eof { pieces.push(t.text); }
+        }
+        expect.equal(pieces, ["c\"", "if (a) \{ ", "\{", "b", "\}", " \}", "\"",]);
+    }
+
+    // whitespace and // comments only
+    @(private) trivia: func(text: string) -> bool {
+        let at = 0;
+        loop {
+            if at >= text.len() { return true; }
+            let byte = text.byte-at(at);
+            if byte == 47 && at + 1 < text.len() && text.byte-at(at + 1) == 47 {
+                loop {
+                    if at >= text.len() || text.byte-at(at) == 10 { break; }
+                    at += 1;
+                }
+            } else if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
+                at += 1;
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    // a file's text as the context's source at path (an analysis's context: errors kept)
+    @(private) read-in: async func(path: string, text: string) -> tuple<Context, s64> {
+        let overlays: map<string, string> = map.new();
+        overlays.set(path, text);
+        let reading = analysis.context(path, overlays);
+        let source = wait diagnostics.read-source(reading, path);
+        (reading, source)
+    }
+
+    // every file of the repository parsed: its tree reads back as the file, byte for byte
+    @(test) every-tree-reads-back: async func() {
+        for path in wait every-file() {
+            let text = expect.ok(wait diagnostics.read-file(path));
+            let (reading, source) = wait read-in(path, text);
+            let read = tree.green-text(grammar.parse-file(reading, source));
+            if read != text { expect.fail("{path}: its tree reads back {read.len()} bytes of {text.len()}"); }
+        }
+    }
+}

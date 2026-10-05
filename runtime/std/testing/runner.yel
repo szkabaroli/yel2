@@ -1,0 +1,258 @@
+// The runner yelc test makes (packages.yel's test-runner) calls these: which tests to run, each in
+// a child process of its own (std:process: a failure, a panic, ends only it), and what each did,
+// then how many failed. And a test's snapshots, as Jest keeps them: the runner loads the file of
+// its test's file before it runs (prepare), expect.snapshot compares against them and records what
+// is new or changed (snapshot), and the runner writes the file again once it passed (save). A file
+// of snapshots is snapshots/<file>.snap beside the test's file: each one a line === <test> <n>
+// (<count> lines), then its lines, as they are
+
+package std:testing@0.1.0;
+
+from "std:process" include process;
+from "std:cli" include environment;
+from "std:filesystem" include types, preopens;
+
+module runner {
+    // whether a test is to run: the arguments (the program's first left out) name it, or name none
+    chosen: func(arguments: list<string>, name: string) -> bool {
+        if arguments.len() <= 1 { return true; }
+        for index in 1..arguments.len() {
+            if name.contains(arguments[index]) { return true; }
+        }
+        false
+    }
+
+    // where a test runs: 0 in a child of its own (the child), its id (the runner), or -1 where
+    // there is no child (a target without processes: the test runs in the runner)
+    start: func() -> s64 {
+        match process.fork() {
+            ok(none) => 0,
+            ok(some(child)) => child,
+            err(_) => -1,
+        }
+    }
+
+    // the child's test passed: it ends here
+    passed: func() -> never { process.end(0) }
+
+    // a test's outcome told (ok, or FAIL): whether it passed. child: the one it ran in (-1: it ran
+    // here, and got to its end)
+    report: func(name: string, child: s64) -> bool {
+        if child < 0 {
+            print("ok   {name}\n");
+            return true;
+        }
+        match process.wait(child) {
+            ok(code(0)) => {
+                print("ok   {name}\n");
+                true
+            }
+            ok(signal(number)) => {
+                print("FAIL {name} (signal {number})\n");
+                false
+            }
+            _ => {
+                print("FAIL {name}\n");
+                false
+            }
+        }
+    }
+
+    // the test running (prepare's: none, before one), its snapshots' file, the snapshots stored
+    // there (by key: <test> <n>) and their order, how many it has taken, whether any is new or
+    // changed, and whether a differing one is written (YEL_SNAPSHOTS=update) in place of failing
+    let test: string;
+    let snapshot-file: string;
+    let stored: map<string, string>;
+    let order: list<string>;
+    let taken: s64;
+    let changed: bool;
+    let updating: bool;
+
+    // the test about to run, and its snapshots (those of file, read now: none if it is not there)
+    prepare: async func(name: string, file: string) {
+        test = name;
+        snapshot-file = file;
+        stored = map.new();
+        order = [];
+        taken = 0;
+        changed = false;
+        updating = environment.get-environment().any({ entry -> entry.0 == "YEL_SNAPSHOTS" && entry.1 == "update" });
+        match wait read-text(file) {
+            some(text) => read-snapshots(text),
+            none => {}
+        }
+    }
+
+    // the test's next snapshot, got: ok where it is as stored, new (recorded), or differs where
+    // that is to be written (recorded); else what differs
+    snapshot: func(got: string) -> result<(), string> {
+        if test == "" { return err("a snapshot is taken in a test yelc test runs"); }
+        taken += 1;
+        let key = "{test} {taken}";
+        match stored.get(key) {
+            none => {
+                remember(key, got);
+                ok(())
+            }
+            some(text) => {
+                if text == got { return ok(()); }
+                if updating {
+                    remember(key, got);
+                    return ok(());
+                }
+                err("snapshot {key} differs (YEL_SNAPSHOTS=update writes it):\n{line-diff(text, got)}")
+            }
+        }
+    }
+
+    // the test's snapshots written, where one is new or changed (its file's others as they were)
+    save: async func() {
+        if !changed { return; }
+        let lines: list<string> = [
+            "// yel snapshots (yelc test writes them; YEL_SNAPSHOTS=update writes those that differ)",
+        ];
+        for key in order {
+            let text = stored[key];
+            let count = text.split("\n").len();
+            lines.push("");
+            lines.push("=== {key} ({count} {if count == 1 { "line" } else { "lines" }})");
+            lines.push(text);
+        }
+        lines.push("");
+        let slash = snapshot-file.find-last("/").unwrap-or(-1);
+        if slash > 0 { wait make-directory(snapshot-file.substring(0, slash)); }
+        if !wait write-text(snapshot-file, lines.join("\n")) { eprint("snapshots: {snapshot-file} not written\n"); }
+    }
+
+    @(private) remember: func(key: string, text: string) {
+        if !stored.has(key) { order.push(key); }
+        stored.set(key, text);
+        changed = true;
+    }
+
+    // a file of snapshots read: each === <key> (<count> lines), then that many lines
+    @(private) read-snapshots: func(text: string) {
+        let lines = text.split("\n");
+        let index = 0;
+        loop {
+            if index >= lines.len() { break; }
+            let line = lines[index];
+            index += 1;
+            if !line.starts-with("=== ") { continue; }
+            let open = line.find-last(" (").unwrap-or(-1);
+            if open < 4 { continue; }
+            let key = line.substring(4, open);
+            let count = parse-int(line.substring(open + 2, line.find-from(" ", open + 2).unwrap-or(line.len()))).unwrap-or(0);
+            let end = if index + count > lines.len() { lines.len() } else { index + count };
+            stored.set(key, lines.slice(index, end).join("\n"));
+            order.push(key);
+            index = end;
+        }
+    }
+
+    // two texts' lines, what differs told: - a stored line, + a line got (a longest common run of
+    // lines kept, as diff's)
+    line-diff: func(stored-text: string, got: string) -> string {
+        let a = stored-text.split("\n");
+        let b = got.split("\n");
+        // common[i][j]: the longest common run of a's lines from i and b's from j
+        let common: list<list<s64>> = [];
+        for i in 0..a.len() + 1 {
+            let row: list<s64> = [];
+            for j in 0..b.len() + 1 { row.push(0); }
+            common.push(row);
+        }
+        for step in 0..a.len() {
+            let i = a.len() - 1 - step;
+            for back in 0..b.len() {
+                let j = b.len() - 1 - back;
+                common[i][j] = if a[i] == b[j] {
+                    common[i + 1][j + 1] + 1
+                } else if common[i + 1][j] >= common[i][j + 1] {
+                    common[i + 1][j]
+                } else {
+                    common[i][j + 1]
+                };
+            }
+        }
+        let out: list<string> = [];
+        let i = 0;
+        let j = 0;
+        loop {
+            if i < a.len() && j < b.len() && a[i] == b[j] {
+                out.push("  {a[i]}");
+                i += 1;
+                j += 1;
+            } else if i < a.len() && (j >= b.len() || common[i + 1][j] >= common[i][j + 1]) {
+                out.push("- {a[i]}");
+                i += 1;
+            } else if j < b.len() {
+                out.push("+ {b[j]}");
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        out.join("\n")
+    }
+
+    // the text of the file at path (the working directory's, its first preopen), none where there
+    // is none (or no directory is granted: a component run with no --dir)
+    @(private) read-text: async func(path: string) -> option<string> {
+        let dirs = preopens.get-directories();
+        if dirs.len() == 0 { return none; }
+        let follow = types.path-flags.symlink-follow;
+        let nothing = types.open-flags.create & types.open-flags.directory;
+        match wait dirs[0].0.open-at(follow, path, nothing, types.descriptor-flags.read) {
+            ok(file) => {
+                let (bytes, reading) = file.read-via-stream(0);
+                let text = buffer.buffer(4096);
+                loop {
+                    let chunk = wait streams.read-some(bytes, 65536);
+                    if chunk.len() == 0 { break; }
+                    text.push-bytes(chunk);
+                }
+                let _ = wait reading;
+                file.drop();
+                some(text.to-string())
+            }
+            err(_) => none,
+        }
+    }
+
+    // text written to the file at path (made, or emptied first): whether it was
+    @(private) write-text: async func(path: string, text: string) -> bool {
+        let dirs = preopens.get-directories();
+        if dirs.len() == 0 { return false; }
+        let fresh = types.open-flags.create | types.open-flags.truncate;
+        match wait dirs[0].0.open-at(types.path-flags.symlink-follow, path, fresh, types.descriptor-flags.write) {
+            ok(file) => {
+                let (bytes, out): tuple<stream<u8>, writer<u8>> = streams.stream-pair(65536);
+                let written = file.write-via-stream(bytes, 0);
+                wait out.write-all(text.bytes());
+                out.close();
+                let done = wait written;
+                file.drop();
+                match done {
+                    ok(_) => true,
+                    err(_) => false,
+                }
+            }
+            err(_) => false,
+        }
+    }
+
+    // a directory made where there is none (one that is there is left as it is)
+    @(private) make-directory: async func(path: string) {
+        let dirs = preopens.get-directories();
+        if dirs.len() == 0 { return; }
+        let _ = wait dirs[0].0.create-directory-at(path);
+    }
+
+    // how many ran and failed, told: the runner's exit status (1 where any failed)
+    summary: func(ran: s32, failed: s32) -> s32 {
+        print("{ran} {if ran == 1 { "test" } else { "tests" }}, {failed} failed\n");
+        if failed > 0 { 1 } else { 0 }
+    }
+}

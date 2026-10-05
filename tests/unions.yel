@@ -5,7 +5,7 @@ type value = s32 | string | bool;
 type id = s32 | string;
 type answer = "yes" | "no" | s32;
 
-record Item { name: string, count: s32, }
+resource Item { name: string, count: s32, }
 
 type entry = Item | string;
 

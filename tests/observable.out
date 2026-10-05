@@ -1,0 +1,39 @@
+{id: 1, name: "ada", at: {x: 0, y: 0}, items: [], log: []}
+a run reads id and name (through a helper)
+  at.x changed, not read: nothing
+  told: label
+  once only: the watch is done
+  changed since: true
+an ignored field
+  nothing
+a part of a value in a field
+  told: at
+a list in a field: read, changed in place
+  len: 0, count: 0
+  told: items
+  told: items again
+  told: items set
+  ["uno", "two"]
+a condition: what is read is what this run read
+  name not read: nothing
+  told: branch
+untracked reads
+  nothing
+effects
+  effect: not read 10
+  two changes, one run (at the flush)
+  cleanup: 10
+  effect: lin 11
+  cleanup: 11
+  effect: lin 13
+  at not read: no run
+an effect that makes one: the inner let go when the outer runs again
+  inner 0: q
+  inner 0 let go
+  inner 0: r
+  inner 0 let go
+  inner 1: r
+disposed
+  inner 1 let go
+  cleanup: 13
+  nothing runs

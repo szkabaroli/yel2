@@ -1,0 +1,130 @@
+// observable state that async work fills in: a page whose user is loaded when its id changes (an
+// async value: the result for an id no longer wanted dropped), and whose messages come from a
+// stream opened for that id (a subscription: the old stream let go when the id changes). Effects
+// start the work (start does not wait, so a closure may begin a task); the tasks write the state
+// and flush, and the render effect shows each change once
+
+variant loading { idle, pending(option<string>), ready(string), }
+
+@(observable) resource Page {
+    id: u32,
+    user: loading,
+    message: option<string>,
+    // which load and which subscription are current (the effects' own: not watched)
+    @(ignored) load-run: u64,
+    @(ignored) message-run: u64,
+}
+
+// a slow lookup: a turn for each step, as a network call takes its time
+fetch-user: async func(id: u32) -> string {
+    for i in 0..id { wait yield-turn(); }
+    "user {id}"
+}
+
+// a stream of a user's messages, a turn apart (a producer task writes them, then closes it)
+messages: func(id: u32) -> stream<string> {
+    let (s, w) = stream-pair(8);
+    start produce(w, id);
+    s
+}
+
+produce: async func(w: writer<string>, id: u32) {
+    for i in 1..=2 {
+        wait yield-turn();
+        wait w.write("message {i} for {id}");
+    }
+    w.close();
+}
+
+// what a loading user shows as, while loading: the one before
+latest: func(l: loading) -> option<string> {
+    match l {
+        ready(u) => some(u),
+        pending(before) => before,
+        idle => none,
+    }
+}
+
+describe: func(l: loading) -> string {
+    match l {
+        idle => "idle",
+        pending(before) => "loading (was {before.unwrap-or("nobody")})",
+        ready(u) => u,
+    }
+}
+
+// the effects a page's view makes
+mount: func(page: Page) {
+    // the user: loaded again each time id changes
+    let _ = reactive.effect({ ->
+        let id = page.id;
+        page.load-run += 1;
+        let run = page.load-run;
+        // (its last value read untracked: this effect is id's, not the user's)
+        let before: option<string> = none;
+        observe.untracked({ -> before = latest(page.user); });
+        page.user = loading.pending(before);
+        start settle-user(page, run, id);
+        // let go (id changed again, or unmounted): this load's result is not wanted
+        { -> page.load-run += 1; }
+    });
+    // the messages: a stream for each id, the one before let go
+    let _ = reactive.effect({ ->
+        let id = page.id;
+        page.message-run += 1;
+        start pump-messages(page, page.message-run, messages(id));
+        { -> page.message-run += 1; }
+    });
+    // the view: shown again once for each flush that changed what it reads
+    let _ = reactive.effect({ ->
+        print("  view: #{page.id} {describe(page.user)}, {page.message.unwrap-or("no messages")}\n");
+        { -> }
+    });
+}
+
+settle-user: async func(page: Page, run: u64, id: u32) {
+    let user = wait fetch-user(id);
+    if page.load-run != run {
+        print("  (user {id} came too late: dropped)\n");
+        return;
+    }
+    page.user = loading.ready(user);
+    reactive.flush();
+}
+
+pump-messages: async func(page: Page, run: u64, s: stream<string>) {
+    wait for m in s {
+        if page.message-run != run {
+            print("  (stream for an old id let go)\n");
+            return;
+        }
+        page.message = some(m);
+        reactive.flush();
+    }
+}
+
+// turns enough for every task started to finish
+settle: async func() { for i in 0..20 { wait yield-turn(); } }
+
+main: async func() {
+    let page: Page = { id: 1, user: loading.idle, message: none, load-run: 0, message-run: 0, };
+    let view = reactive.new-owner();
+    print("mount\n");
+    reactive.within(view, { -> mount(page); });
+    wait settle();
+
+    print("id 2, then id 3 before 2 has loaded\n");
+    page.id = 2;
+    reactive.flush();
+    wait yield-turn();
+    page.id = 3;
+    reactive.flush();
+    wait settle();
+
+    print("unmounted while id 4 loads\n");
+    page.id = 4;
+    reactive.flush();
+    reactive.dispose(view);
+    wait settle();
+    print("  (nothing shown: the view is gone)\n");
+}

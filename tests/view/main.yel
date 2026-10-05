@@ -1,0 +1,80 @@
+// views, run natively against tests/view/dom.yel: what mount makes, and what each change tells the
+// host (only what changed)
+
+package test:view@0.1.0;
+
+module counter-view {
+    view Counter {
+        name: string = "ada";
+        @(private) count: s32 = 0;
+
+        VStack {
+            Text { "Hello, {name}!" }
+            Text { "Clicked {count} times" }
+            Button {
+                "+"
+                on click { count += 1; }
+            }
+        }
+    }
+}
+
+// attributes (one read again as what it reads changes), if and else, a keyed for (rows kept by
+// their key, each with a handler of its own)
+module list-view {
+    view Todo {
+        items: list<string> = [];
+        @(private) done: s32 = 0;
+
+        VStack {
+            style.pad: 8.0
+            Text {
+                weight: if done > 0 { "bold" } else { "normal" }
+                "{done} done"
+            }
+            if items.len() == 0 {
+                Text { "Nothing to do" }
+            } else if items.len() > 2 {
+                Text { "Busy" }
+            }
+            for item in items key(item) {
+                Button {
+                    "{item}"
+                    on click { done += 1; }
+                }
+            }
+        }
+    }
+}
+
+main: func() {
+    let c = counter-view.new();
+    print("mount\n");
+    counter-view.mount(c, 0);
+    print("click (handler 1)\n");
+    counter-view.dispatch(c, 1);
+    print("click\n");
+    counter-view.dispatch(c, 1);
+    print("set-name grace\n");
+    counter-view.set-name(c, "grace");
+    print("set-name grace again: nothing\n");
+    counter-view.set-name(c, "grace");
+    print("unmount\n");
+    counter-view.unmount(c);
+
+    let t = list-view.new();
+    print("todo: mount\n");
+    list-view.mount(t, 0);
+    print("todo: items a, b\n");
+    list-view.set-items(t, ["a", "b",]);
+    print("todo: a, b, c (busy; rows a and b kept)\n");
+    list-view.set-items(t, ["a", "b", "c",]);
+    print("todo: click c's row\n");
+    list-view.dispatch(t, 3);
+    print("todo: c, a (b let go)\n");
+    list-view.set-items(t, ["c", "a",]);
+    print("todo: none\n");
+    list-view.set-items(t, []);
+    print("todo: unmount\n");
+    list-view.unmount(t);
+}

@@ -1,0 +1,69 @@
+//+build native
+
+// wasi:cli's stdin, stdout and stderr natively, as host-cli.yel is the rest of wasi:cli: each a
+// stream of bytes, a task moving them between it and the process's descriptor. Reading waits on the
+// reactor (the runtime's loop wakes the task once stdin can be read), so other tasks run while no
+// input has come; writing goes through C's stdout and stderr, flushed after each chunk, so it keeps
+// its order with print's. A program's calls bind to these natively and to the host in a component.
+
+from "wasi:cli" include types;
+
+module wasi-cli-stdin {
+    // stdin's bytes as they come, and a future for how the reading ended
+    read-via-stream: func() -> tuple<stream<u8>, future<result<(), types.error-code>>> {
+        let ends: tuple<stream<u8>, writer<u8>> = streams.stream-pair(65536);
+        let (bytes, out) = ends;
+        (bytes, start stdio.bytes-out(0, out))
+    }
+}
+
+module wasi-cli-stdout {
+    // data written to stdout as it comes; a future for how the writing ended
+    write-via-stream: func(data: stream<u8>) -> future<result<(), types.error-code>> { start stdio.bytes-in(1, data) }
+}
+
+module wasi-cli-stderr {
+    // data written to stderr as it comes; a future for how the writing ended
+    write-via-stream: func(data: stream<u8>) -> future<result<(), types.error-code>> { start stdio.bytes-in(2, data) }
+}
+
+module stdio {
+    // a descriptor's bytes into out until its end (a read waits for none: the reactor wakes the
+    // task once there are some)
+    bytes-out: async func(descriptor: s64, out: writer<u8>) -> result<(), types.error-code> {
+        loop {
+            if ready(descriptor, 1) { wait async.park(); }
+            let chunk = buffer.buffer(65536);
+            let got = read(descriptor, memory.buffer-data(chunk), 65536);
+            if got < 0 {
+                streams.close(out);
+                return err(types.error-code.io);
+            }
+            if got == 0 { break; }
+            memory.set-buffer-length(chunk, got);
+            wait streams.write-all(out, chunk.to-bytes());
+        }
+        streams.close(out);
+        ok(())
+    }
+
+    // data's bytes written to stdout (1) or stderr (2) as they come, until its writer closes it
+    bytes-in: async func(descriptor: s64, data: stream<u8>) -> result<(), types.error-code> {
+        loop {
+            let bytes = wait streams.read-some(data, 65536);
+            if bytes.len() == 0 { return ok(()); }
+            let chunk = buffer.buffer(bytes.len());
+            chunk.push-bytes(bytes);
+            if write-out(descriptor, memory.buffer-data(chunk), chunk.len()) < 0 { return err(types.error-code.pipe); }
+        }
+        ok(())
+    }
+
+    // the task to be woken once descriptor can be read (events 1) or written (2): true where it
+    // waits so (it parks next), false for one that never waits (a regular file)
+    @c(name = "yel_async_ready") ready: extern func(descriptor: s64, events: s64) -> bool;
+    // descriptor about to be closed: its watch ended first, who waits on it woken
+    @c(name = "yel_async_forget") forget: extern func(descriptor: s64);
+    @c(name = "yel_host_read") read: extern func(descriptor: s64, at: s64, count: s64) -> s64;
+    @c(name = "yel_host_write_out") write-out: extern func(descriptor: s64, at: s64, count: s64) -> s64;
+}

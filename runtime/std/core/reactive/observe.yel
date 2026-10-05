@@ -1,0 +1,150 @@
+// Observation, as Swift's: what a run reads, and who is told when it changes. The compiler's half:
+// an @(observable) resource holds a registrar (made with it), each read of one of its fields calls
+// access, and each write will-set (a field assigned, a part of a value in it, or what is in it
+// changed in place: xs.push(x) of a list field, a func that writes it). This half is std's: track
+// runs a func, keeping what it read, and calls on-change once, on the first change to any of it.
+// reactive (std's) is made of it: effects, and what runs them.
+
+module observe {
+    // an observable resource's: by field (its index in the resource), its version (one more for
+    // each change) and the watches on it. refresh: a derived value's, made current when read
+    // (none: a resource's own fields are current)
+    resource Registrar {
+        versions: list<u64>,
+        watches: map<u32, list<Watch>>,
+        refresh: option<func()>,
+    }
+
+    // what one run of track read, and what it calls when one of them changes (once: done then)
+    resource Watch { reads: list<Read>, on-change: func(), done: bool, }
+
+    // a field read: of which registrar, and its version then
+    record Read { from: Registrar, field: u32, version: u64, }
+
+    // what the run being tracked has read (none: no run is)
+    @(private) let reading: option<list<Read>>;
+
+    // an observable resource's registrar, made with it (fields: how many it has)
+    registrar: func(fields: u32) -> Registrar {
+        let versions: list<u64> = [];
+        for i in 0..fields { versions.push(0); }
+        { versions: versions, watches: map.new(), refresh: none, }
+    }
+
+    // a field read (the compiler's call): kept, while a run is tracked
+    access: func(r: Registrar, field: u32) {
+        match reading {
+            some(reads) => reads.push({ from: r, field: field, version: r.versions[field as s64], }),
+            none => {}
+        }
+    }
+
+    // a field about to change (the compiler's call): its version moves on, and each watch on it is
+    // told
+    will-set: func(r: Registrar, field: u32) {
+        let at = field as s64;
+        r.versions[at] = r.versions[at] + 1;
+        wake(r, field);
+    }
+
+    // each watch on a field told (once: each is done after), its version as it was: what a derived
+    // value does when what it is made of changes (it may come out the same)
+    wake: func(r: Registrar, field: u32) {
+        match r.watches.get(field) {
+            some(watches) => {
+                let _ = r.watches.remove(field);
+                for w in watches { fire(w); }
+            }
+            none => {}
+        }
+    }
+
+    // run apply, keeping what it reads; on the first change to any of that, on-change (once)
+    track: func(apply: func(), on-change: func()) -> Watch {
+        let outer = reading;
+        let reads: list<Read> = [];
+        reading = some(reads);
+        apply();
+        reading = outer;
+        let w: Watch = { reads: reads, on-change: on-change, done: false, };
+        arm(w);
+        w
+    }
+
+    // a watch told again of what it read (a run not needed after all: nothing it read changed)
+    rearm: func(w: Watch) {
+        w.done = false;
+        arm(w);
+    }
+
+    // a watch let go: told of nothing more
+    stop: func(w: Watch) { w.done = true; }
+
+    // whether anything w read has changed since (each derived value made current first)
+    changed: func(w: Watch) -> bool {
+        for read in w.reads {
+            match read.from.refresh {
+                some(refresh) => refresh(),
+                none => {}
+            }
+            if read.from.versions[read.field as s64] != read.version { return true; }
+        }
+        false
+    }
+
+    // run, keeping none of what it reads (inside a tracked run: not a dependency of it)
+    untracked: func(run: func()) {
+        let outer = reading;
+        reading = none;
+        run();
+        reading = outer;
+    }
+
+    // whether a run is being tracked
+    tracking: func() -> bool {
+        match reading {
+            some(_) => true,
+            none => false,
+        }
+    }
+
+    @(private) fire: func(w: Watch) {
+        if w.done { return; }
+        w.done = true;
+        let tell = w.on-change;
+        tell();
+    }
+
+    // w on each field it read (each field once; the watches done let go as it goes)
+    @(private) arm: func(w: Watch) {
+        for read in w.reads {
+            let r = read.from;
+            match r.watches.get(read.field) {
+                some(watches) => {
+                    if !contains(watches, w) {
+                        if watches.len() >= 8 { drop-done(watches); }
+                        watches.push(w);
+                    }
+                }
+                none => r.watches.set(read.field, [w,]),
+            }
+        }
+    }
+
+    @(private) contains: func(watches: list<Watch>, w: Watch) -> bool {
+        for x in watches { if x == w { return true; } }
+        false
+    }
+
+    // the watches still waiting kept, in order
+    @(private) drop-done: func(watches: list<Watch>) {
+        let kept = 0;
+        for i in 0..watches.len() {
+            if !watches[i].done {
+                watches[kept] = watches[i];
+                kept += 1;
+            }
+        }
+        for i in kept..watches.len() { let _ = watches.pop(); }
+    }
+}

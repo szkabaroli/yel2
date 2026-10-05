@@ -1,0 +1,24 @@
+package test:vis-file;
+
+// File-private declarations (@(private="file")) of each kind: this file names them, b.yel (the
+// package's other file) may not (the errors of tests/errors/visibility-file.yel)
+
+@(private="file") resource Cell { n: s32, }
+@(private="file") variant Bit { zero, one, }
+@(private="file") type Inches = s32;
+@(private="file") const MINE: s32 = 3;
+@(private="file") let mine: s32;
+@(private="file") twice: func(n: s32) -> s32 { n * 2 }
+@(private="file") module local {
+    one: func() -> s32 { 1 }
+}
+
+module a {
+    uses: func() -> s32 {
+        let c: Cell = { n: 1, };
+        let bit = Bit.one;
+        let i: Inches = 2;
+        mine += 1;
+        c.n + i + twice(1) + MINE + mine + local.one()
+    }
+}

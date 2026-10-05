@@ -25,7 +25,7 @@
 record Label { span: Span, message: string, primary: bool, }
 
 // path: the file of one with no span (a package's directory)
-record Diagnostic {
+resource Diagnostic {
     message: string,
     path: string,
     labels: list<Label>,
@@ -36,15 +36,65 @@ record Diagnostic {
 // one compile's context, threaded through its phases: every file read (a span's source is its
 // index), the errors found so far (report: shown where a phase ends), and what the command line
 // asked for: the input, how it is optimized ("size", "speed", "none"; "check": yelc check), the
-// backend ("c", "bitcode") and the target's triple
-record Context {
+// backend ("c", "bitcode") and the target's triple. overlays: files' texts by path, read in place
+// of the disk's (an editor's unsaved buffers: a language server's), and a directory's files as
+// well as those on disk. exits: errors stop the process where a phase ends (yelc's), else they are
+// kept for the caller (analysis.check's: a language server's), the first ERROR-LIMIT of them.
+// type-names: where the parser read a declared type's name (the checker finds what each names);
+// uses: each name the checker resolved, and what it names (go-to-definition's, references'): both
+// kept only where errors are kept too (analysis.check's), none for yelc's own compile; modules: where
+// each module is declared (its name, as a type's is); declarations: where each type's, constant's
+// and global's name is written; members, locals, bodies: what completion is made of (each member
+// after a dot, each local's extent, each body's scope)
+resource Context {
     sources: list<Source>,
     errors: list<Diagnostic>,
     input: string,
     mode: string,
     backend: string,
     triple: string,
+    // debug info made (yelc -g: the bitcode backend's DWARF)
+    debug: bool,
+    // yelc test: the program is the package's tests (its @(test) funcs), run by a runner made for
+    // them; another build leaves them out. For a component (test-exports), the runner is an export
+    // interface the host calls, a test a call
+    testing: bool,
+    test-exports: bool,
+    overlays: map<string, string>,
+    exits: bool,
+    type-names: list<TypeName>,
+    uses: list<NameUse>,
+    modules: list<TypeName>,
+    declarations: list<TypeName>,
+    members: list<MemberSite>,
+    locals: list<LocalExtent>,
+    bodies: list<BodyScope>,
+    // each file's syntax tree (an analysis's: syntax.yel's, lossless), by its source
+    trees: map<s64, GreenNode>,
+    // the declarations by key, as the checker resolves them (syntax.yel's Symbols): the
+    // checker's, the generator's and an analysis's one table
+    symbols: Symbols,
 }
+
+// a member's place after a dot (x.name, module.name, Type.name; zero wide where none is written yet:
+// x.), and what is before the dot: a value of type ty, a module (its key), or a type (its key)
+record MemberSite { span: Span, ty: Type, module: string, type-key: string, }
+
+// a local's binding, and the extent it is visible in (its block's, a func's body, a match arm)
+record LocalExtent { mark: Mark, until: Span, }
+
+// a func's (or a view's) body, and the scope its names are looked up in (its file's includes, its
+// module)
+record BodyScope { span: Span, scope: Scope, }
+
+// a declared type's name as written, where, and in what scope (what it names is looked up there)
+record TypeName { name: string, span: Span, scope: Scope, }
+
+// a name where it is used, and what it names: a declaration's key (key), or a local's binding
+// (local, key ""). Two kinds name no declaration: a built-in type (builtin:s32), and a field of a
+// type that is its fields, a tuple's or an anonymous record's (~T#f: ty is the field's type); and a
+// literal (literal:kind:where: ty its type, text its value as the checker has it)
+record NameUse { span: Span, key: string, local: option<Mark>, ty: Type, text: string, }
 
 from "std:filesystem" include types, preopens;
 from "std:cli" include exit;
@@ -73,7 +123,13 @@ module diagnostics {
             if line > 0 && col > 0 {
                 // a place in a file by its path: the source that is, where the program read it
                 let file = parts.slice(0, parts.len() - 2).join(":");
-                let sp: Span = { source: -1, line: line, col: col, end-line: line, end-col: col + 1, };
+                let sp: Span = {
+                    source: -1,
+                    line: line,
+                    col: col,
+                    end-line: line,
+                    end-col: col + 1,
+                };
                 let d = error(sp, message, "");
                 d.path = file;
                 return d;
@@ -99,19 +155,30 @@ module diagnostics {
     // the working directory: the first preopen (natively ".", as `wasmtime --dir .` gives it)
     working-dir: func() -> types.descriptor {
         let dirs = preopens.get-directories();
-        if dirs.len() == 0 { fail("no working directory: run it with the working directory given (wasmtime --dir .)"); }
+        if dirs.len() == 0 {
+            fail("no working directory: run it with the working directory given (wasmtime --dir .)");
+        }
         for index in 1..dirs.len() { dirs[index].0.drop(); }
         dirs[0].0
     }
 
     // no flags of these kinds
-    no-open-flags: func() -> types.open-flags { types.open-flags.create & types.open-flags.directory }
+    no-open-flags: func() -> types.open-flags {
+        types.open-flags.create & types.open-flags.directory
+    }
 
     // a file read into the program's sources: its index there (a span's source)
     read-source: async func(context: Context, path: string) -> s64 {
+        match context.overlays.get(path) {
+            some(text) => {
+                context.sources.push({ path: path, text: text, origin: none, });
+                return context.sources.len() - 1;
+            }
+            none => {}
+        }
         match wait read-file(path) {
             ok(text) => {
-                context.sources.push({ path: path, text: text, });
+                context.sources.push({ path: path, text: text, origin: none, });
                 context.sources.len() - 1
             }
             err(error) => {
@@ -123,7 +190,12 @@ module diagnostics {
     // a file's bytes, as a string
     read-file: async func(path: string) -> result<string, types.error-code> {
         let root = working-dir();
-        let opened = wait root.open-at(types.path-flags.symlink-follow, path, no-open-flags(), types.descriptor-flags.read);
+        let opened = wait root.open-at(
+            types.path-flags.symlink-follow,
+            path,
+            no-open-flags(),
+            types.descriptor-flags.read,
+        );
         root.drop();
         match opened {
             ok(file) => {
@@ -148,7 +220,12 @@ module diagnostics {
     // a file written (made, or emptied first)
     write-output: async func(path: string, content: string) {
         let root = working-dir();
-        let opened = wait root.open-at(types.path-flags.symlink-follow, path, types.open-flags.create | types.open-flags.truncate, types.descriptor-flags.write);
+        let opened = wait root.open-at(
+            types.path-flags.symlink-follow,
+            path,
+            types.open-flags.create | types.open-flags.truncate,
+            types.descriptor-flags.write,
+        );
         root.drop();
         match opened {
             ok(file) => {
@@ -170,7 +247,12 @@ module diagnostics {
     // a directory's entries, sorted (so what is made of them does not depend on the system)
     entries: async func(dir: string) -> list<string> {
         let root = working-dir();
-        let opened = wait root.open-at(types.path-flags.symlink-follow, dir, types.open-flags.directory, types.descriptor-flags.read);
+        let opened = wait root.open-at(
+            types.path-flags.symlink-follow,
+            dir,
+            types.open-flags.directory,
+            types.descriptor-flags.read,
+        );
         root.drop();
         match opened {
             ok(found) => {
@@ -208,6 +290,35 @@ module diagnostics {
         }
     }
 
+    // a directory's entries as the program's sources see them: the disk's (none where it is no
+    // directory there), and the overlays' files in it, each once, sorted
+    source-entries: async func(context: Context, dir: string) -> list<string> {
+        let at = packages.clean-path(dir);
+        let names: list<string> = if wait is-dir(at) { wait entries(at) } else { [] };
+        let added = false;
+        for path in context.overlays.keys() {
+            if packages.dir-name(path) == at {
+                let name = path.substring(at.len() + 1, path.len());
+                if !names.contains(name) {
+                    names.push(name);
+                    added = true;
+                }
+            }
+        }
+        if added { names.sort({ a, b -> text.compare(a, b) < 0 }); }
+        names
+    }
+
+    // whether a path names a directory as the program's sources see it: one on disk, or one an
+    // overlay's file is in
+    is-source-dir: async func(context: Context, path: string) -> bool {
+        let at = packages.clean-path(path);
+        for overlay in context.overlays.keys() {
+            if overlay.starts-with(at + "/") { return true; }
+        }
+        wait is-dir(at)
+    }
+
     // a directory made, with its parents (nothing where they are there)
     make-dirs: async func(dir: string) {
         let root = working-dir();
@@ -242,13 +353,40 @@ module diagnostics {
         for e in context.errors {
             if same(e, d) { return; }
         }
+        // (kept for a caller: the first ERROR-LIMIT, the phase going on)
+        if !context.exits && context.errors.len() >= ERROR-LIMIT { return; }
         context.errors.push(d);
-        if context.errors.len() >= ERROR-LIMIT { stop(context, "stopped after {ERROR-LIMIT} errors"); }
+        if context.exits
+            && context.errors.len() >= ERROR-LIMIT {
+            stop(context, "stopped after {ERROR-LIMIT} errors");
+        }
     }
 
-    // where a phase ends: the errors it found shown, and the compiler stopped (none: it goes on)
+    // the text a place covers in its file (a call's argument as written, a default)
+    span-text: func(context: Context, place: Span) -> string {
+        if place.source < 0 { return ""; }
+        let text = context.sources[place.source].text;
+        let start = text-offset(text, place.line, place.col);
+        let end = text-offset(text, place.end-line, place.end-col);
+        if start < 0 || end < start || end > text.len() { "" } else { text.substring(start, end) }
+    }
+
+    // the byte offset of a line and column (from 1) in text; -1 past its end
+    text-offset: func(text: string, line: s64, col: s64) -> s64 {
+        let at = 0;
+        for step in 1..line {
+            match text.find-from("\n", at) {
+                some(newline) => { at = newline + 1; }
+                none => { return -1; }
+            }
+        }
+        at + col - 1
+    }
+
+    // where a phase ends: the errors it found shown, and the compiler stopped (none: it goes on;
+    // a context that does not exit keeps them for its caller, which looks at them)
     abort-if-errors: func(context: Context) {
-        if context.errors.len() == 0 { return; }
+        if context.errors.len() == 0 || !context.exits { return; }
         stop(context, "{context.errors.len()} errors");
     }
 
@@ -367,7 +505,11 @@ module diagnostics {
         let width = "{shown[shown.len() - 1]}".len();
         let pad = " ".repeat(width);
         // the file: the primary span's source, else (error-at's) the one at the diagnostic's path
-        let source = if first.span.source >= 0 { first.span.source } else { source-at(sources, d.path) };
+        let source = if first.span.source >= 0 {
+            first.span.source
+        } else {
+            source-at(sources, d.path)
+        };
         let path = if source >= 0 { sources[source].path } else { d.path };
         let src = if source >= 0 { sources[source].text.lines() } else { [] };
         out.push("{pad}{blue}-->{reset} {path}:{first.span.line}:{first.span.col}\n");
@@ -412,14 +554,27 @@ module diagnostics {
     }
 
     // the notes and the help
-    tail: func(d: Diagnostic, out: list<string>, pad: string, blue: string, bold: string, reset: string) {
+    tail: func(
+        d: Diagnostic,
+        out: list<string>,
+        pad: string,
+        blue: string,
+        bold: string,
+        reset: string,
+    ) {
         if d.notes.len() + d.helps.len() == 0 { return; }
         out.push("{pad} {blue}|{reset}\n");
         for n in d.notes { out.push("{pad} {blue}={reset} {bold}note{reset}: {n}\n"); }
         for h in d.helps { out.push("{pad} {blue}={reset} {bold}help{reset}: {h}\n"); }
     }
 
-    source-row: func(src: list<string>, line: s64, width: s64, blue: string, reset: string) -> string {
+    source-row: func(
+        src: list<string>,
+        line: s64,
+        width: s64,
+        blue: string,
+        reset: string,
+    ) -> string {
         let text = if line >= 1 && line <= src.len() { src[line - 1] } else { "" };
         "{blue}{"{line}".pad-start(width, " ")} |{reset} {expand-tabs(text)}\n"
     }
@@ -507,8 +662,7 @@ module diagnostics {
                 if rows[i][j - 1] + 1 < best { best = rows[i][j - 1] + 1; }
                 if rows[i - 1][j - 1] + cost < best { best = rows[i - 1][j - 1] + cost; }
                 if i > 1 && j > 1 && a.byte-at(i - 1) == b.byte-at(j - 2)
-                    && a.byte-at(i - 2) == b.byte-at(j - 1)
-                    && rows[i - 2][j - 2] + 1 < best {
+                    && a.byte-at(i - 2) == b.byte-at(j - 1) && rows[i - 2][j - 2] + 1 < best {
                     best = rows[i - 2][j - 2] + 1;
                 }
                 rows[i][j] = best;

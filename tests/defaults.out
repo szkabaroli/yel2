@@ -1,0 +1,6 @@
+hello, yel / hi, yel / hey hey, yel
+2 6 2
+tests/defaults.yel:19:44 in here
+tests/defaults.yel:31:17 in main
+2 + 3 = 5 at line 33, in main
+panic: tests/defaults.yel:37:5: assertion failed: total * 2 == 7

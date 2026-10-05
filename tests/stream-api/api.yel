@@ -17,7 +17,7 @@ triple: async func(x: s32) -> s32 {
 // a stream and a future in one value: they cross inside it
 record Feed { values: stream<s32>, count: future<s32>, }
 
-export module api {
+module api {
     // a stream given the caller: a task of this call writes it after its result is given
     squares: async func(n: s32) -> stream<s32> {
         let (s, w) = stream-pair(2);

@@ -1,4 +1,4 @@
-record Point { x: s32, y: s32, name: string, }
+resource Point { x: s32, y: s32, name: string, }
 variant Shape { circle(s64), square(Point), none, }
 
 area: func(s: Shape) -> s64 {

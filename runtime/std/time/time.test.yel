@@ -1,0 +1,68 @@
+// std:time, tested (yelc test runtime/std/time): what node's Date is not checked against for
+// (tests/time.yel is): durations, a date and time at an offset and back, the calendar's days, RFC
+// 3339 written, and what is no time refused
+
+package std:time@0.1.0;
+
+from "std:testing" include expect;
+
+module time-tests {
+    @(test) measures-durations: func() {
+        let start = time.from-unix-millis(1000);
+        let later = time.add(start, time.minutes(90));
+        expect.equal(time.unix-millis(later), 5401000);
+        expect.equal(time.between(start, later), time.minutes(90));
+        expect.equal(time.between(later, start).nanoseconds, 0 - 5400000000000);
+        expect.holds(time.before(start, later));
+        expect.equal(time.add(start, time.milliseconds(-1500)), time.from-unix-millis(-500));
+    }
+
+    @(test) shows-durations: func() {
+        expect.equal("{time.hours(26)}", "26h0m0s");
+        expect.equal("{time.nanoseconds(3723500000000)}", "1h2m3.5s");
+        expect.equal("{time.milliseconds(1500)}", "1.5s");
+        expect.equal("{time.nanoseconds(1500000)}", "1.5ms");
+        expect.equal("{time.nanoseconds(42)}", "42ns");
+        expect.equal("{time.nanoseconds(0)}", "0s");
+        expect.equal("{time.seconds(-90)}", "-1m30s");
+    }
+
+    @(test) keeps-an-offset: func() {
+        let at = time.from-unix-millis(1759660496789);
+        let there = time.to-date-time(at, 120);
+        expect.equal((there.year, there.month, there.day, there.hour, there.minute), (2025, 10, 5, 12, 34));
+        expect.equal(time.format(there), "2025-10-05T12:34:56.789+02:00");
+        expect.equal(time.from-date-time(there), at);
+        expect.equal(time.format(time.to-date-time(time.from-unix-millis(0), -330)), "1969-12-31T18:30:00-05:30");
+        let read = expect.ok(time.parse-date-time("2026-10-05T12:00:00.000000001-05:30"));
+        expect.equal((read.offset, read.nanosecond), (-330, 1));
+        expect.equal(time.format(read), "2026-10-05T12:00:00.000000001-05:30");
+    }
+
+    @(test) counts-the-calendar: func() {
+        let leap = expect.ok(time.parse-date-time("2024-12-31"));
+        expect.equal(time.day-of-year(leap), 366);
+        expect.equal(time.weekday(leap), 2);
+        expect.holds(time.is-leap-year(2000));
+        expect.holds(!time.is-leap-year(1900));
+        expect.equal(time.days-in-month(2023, 2), 28);
+        // a month past 12 is the next year's
+        let overflow: time.date-time = { year: 2025, month: 13, day: 1, hour: 0, minute: 0, second: 0, nanosecond: 0, offset: 0, };
+        expect.equal(time.to-iso(time.from-date-time(overflow)), "2026-01-01T00:00:00.000Z");
+    }
+
+    @(test) refuses-what-is-no-time: func() {
+        expect.err(time.parse("2026-02-30"));
+        expect.err(time.parse("2026-10-5"));
+        expect.err(time.parse("2026-10-05T12:34:56+2"));
+        expect.err(time.parse("2026-10-05T12:34:56Zjunk"));
+        expect.equal(time.parse("2026-13-01"), err("no month 13"));
+    }
+
+    @(test) knows-now: func() {
+        let now = time.now();
+        expect.holds(now.seconds > 1700000000);
+        let first = time.monotonic();
+        expect.holds(time.monotonic() >= first);
+    }
+}

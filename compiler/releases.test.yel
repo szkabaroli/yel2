@@ -1,0 +1,224 @@
+// releases.yel, tested (yelc test compiler): small programs built as IR (analysis.lower), and which
+// locals each func lets go (a stream's end released, a writer closed, a future's end released).
+// Each case one the end-to-end tests met only as a component the host stopped ("resource has
+// children"), or one where letting go too early would break a program that runs
+
+from "std:testing" include expect;
+
+// what the compiler's suites read of a program built as IR (its source a C template, c"...": a
+// brace opens an interpolation only before a name or a paren, so a block's need no escape)
+module lowering {
+    // source built as IR, as the file at test.yel (a test fails with the problems where it does not
+    // build)
+    built: async func(source: string) -> Lowered {
+        expect.ok(wait analysis.lower("test.yel", source))
+    }
+
+    // the func written as name (its key)
+    func-named: func(lowered: Lowered, name: string) -> IrFunc {
+        for f in lowered.funcs { if f.key == name { return f; } }
+        expect.fail("no func {name} in the program")
+    }
+
+    // the local of f a binding named name has
+    local-named: func(f: IrFunc, name: string) -> s64 {
+        for index in 0..f.locals.len() {
+            if f.locals[index].name == name && f.locals[index].binding.is-some() { return index; }
+        }
+        expect.fail("no local {name} in {f.key}")
+    }
+
+    // the names of the locals f lets go, each where it does (in order, a name again for each place;
+    // a close the func writes itself among them)
+    released: func(f: IrFunc) -> list<string> {
+        let out: list<string> = [];
+        for n in flatten(f.body) {
+            match n.kind {
+                call(c) => {
+                    if c.c-name == "yel_stream_release" || c.c-name == "yel_writer_close" || c.c-name == "yel_future_release" {
+                        for a in c.args {
+                            match a.kind {
+                                local(index) => { out.push(f.locals[index].name); }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+module releases-tests {
+    // a func only ever started owns the stream it is given: it lets it go once done with it
+    @(test) started-func-releases-its-stream: async func() {
+        let lowered = wait lowering.built(c"
+            serve: async func(input: stream<u8>) -> u8 {
+                match wait read(input) {
+                    some(byte) => byte,
+                    none => 0,
+                }
+            }
+
+            main: async func() {
+                let (input, out) = stream-pair(4);
+                let task = start serve(input);
+                wait out.write(1);
+                out.close();
+                let got = wait task;
+            }
+        ");
+        expect.equal(lowering.released(lowering.func-named(lowered, "serve")), ["input",]);
+    }
+
+    // one it never reads it lets go at once
+    @(test) unused-parameter-released-at-once: async func() {
+        let lowered = wait lowering.built(c"
+            ignore: async func(input: stream<u8>) {}
+
+            main: async func() {
+                let (input, out) = stream-pair(4);
+                let task = start ignore(input);
+                out.close();
+                wait task;
+            }
+        ");
+        let f = lowering.func-named(lowered, "ignore");
+        expect.equal(lowering.released(f), ["input",]);
+        match f.body[0].kind {
+            call(c) => expect.equal(c.c-name, "yel_stream_release"),
+            _ => expect.fail("the release is not the first statement"),
+        }
+    }
+
+    // a writer given two tasks is neither's: the first done must not close it under the second
+    @(test) writer-given-two-tasks-stays-the-callers: async func() {
+        let lowered = wait lowering.built(c"
+            fill: async func(out: writer<u8>, byte: u8) {
+                wait out.write(byte);
+            }
+
+            main: async func() {
+                let (input, out) = stream-pair(4);
+                let first = start fill(out, 1);
+                let second = start fill(out, 2);
+                wait first;
+                wait second;
+                out.close();
+                let got = wait read(input);
+            }
+        ");
+        expect.equal(lowering.released(lowering.func-named(lowered, "fill")), []);
+    }
+
+    // a stream the caller reads after the start is still the caller's
+    @(test) stream-read-after-start-stays-the-callers: async func() {
+        let lowered = wait lowering.built(c"
+            peek: async func(input: stream<u8>) -> u8 {
+                match wait read(input) {
+                    some(byte) => byte,
+                    none => 0,
+                }
+            }
+
+            main: async func() {
+                let (input, out) = stream-pair(4);
+                let task = start peek(input);
+                wait out.write(1);
+                wait out.write(2);
+                out.close();
+                let first = wait task;
+                let second = wait read(input);
+            }
+        ");
+        expect.equal(lowering.released(lowering.func-named(lowered, "peek")), []);
+    }
+
+    // started in a loop, the stream made before it: each turn's task is given the same one
+    @(test) started-in-a-loop-stays-the-callers: async func() {
+        let lowered = wait lowering.built(c"
+            peek: async func(input: stream<u8>) -> u8 {
+                match wait read(input) {
+                    some(byte) => byte,
+                    none => 0,
+                }
+            }
+
+            main: async func() {
+                let (input, out) = stream-pair(4);
+                for turn in 0..2 {
+                    let task = start peek(input);
+                    wait out.write(turn as u8);
+                    let got = wait task;
+                }
+                out.close();
+            }
+        ");
+        expect.equal(lowering.released(lowering.func-named(lowered, "peek")), []);
+    }
+
+    // a func waited for is given what its caller still has: it lets none of it go
+    @(test) waited-func-keeps-its-parameters: async func() {
+        let lowered = wait lowering.built(c"
+            peek: async func(input: stream<u8>) -> u8 {
+                match wait read(input) {
+                    some(byte) => byte,
+                    none => 0,
+                }
+            }
+
+            main: async func() {
+                let (input, out) = stream-pair(4);
+                wait out.write(1);
+                out.close();
+                let got = wait peek(input);
+            }
+        ");
+        expect.equal(lowering.released(lowering.func-named(lowered, "peek")), []);
+    }
+
+    // a local's end let go after its last use, and before a return that leaves earlier
+    @(test) local-released-after-last-use-and-before-return: async func() {
+        let lowered = wait lowering.built(c"
+            first: async func(early: bool) -> u8 {
+                let (input, out) = stream-pair(4);
+                wait out.write(7);
+                if early { return 0; }
+                let got = wait read(input);
+                out.close();
+                match got {
+                    some(byte) => byte,
+                    none => 0,
+                }
+            }
+
+            main: async func() {
+                let got = wait first(false);
+            }
+        ");
+        let released = lowering.released(lowering.func-named(lowered, "first"));
+        // input: before the early return, and after its read; out: before the early return, then
+        // the func's own close (none added after it)
+        expect.equal(released.filter({ name -> name == "input" }).len(), 2);
+        expect.equal(released.filter({ name -> name == "out" }).len(), 2);
+    }
+
+    // a local given back is the caller's to let go
+    @(test) returned-local-not-released: async func() {
+        let lowered = wait lowering.built(c"
+            made: func() -> stream<u8> {
+                let (input, out) = stream-pair(4);
+                out.close();
+                input
+            }
+
+            main: async func() {
+                let got = wait read(made());
+            }
+        ");
+        // (out: the func's own close)
+        expect.equal(lowering.released(lowering.func-named(lowered, "made")), ["out",]);
+    }
+}

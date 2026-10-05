@@ -1,7 +1,7 @@
 // The fuzzer's randomness: splitmix64, from the seed alone (a seed is one program, the same each
 // time it is made, so a failure is made again from its number).
 
-record Dice { state: u64, }
+resource Dice { state: u64, }
 
 module dice {
     // the next of the stream's numbers

@@ -1,0 +1,32 @@
+// resource Name { fields }: a shared object, one object every name of it sees (held by reference),
+// with its own identity. A variant holds a resource's cases (its state), a field assigned in place.
+
+resource Socket { port: s32, }
+
+variant ConnectionState { connecting, open(Socket), closed(string), }
+
+resource Connection {
+    name: string,
+    state: ConnectionState,
+}
+
+open: func(self: Connection, port: s32) { self.state = ConnectionState.open({ port: port, }); }
+
+close: func(self: Connection, why: string) {
+    match self.state {
+        open(s) => { self.state = ConnectionState.closed("{why} (port {s.port})"); }
+        _ => {}
+    }
+}
+
+main: func() -> s32 {
+    let a: Connection = { name: "a", state: ConnectionState.connecting, };
+    // another name for the same object: what one changes, the other sees
+    let same = a;
+    let b: Connection = { name: "a", state: ConnectionState.connecting, };
+    a.open(8080);
+    print("{same.state} {b.state} {a == same} {a == b}\n");
+    same.close("done");
+    print("{a.state}\n");
+    0
+}

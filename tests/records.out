@@ -1,0 +1,7 @@
+copies: {x: 1, y: 2} {x: 10, y: 2}
+a param is a copy: {x: 1, y: 2} {x: 2, y: 2}
+nested: {x: 1, y: 2} {x: 10, y: 20} {x: 10, y: 2}
+in a resource: {x: 5, y: 6} {x: 5, y: 6} 1
+equal: true first false
+global: {x: 3, y: 0} 1
+items: {x: 1, y: 2} {x: 1, y: 99}

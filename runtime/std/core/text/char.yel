@@ -1,0 +1,38 @@
+// Characters, as the bytes of UTF-8 text (s.byte-at(index): an s64, -1 past the end): ASCII's
+// classes, and a digit's value in a radix. A byte past ASCII (part of a longer UTF-8 sequence) is
+// in none of the classes, and -1 in none either.
+
+module char {
+    // 0 to 9
+    is-digit: func(byte: s64) -> bool { byte >= 48 && byte <= 57 }
+
+    // A to Z
+    is-upper: func(byte: s64) -> bool { byte >= 65 && byte <= 90 }
+
+    // a to z
+    is-lower: func(byte: s64) -> bool { byte >= 97 && byte <= 122 }
+
+    // a letter: A to Z, a to z
+    is-alpha: func(byte: s64) -> bool { is-upper(byte) || is-lower(byte) }
+
+    // a letter or a digit
+    is-alphanumeric: func(byte: s64) -> bool { is-alpha(byte) || is-digit(byte) }
+
+    // a space, a tab, a line break (LF or CR)
+    is-whitespace: func(byte: s64) -> bool { byte == 32 || byte == 9 || byte == 10 || byte == 13 }
+
+    // a digit's value in radix (2 to 36: 0-9, then a-z or A-Z); none for a byte that is no digit of
+    // it
+    to-digit: func(byte: s64, radix: s64) -> option<s64> {
+        let value = if is-digit(byte) {
+            byte - 48
+        } else if is-lower(byte) {
+            byte - 87
+        } else if is-upper(byte) {
+            byte - 55
+        } else {
+            radix
+        };
+        if value < radix { some(value) } else { none }
+    }
+}

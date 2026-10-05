@@ -1,7 +1,7 @@
 // a value shown by std's walker over its type's descriptor ({x:?}): a record, a variant, an option
 // of a tuple, then a missing map key (its panic shows the key)
 
-record Point { x: s32, label: string, tags: list<string>, }
+resource Point { x: s32, label: string, tags: list<string>, }
 variant Shape { circle(f64), square(Point), none, }
 
 main: func() -> s32 {

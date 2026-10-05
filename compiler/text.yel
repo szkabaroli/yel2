@@ -220,7 +220,7 @@ base-name: func(key: string) -> string {
 // align is < (left), > (right) or ^ (centered), "" for the value's own (a number's right, else left);
 // width and precision -1 where not given; kind ? (debug: WAVE), x X (hex), b (binary), o (octal),
 // "" for its display
-record FormatSpec {
+resource FormatSpec {
     fill: string,
     align: string,
     zero: bool,

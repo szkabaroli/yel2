@@ -152,6 +152,11 @@ extern int y_ntracers;
 void y_tracer(void (*trace)(void));
 // the program's globals made once, before its first code (main's, an export's), then marked
 void y_globals(void (*init)(void), void (*mark)(void));
+// an exported resource's objects by rep (a table for each resource, by its index): one given the
+// host, the one a rep names, one let go
+int32_t y_res_new(int32_t table, void *object);
+void *y_res_get(int32_t table, int32_t rep);
+void y_res_free(int32_t table, int32_t rep);
 
 // ---- the page table: a page's address to the page (never shrinks; a freed large object's
 // pages map to NULL)
@@ -252,6 +257,8 @@ enum {
 	Y_K_UNIT, Y_K_BOOL, Y_K_CHAR, Y_K_SIGNED, Y_K_UNSIGNED, Y_K_F32, Y_K_F64, Y_K_STRING, Y_K_BUFFER,
 	Y_K_MAP, Y_K_LIST, Y_K_FIXED, Y_K_OPTION, Y_K_RESULT, Y_K_TUPLE, Y_K_ANON_RECORD, Y_K_RECORD,
 	Y_K_VARIANT, Y_K_ENUM, Y_K_FLAGS, Y_K_HANDLE, Y_K_UNION, Y_K_FUNC, Y_K_FUTURE, Y_K_SEQ, Y_K_STREAM,
+	// a record (a value): held in place as an anonymous record is, shown as a declared one is
+	Y_K_VALUE_RECORD,
 };
 
 typedef struct ytype {
@@ -548,5 +555,10 @@ void y_turn_end(void);
 
 // a count from the environment: a decimal, 0 for anything else (no overflow: strtol clamps)
 long y_env_count(const char *s);
+
+// std:process: a child process, how one ended, and a process's end as it is
+int64_t yel_process_fork(void);
+int64_t yel_process_wait(int64_t child);
+Y_NORETURN void yel_process_end(int64_t code);
 
 #endif

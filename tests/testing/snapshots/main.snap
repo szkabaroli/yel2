@@ -1,0 +1,13 @@
+// yel snapshots (yelc test writes them; YEL_SNAPSHOTS=update writes those that differ)
+
+=== shows-a-record 1 (1 line)
+{x: 1, y: 2}
+
+=== shows-a-record 2 (2 lines)
+line one
+line two
+
+=== notices-a-change 1 (3 lines)
+alpha
+beta
+gamma

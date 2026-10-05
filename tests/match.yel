@@ -4,7 +4,7 @@ const LIMIT = 10;
 const ORIGIN: s32 = 0;
 const GREETING = "hello";
 
-record Point { x: s32, y: s32, }
+resource Point { x: s32, y: s32, }
 
 variant Shape { dot(Point), circle(s32), square(s32), none-shape, }
 

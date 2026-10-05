@@ -1,0 +1,89 @@
+// Base64 (RFC 4648): three bytes as four characters, in the standard alphabet (+ and /, padded with
+// =) or the URL's (- and _, unpadded, as JWT and data in a URL have it). Reading takes the padding
+// or its absence alike; a character of neither alphabet, or a length no encoding gives, is an error
+// (whitespace too: none is skipped).
+//
+// One of std's packages: from "std:encoding/base64" include base64; then base64.encode(bytes),
+// base64.decode(text), base64.encode-url(bytes), base64.decode-url(text).
+
+package std:encoding@0.1.0;
+
+module base64 {
+    const STANDARD: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const URL: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    // the bytes in the standard alphabet, padded
+    encode: func(bytes: list<u8> & readonly) -> string { written(bytes, STANDARD, true) }
+
+    // the bytes in the URL's alphabet, unpadded
+    encode-url: func(bytes: list<u8> & readonly) -> string { written(bytes, URL, false) }
+
+    // the bytes text spells in the standard alphabet, or where it does not
+    decode: func(text: string) -> result<list<u8>, string> { read(text, STANDARD) }
+
+    // the bytes text spells in the URL's alphabet, or where it does not
+    decode-url: func(text: string) -> result<list<u8>, string> { read(text, URL) }
+
+    @(private) written: func(bytes: list<u8> & readonly, alphabet: string, padded: bool) -> string {
+        let out = buffer.buffer((bytes.len() + 2) / 3 * 4);
+        let index = 0;
+        loop {
+            if index >= bytes.len() { break; }
+            let left = bytes.len() - index;
+            let first = bytes[index] as s64;
+            let second = if left > 1 { bytes[index + 1] as s64 } else { 0 };
+            let third = if left > 2 { bytes[index + 2] as s64 } else { 0 };
+            let group = first * 65536 + second * 256 + third;
+            out.push-byte(alphabet.byte-at(group / 262144 % 64));
+            out.push-byte(alphabet.byte-at(group / 4096 % 64));
+            if left > 1 {
+                out.push-byte(alphabet.byte-at(group / 64 % 64));
+            } else if padded {
+                out.push-byte(61);
+            }
+            if left > 2 {
+                out.push-byte(alphabet.byte-at(group % 64));
+            } else if padded {
+                out.push-byte(61);
+            }
+            index += 3;
+        }
+        out.to-string()
+    }
+
+    @(private) read: func(text: string, alphabet: string) -> result<list<u8>, string> {
+        // the padding taken off (at most two =, and only to a whole group)
+        let length = text.len();
+        if length % 4 == 0 && length > 0 && text.byte-at(length - 1) == 61 {
+            length -= 1;
+            if text.byte-at(length - 1) == 61 { length -= 1; }
+        }
+        if length % 4 == 1 { return err("a length no base64 has ({text.len()})"); }
+        let bytes: list<u8> = [];
+        let group = 0;
+        let count = 0;
+        for index in 0..length {
+            let value = alphabet.find-byte(text.byte-at(index)).unwrap-or(-1);
+            if value < 0 { return err("not a base64 character at byte {index}"); }
+            group = group * 64 + value;
+            count += 1;
+            if count == 4 {
+                bytes.push((group / 65536) as u8);
+                bytes.push((group / 256 % 256) as u8);
+                bytes.push((group % 256) as u8);
+                group = 0;
+                count = 0;
+            }
+        }
+        // a last group of two or three characters: one or two bytes (its bits past them zero)
+        if count == 2 {
+            if group % 16 != 0 { return err("bits past the last byte at byte {length - 1}"); }
+            bytes.push((group / 16) as u8);
+        } else if count == 3 {
+            if group % 4 != 0 { return err("bits past the last byte at byte {length - 1}"); }
+            bytes.push((group / 1024) as u8);
+            bytes.push((group / 4 % 256) as u8);
+        }
+        ok(bytes)
+    }
+}

@@ -1,0 +1,23 @@
+// the host's clock waited for: natively a timer, in a component the host's wait (the others run
+// meanwhile)
+
+from "std:testing" include expect;
+from "wasi:clocks" include monotonic-clock;
+
+module wait-tests {
+    tick: async func(name: string, ms: u64) -> string {
+        wait monotonic-clock.wait-for(ms * 1000000);
+        name
+    }
+
+    @(test) waits-for-the-clock: async func() {
+        let t0 = monotonic-clock.now();
+        let slow = start tick("slow", 90);
+        let fast = start tick("fast", 30);
+        expect.equal(wait slow | fast, "fast");
+        let both = wait { x: slow, y: fast };
+        expect.equal((both.x, both.y), ("slow", "fast"));
+        let took = (monotonic-clock.now() - t0) / 1000000;
+        expect.holds(took >= 85 && took < 300);
+    }
+}

@@ -1,48 +1,44 @@
 // The checker: every func's body against the types, names resolved to their keys.
 
-record FuncSig { type-params: list<string>, params: list<Type>, result: Type, }
 record Instance { params: list<Type>, result: Type, type-args: list<Type>, }
-record RecordInfo { fields: list<string>, types: list<Type>, }
+// a record type's fields and their types: a declared record's, or an anonymous one's (value)
+record RecordShape { fields: list<string>, types: list<Type>, value: bool, }
 
-record Checker {
+resource Checker {
     // the compile's context: its sources, the errors found so far, what was asked for
     context: Context,
+    // whether uses are noted (a caller asks for them: analysis.check's, not yelc's compile)
+    noting: bool,
+    // each open scope's extent (push-scope's)
+    extents: list<Span>,
     // an error was told in the statement being checked: another there is its echo (not told)
     quiet: bool,
-    funcs: map<string, FuncSig>,
-    records: map<Name, RecordInfo>,
-    variants: map<Name, list<CaseDecl>>,
-    flags: map<Name, list<string>>,
-    // the WIT resources, and the names of their methods (a call x.name(...) of one is looked up by
-    // x's type)
-    resources: map<Name, bool>,
+    // the declarations by key, as resolved here (the table the generator and an analysis read)
+    symbols: Symbols,
+    // the names of the WIT resources' methods (a call x.name(...) of one is looked up by x's type)
     methods: map<string, bool>,
     // the standard library's modules (by name: set.add names its module)
     std-modules: set<string>,
-    // the externs (by key): no func value is made of one; the WIT funcs among them (a stream or a
-    // future given one is moved: its end leaves the component)
-    externs: map<string, bool>,
-    wit-externs: map<string, bool>,
     // the builtins (the prelude's funcs and the standard library's) by name: their keys (a name
     // with more than one is chosen by its first argument's type, builtin-pick)
     builtins: map<string, list<string>>,
     // a case name -> its variant or enum ("" when two declare it: then write Type.case)
-    case-owner: map<string, string>,
-    // the constants, and the globals, by key
-    consts: map<string, ConstDecl>,
-    globals: map<string, GlobalDecl>,
-    // the type aliases (type name = T;) by key, and those being expanded (one naming itself is an
-    // error)
-    aliases: map<string, TypeDecl>,
+    case-owner: map<string, list<string>>,
+    // where each resource is declared (one a reactor's visible module declares is exported)
+    resource-scopes: map<Name, Scope>,
+    // what not everyone may name, by key (packages.key-decls' table); whether the program is a
+    // reactor (no main: its visible modules are its exports)
+    visibility: map<string, Visibility>,
+    reactor: bool,
+    // the type aliases being expanded (one naming itself is an error)
     expanding: list<string>,
     // the literal and union types aliases name, by how they show (their WIT names)
     set-names: map<string, string>,
     // the calls given readonly where the parameter is not, or not where it is (effects.yel checks
     // them once every func's effects are known)
     sites: list<EffectSite>,
-    // async: the async funcs (by key); whether the body being checked is an async func's (a
-    // closure's is not); and whether the call being checked is a wait's or a start's
-    async-funcs: map<string, bool>,
+    // async: whether the body being checked is an async func's (a closure's is not); and whether
+    // the call being checked is a wait's or a start's
     in-async: bool,
     // the type a generator being checked yields (none: no yield here)
     yield-type: option<Type>,
@@ -118,8 +114,8 @@ module checker {
         for sc in c.scopes {
             for k in sc.keys() { out.push(name-text(k)); }
         }
-        for k in c.funcs.keys() { out.push(base-name(k)); }
-        for k in c.consts.keys() { out.push(base-name(k)); }
+        for k in c.symbols.funcs.keys() { out.push(base-name(k)); }
+        for k in c.symbols.consts.keys() { out.push(base-name(k)); }
         for k in c.case-owner.keys() { out.push(k); }
         for k in c.builtins.keys() { out.push(k); }
         out
@@ -129,7 +125,7 @@ module checker {
     funcs-of: func(c: Checker, key: string) -> list<string> {
         let out: list<string> = [];
         let prefix = key + ".";
-        for k in c.funcs.keys() {
+        for k in c.symbols.funcs.keys() {
             if starts-at(k, 0, prefix) { out.push(k.substring(prefix.len(), k.len())); }
         }
         out
@@ -173,7 +169,7 @@ module checker {
             }
             num(n) => { if !is-int(n) { type-error(c, "{what}: expected an integer, found {n}"); } }
             named(n) => {
-                if !(flags && c.flags.has(n)) {
+                if !(flags && c.symbols.flags.has(n)) {
                     type-error(c, "{what}: expected an integer, found {n}");
                 }
             }
@@ -192,7 +188,7 @@ module checker {
             // a distinct type: as what it is held as
             distinct-type(x) => comparable(c, x.base, what),
             named(n) => {
-                if !c.variants.has(n) || !all-bare(c.variants[n]) {
+                if !c.symbols.variants.has(n) || !all-bare(c.symbols.variants[n].cases) {
                     type-error(c, "{what}: {n} is not ordered");
                 }
             }
@@ -229,8 +225,8 @@ module checker {
             named(n) => {
                 match resolve(got) {
                     anon-record(r) => {
-                        if c.records.has(n) && same-fields(
-                            c.records[n].fields,
+                        if c.symbols.records.has(n) && same-fields(
+                            c.symbols.records[n].fields,
                             r.fields,
                         ) {
                             return "a record literal is a {base-name(name-text(n))} where one is wanted: write its type (let p: {base-name(name-text(n))} = …)";
@@ -286,6 +282,7 @@ module checker {
         let _ = c.narrows[c.narrows.len() - 1].remove(n);
         mark.unit = c.unit;
         mark.ty = t;
+        if c.noting && c.extents.len() > 0 { c.context.locals.push({ mark: mark, until: c.extents[c.extents.len() - 1], }); }
     }
 
     // the binding a local's name is where it is read (the innermost: narrowing keeps its binding)
@@ -298,7 +295,10 @@ module checker {
         none
     }
 
-    push-scope: func(c: Checker) {
+    // a scope, visible in extent (a block's span, a body's, a match arm's): what its bindings are
+    // visible in, as a language server's completion asks
+    push-scope: func(c: Checker, extent: Span) {
+        c.extents.push(extent);
         c.scopes.push(map.new());
         c.marks.push(map.new());
         c.depths.push(c.closure-depth);
@@ -306,6 +306,7 @@ module checker {
     }
 
     pop-scope: func(c: Checker) {
+        c.extents.pop();
         c.scopes.pop();
         c.marks.pop();
         c.depths.pop();
@@ -332,7 +333,7 @@ module checker {
         none
     }
 
-    instantiate: func(c: Checker, sig: FuncSig) -> Instance {
+    instantiate: func(c: Checker, sig: FuncSymbol) -> Instance {
         let vars: map<string, Type> = map.new();
         let type-args: list<Type> = [];
         for tp in sig.type-params {
@@ -348,16 +349,16 @@ module checker {
     // the program: every func's body against its signature
     // every func's body checked; the places readonly and moves are checked at once the program's
     // flow is known (effects.yel, after codegen)
-    check-program: func(context: Context, decls: list<Decl>, prelude: map<string, bool>) -> list<EffectSite> {
+    check-program: func(context: Context, decls: list<Decl>, prelude: map<string, bool>, visibility: map<string, Visibility>) -> list<EffectSite> {
         let file = context.input;
         let c: Checker = {
             context: context,
+            noting: !context.exits,
+            extents: [],
             quiet: false,
-            funcs: map.new(), records: map.new(), variants: map.new(),
-            flags: map.new(), resources: map.new(), methods: map.new(), externs: map.new(),
-            wit-externs: map.new(), std-modules: set.new(), builtins: map.new(),
-            case-owner: map.new(), consts: map.new(), globals: map.new(), aliases: map.new(), expanding: [],
-            set-names: map.new(), sites: [], async-funcs: map.new(), in-async: false,
+            symbols: context.symbols, methods: map.new(), std-modules: set.new(), builtins: map.new(),
+            case-owner: map.new(), resource-scopes: map.new(), visibility: visibility, reactor: is-reactor(decls), expanding: [],
+            set-names: map.new(), sites: [], in-async: false,
             async-call: false,
             starting: false,
             yield-type: none,
@@ -383,6 +384,8 @@ module checker {
                         || prelude.has(x.name) { builtin(c, x.name); }
                     if x.scope.pkg.id == "yel:std" && x.scope.module != "" { c.std-modules.add(x.scope.module); }
                 }
+                // (a module of only constants too: u32.MAX)
+                const-decl(x) => { if x.scope.pkg.id == "yel:std" && x.scope.module != "" { c.std-modules.add(x.scope.module); } }
                 _ => {}
             }
         }
@@ -390,13 +393,14 @@ module checker {
         for d in decls {
             match d {
                 record-decl(r) => {
-                    c.records.set(intern(r.name), { fields: r.fields, types: r.field-types, });
+                    c.symbols.records.set(intern(r.name), r);
+                    if !r.value { c.resource-scopes.set(intern(r.name), r.scope); }
                 }
                 variant-decl(v) => {
-                    c.variants.set(intern(v.name), v.cases);
+                    c.symbols.variants.set(intern(v.name), v);
                     for k in v.cases {
-                        if c.case-owner.has(k.name) { c.case-owner.set(k.name, ""); }
-                        else { c.case-owner.set(k.name, v.name); }
+                        if !c.case-owner.has(k.name) { c.case-owner.set(k.name, []); }
+                        c.case-owner[k.name].push(v.name);
                     }
                 }
                 flags-decl(fl) => {
@@ -410,18 +414,14 @@ module checker {
                         diagnostics.help(d, "split it into two flags types");
                         tell(c, d);
                     }
-                    c.flags.set(intern(fl.name), fl.flags);
+                    c.symbols.flags.set(intern(fl.name), fl);
                 }
-                resource-decl(r) => c.resources.set(intern(r.name), true),
-                const-decl(x) => c.consts.set(x.name, x),
-                global-decl(x) => c.globals.set(x.name, x),
-                type-decl(x) => c.aliases.set(x.name, x),
-                func-decl(f) => { if f.is-async { c.async-funcs.set(f.name, true); } }
+                resource-decl(r) => c.symbols.resources.set(intern(r.name), r),
+                const-decl(x) => c.symbols.consts.set(x.name, x),
+                global-decl(x) => c.symbols.globals.set(x.name, x),
+                type-decl(x) => c.symbols.aliases.set(x.name, x),
                 // a resource's method: its handle is its first param, self
                 extern-decl(x) => {
-                    c.externs.set(x.name, true);
-                    if x.wit-module != "" { c.wit-externs.set(x.name, true); }
-                    if x.is-async { c.async-funcs.set(x.name, true); }
                     if x.params.len() > 0 && x.params[0] == "self" {
                         c.methods.set(base-name(x.name), true);
                     }
@@ -433,7 +433,6 @@ module checker {
             match d {
                 record-decl(r) => {
                     r.field-types = resolve-types(c, r.scope, r.field-types, []);
-                    c.records.set(intern(r.name), { fields: r.fields, types: r.field-types, });
                 }
                 variant-decl(v) => {
                     for k in v.cases {
@@ -443,17 +442,17 @@ module checker {
                 func-decl(f) => {
                     f.param-types = resolve-types(c, f.scope, f.param-types, f.type-params);
                     f.result = resolve-type(c, f.scope, f.result, f.type-params);
-                    add-sig(c, f.span, f.name, signature(f.type-params, f.param-types, f.result));
+                    add-sig(c, f.name, signature(f.type-params, f.param-types, f.params, f.defaults, f.result, f.scope, f.span), f.is-async, false, "");
                     // what its signature names that is not a type: told here, before any body (a
                     // call of it checked first sees an error's type, not the name)
-                    let sig = c.funcs[f.name];
+                    let sig = c.symbols.funcs[f.name];
                     for i in 0..sig.params.len() { sig.params[i] = known(c, sig.params[i], "a parameter", false); }
                     sig.result = known(c, sig.result, "the result", false);
                 }
                 extern-decl(x) => {
                     x.param-types = resolve-types(c, x.scope, x.param-types, x.type-params);
                     x.result = resolve-type(c, x.scope, x.result, x.type-params);
-                    add-sig(c, x.span, x.name, signature(x.type-params, x.param-types, x.result));
+                    add-sig(c, x.name, signature(x.type-params, x.param-types, x.params, x.defaults, x.result, x.scope, x.span), x.is-async, true, x.wit-module);
                 }
                 flags-decl(fl) => {}
                 resource-decl(r) => {}
@@ -467,6 +466,23 @@ module checker {
                     let k = show-type(x.resolved);
                     if !c.set-names.has(k) { c.set-names.set(k, x.name); }
                 }
+            }
+        }
+        // what can be named where a type cannot: told (rule e)
+        check-signatures(c, decls);
+        // a record (a value) that holds itself: told
+        for d in decls {
+            match d {
+                record-decl(r) => {
+                    if r.value && holds-inline(c, intern(r.name), r.field-types, []) {
+                        c.quiet = false;
+                        c.span = r.span;
+                        let d2 = diagnostics.error(r.span, "record {base-name(r.name)} holds itself: a value's size would never end", "");
+                        diagnostics.help(d2, "hold it where a value is on the heap: a list, a variant's case, or a resource");
+                        tell(c, d2);
+                    }
+                }
+                _ => {}
             }
         }
         for d in decls {
@@ -486,47 +502,342 @@ module checker {
                 _ => {}
             }
         }
+        note-type-uses(c);
         c.sites
     }
 
-    // the key of the module named m where sc is (an include, or one of its package's), or ""
-    module-key: func(sc: Scope, m: string) -> string {
+    // ---- uses: each name resolved, and what it names (Context.uses: analysis's, a language server's)
+
+    // a name's use, at span: a declaration's key, or a local's binding (kept only for a caller that
+    // asks for them, analysis.check's: yelc's own compile keeps none)
+    note-use: func(c: Checker, span: Span, key: string, local: option<Mark>) {
+        if span.source < 0 { return; }
+        if key == "" {
+            match local {
+                some(_) => {}
+                none => { return; }
+            }
+        }
+        c.context.uses.push({ span: span, key: key, local: local, ty: Type.unit-type, text: "", });
+    }
+
+    // a field of a type that is its fields (a tuple's, an anonymous record's): no declaration names
+    // it, so its use carries its type (its key the type and the field, ~T#f, so the uses of one
+    // type's field are one another's)
+    note-structural: func(c: Checker, span: Span, t: Type, f: string, ty: Type) {
+        if span.source < 0 { return; }
+        c.context.uses.push({ span: span, key: "~{show-type(t)}#{f}", local: none, ty: ty, text: "", });
+    }
+
+    // a type named in an expression (Shape of Shape.circle(5), types.tcp-socket of
+    // types.tcp-socket.create(f)): its use, and its module's where it is qualified
+    note-type-target: func(c: Checker, target: Expr, key: string) {
+        match target.kind {
+            name(_) => note-use(c, target.span, key, none),
+            field(f) => {
+                note-use(c, f.name-span, key, none);
+                let mk = module-ref(c, f.target);
+                if mk != "" { note-use(c, f.target.span, mk, none); }
+            }
+            _ => {}
+        }
+    }
+
+    // the key of case (or flag) n of a value of type t: its variant's (or flags') key and the
+    // case, T#n; an option's or a result's, builtin:option#n, builtin:result#n ("" for none)
+    case-key: func(c: Checker, t: Type, n: string) -> string {
+        let name = base-name(n);
+        match resolve(t) {
+            readonly-type(x) => case-key(c, x, n),
+            named(owner) => {
+                let declared = (c.symbols.variants.has(owner) && c.symbols.variants[owner].cases.any({ k -> k.name == name }))
+                    || (c.symbols.flags.has(owner) && contains(c.symbols.flags[owner].flags, name));
+                if declared { "{name-text(owner)}#{name}" } else { "" }
+            }
+            option-type(_) => "builtin:option#{name}",
+            result-type(_) => "builtin:result#{name}",
+            _ => "",
+        }
+    }
+
+    // a literal's kind and its value as written (an integer's, a float's text; a char's code
+    // point; a string's value; an interpolation's none: no one value), read before the check
+    // lowers it (an interpolation becomes the calls that make its text)
+    literal-of: func(e: Expr) -> option<tuple<string, string>> {
+        match e.kind {
+            int-lit(text) => some(("int", text)),
+            float-lit(text) => some(("float", text)),
+            char-lit(code) => some(("char", "{code}")),
+            bool-lit(b) => some(("bool", if b { "true" } else { "false" })),
+            str-lit(s) => some(("string", s)),
+            interp(_) => some(("interp", "")),
+            _ => none,
+        }
+    }
+
+    // a literal where it is written, of type t as the check settles it: what a language server
+    // tells of it
+    note-literal: func(c: Checker, at: Span, literal: option<tuple<string, string>>, t: Type) {
+        if at.source < 0 { return; }
+        match literal {
+            some(found) => {
+                let (kind, text) = found;
+                c.context.uses.push({ span: at, key: "literal:{kind}:{at.source}:{at.line}:{at.col}", local: none, ty: t, text: text, });
+            }
+            none => {}
+        }
+    }
+
+    // whether a type is its fields (a tuple, an anonymous record: no declaration names them)
+    structural: func(t: Type) -> bool {
+        match resolve(t) {
+            readonly-type(x) => structural(x),
+            tuple-type(_) => true,
+            anon-record(_) => true,
+            _ => false,
+        }
+    }
+
+    // each declared type's name the parser read: what it names, where it was written (looked up
+    // quietly: what may not be named there was told where the type was resolved)
+    note-type-uses: func(c: Checker) {
+        for written in c.context.type-names {
+            for key in candidates(c, written.scope, written.name, "type") {
+                if declared(c, key, "type") && visible(c, written.scope, key) {
+                    if c.noting { note-use(c, written.span, key, none); }
+                    break;
+                }
+            }
+        }
+    }
+
+    // the key of the module named m where sc is (an include, or one of its package's), or "".
+    // Another package's private module is never included (packages.yel says so); one of its own
+    // package's private to another file is named here only to be told
+    module-key: func(c: Checker, sc: Scope, m: string) -> string {
         if sc.includes.has(m) { return sc.includes[m]; }
-        if sc.pkg.modules.has(m) { return sc.pkg.prefix + m; }
+        if sc.pkg.modules.has(m) {
+            let key = sc.pkg.prefix + m;
+            if !visible(c, sc, key) { private-error(c, "module", key); }
+            return key;
+        }
         ""
+    }
+
+    // ================================================================ names: one lookup
+
+    // the key of the name n declared as kind ("func", "type", "const", "global") where sc is: the
+    // first of the places it may be declared (written m.n: module m's; else sc's module's, its
+    // package's top level, and for a type std's) where it is declared and may be named from sc.
+    // One declared where it may not be named from here is not there (the next place is looked at);
+    // when that leaves none, the error says why and its key is the answer (no echo of it). ""
+    // when it is declared nowhere
+    lookup: func(c: Checker, sc: Scope, n: string, kind: string) -> string {
+        let hidden = "";
+        for key in candidates(c, sc, n, kind) {
+            if !declared(c, key, kind) { continue; }
+            if visible(c, sc, key) { return key; }
+            if hidden == "" { hidden = key; }
+        }
+        if hidden != "" { private-error(c, kind, hidden); }
+        hidden
+    }
+
+    // a module's member (by the module's key) declared as kind, where the func being checked is: its
+    // key ("" for none; one that may not be named here is told, and is the answer)
+    member: func(c: Checker, module: string, n: string, kind: string) -> string {
+        let key = module + "." + n;
+        if !declared(c, key, kind) { return ""; }
+        if !visible(c, c.scope, key) { private-error(c, kind, key); }
+        key
+    }
+
+    // where a name may be declared, in the order looked at
+    candidates: func(c: Checker, sc: Scope, n: string, kind: string) -> list<string> {
+        let dot = find-byte(n, 46).unwrap-or(-1);
+        if dot > 0 {
+            let m = n.substring(0, dot);
+            let mk = module-key(c, sc, m);
+            // a std module's (value.value-kind), as its funcs are reached
+            if mk == "" && c.std-modules.has(m) { return ["yel:std/" + n,]; }
+            if mk == "" { return []; }
+            return [mk + "." + n.substring(dot + 1, n.len()),];
+        }
+        let out: list<string> = [];
+        if sc.module != "" { out.push(sc.pkg.prefix + sc.module + "." + n); }
+        // (a program without a package's name keys its items as the prelude does: a prelude's func
+        // is the prelude's)
+        if !(kind == "func" && sc.pkg.prefix == "" && c.prelude.has(n)) { out.push(sc.pkg.prefix + n); }
+        if kind == "type" { out.push("yel:std/" + n); }
+        out
+    }
+
+    // whether a key is declared as kind
+    declared: func(c: Checker, key: string, kind: string) -> bool {
+        if kind == "func" { return c.symbols.funcs.has(key); }
+        if kind == "type" { return is-type-key(c, key); }
+        if kind == "const" { return c.symbols.consts.has(key); }
+        if kind == "global" { return c.symbols.globals.has(key); }
+        false
+    }
+
+    // whether what key names may be named where sc is: its package's files, or its own file, for
+    // what is private (packages.key-decls' table); anyone who reaches it for the rest
+    visible: func(c: Checker, sc: Scope, key: string) -> bool {
+        match c.visibility.get(key) {
+            some(v) => v.pkg.prefix == sc.pkg.prefix && (v.level != "file" || v.file == sc.file),
+            none => true,
+        }
+    }
+
+    // whether types hold the record named target in place (inline: in a record's fields, a tuple,
+    // an anonymous record, a fixed list, an option or a result), not behind a pointer (a list, a
+    // map, a variant, a resource)
+    holds-inline: func(c: Checker, target: Name, types: list<Type>, seen: list<Name>) -> bool {
+        for t0 in types {
+            let t = resolve(t0);
+            let inside: list<Type> = match t {
+                named(n) => {
+                    if n == target { return true; }
+                    if c.symbols.records.has(n) && c.symbols.records[n].value && !seen.contains(n) {
+                        if holds-inline(c, target, c.symbols.records[n].field-types, concat-names(seen, n)) { return true; }
+                    }
+                    []
+                }
+                tuple-type(xs) => xs,
+                anon-record(r) => r.types,
+                fixed-list(x) => [x.item,],
+                option-type(x) => [x,],
+                result-type(r) => [r.ok, r.err,],
+                _ => [],
+            };
+            if holds-inline(c, target, inside, seen) { return true; }
+        }
+        false
+    }
+
+    concat-names: func(a: list<Name>, n: Name) -> list<Name> {
+        let out: list<Name> = [];
+        for x in a { out.push(x); }
+        out.push(n);
+        out
+    }
+
+    // ---- what a declaration lets others see
+
+    // how widely a declaration may be named, by its level: 2 by whoever reaches it, 1 by its
+    // package's files (@(private)), 0 by its own file (@(private="file"))
+    reach: func(level: string) -> s64 { if level == "" { 2 } else if level == "package" { 1 } else { 0 } }
+
+    // each declaration's signature (a func's params and result, a record's fields, a variant's
+    // payloads, a global's type, an alias's target) names no type that may be named by fewer than
+    // the declaration may: where one could be named and its type not, its type would be a name
+    // nobody there can write
+    check-signatures: func(c: Checker, decls: list<Decl>) {
+        for d in decls {
+            match d {
+                func-decl(f) => signature-types(c, "func", f.name, f.scope, f.span, concat-types(f.param-types, [f.result,])),
+                extern-decl(x) => signature-types(c, "func", x.name, x.scope, x.span, concat-types(x.param-types, [x.result,])),
+                record-decl(r) => signature-types(c, "record", r.name, r.scope, r.span, r.field-types),
+                variant-decl(v) => signature-types(c, "variant", v.name, v.scope, v.span, v.cases.filter({ k -> k.has-payload }).map({ k -> k.payload })),
+                global-decl(x) => signature-types(c, "global", x.name, x.scope, x.span, [x.ty,]),
+                type-decl(x) => signature-types(c, "type", x.name, x.scope, x.span, [x.resolved,]),
+                _ => {}
+            }
+        }
+    }
+
+    concat-types: func(a: list<Type>, b: list<Type>) -> list<Type> {
+        let out: list<Type> = [];
+        for t in a { out.push(t); }
+        for t in b { out.push(t); }
+        out
+    }
+
+    // the types a declaration names, each checked against how widely the declaration may be named
+    signature-types: func(c: Checker, kind: string, key: string, sc: Scope, span: Span, types: list<Type>) {
+        // (each declaration's own: not an echo of another's)
+        c.quiet = false;
+        c.span = span;
+        let names: list<string> = [];
+        for t in types { named-types-in(t, names); }
+        for n in names {
+            match c.visibility.get(n) {
+                some(v) => {
+                    if reach(v.level) < reach(sc.private) {
+                        let wide = if sc.private == "" { "may be named by whoever reaches it" } else { "may be named by its package's files" };
+                        let narrow = if v.level == "file" { "its file (@(private=\"file\"))" } else { "its package (@(private))" };
+                        let d = diagnostics.error(span, "{kind} {base-name(key)} {wide}, but names type {base-name(n)}, which is private to {narrow}", "");
+                        diagnostics.help(d, "make {base-name(key)} as private as {base-name(n)}, or {base-name(n)} as visible as {base-name(key)}");
+                        tell(c, d);
+                    }
+                }
+                none => {}
+            }
+        }
+    }
+
+    // the declared types a type names, by key, into out: named ones and distinct ones, at any depth
+    named-types-in: func(t: Type, out: list<string>) {
+        match t {
+            named(n) => out.push(name-text(n)),
+            distinct-type(x) => out.push(x.name),
+            _ => {}
+        }
+        for index in 0..child-count(t) { named-types-in(child(t, index), out); }
+    }
+
+    // a name of what may not be named here: told, with where it is declared private
+    private-error: func(c: Checker, kind: string, key: string) {
+        let v = c.visibility[key];
+        let to = if v.level == "file" { "its file (@(private=\"file\"))" } else { "its package (@(private))" };
+        let d = diagnostics.error(c.span, "{kind} {base-name(key)} is private to {to}", "");
+        let at = if v.span.source >= 0 { "{c.context.sources[v.span.source].path}:{v.span.line}" } else { v.file };
+        diagnostics.note(d, "declared at {at}");
+        tell(c, d);
+    }
+
+    // the variant a bare case name is a case of where the func being checked is: the one variant
+    // that may be named here with a case of that name ("" when more than one may: Type.n is then
+    // written), none for none. One that may not be named here is not there; when it is the only
+    // one, the error says why (report: false for a question asked, not a use)
+    case-variant: func(c: Checker, n: string, report: bool) -> option<string> {
+        if !c.case-owner.has(n) { return none; }
+        let here: list<string> = [];
+        let hidden = "";
+        for owner in c.case-owner[n] {
+            if visible(c, c.scope, owner) { here.push(owner); }
+            else if hidden == "" { hidden = owner; }
+        }
+        if here.len() == 0 {
+            if hidden == "" || !report { return none; }
+            private-error(c, "variant", hidden);
+            return some(hidden);
+        }
+        some(if here.len() == 1 { here[0] } else { "" })
     }
 
     // whether a type's key names one whose members are written Type.member (a variant's or an enum's
     // cases, a flags type's flags, a resource's funcs)
     has-members: func(c: Checker, k: string) -> bool {
         let type-name = intern(k);
-        c.variants.has(type-name) || c.flags.has(type-name) || c.resources.has(type-name)
+        c.symbols.variants.has(type-name) || c.symbols.flags.has(type-name) || c.symbols.resources.has(type-name)
     }
 
     is-type-key: func(c: Checker, k: string) -> bool {
         let type-name = intern(k);
-        c.records.has(type-name) || c.variants.has(type-name) || c.flags.has(type-name)
-            || c.resources.has(type-name) || c.aliases.has(k)
+        c.symbols.records.has(type-name) || c.symbols.variants.has(type-name) || c.symbols.flags.has(type-name)
+            || c.symbols.resources.has(type-name) || c.symbols.aliases.has(k)
     }
 
-    // a type's name as written where sc is (Name, or module.Name), as its key: the module's own,
-    // then its package's top level; unchanged when there is none (known-type reports it)
+    // a type's name as written where sc is (Name, or module.Name), as its key (lookup's);
+    // unchanged when there is none (known-type reports it)
     type-key: func(c: Checker, sc: Scope, n: string) -> string {
-        let dot = find-byte(n, 46).unwrap-or(-1);
-        if dot > 0 {
-            let m = n.substring(0, dot);
-            let mk = module-key(sc, m);
-            // a std module's type (value.value-kind), as its funcs are reached
-            if mk == "" && c.std-modules.has(m) { return "yel:std/" + n; }
-            if mk == "" { return n; }
-            return mk + "." + n.substring(dot + 1, n.len());
-        }
-        if sc.module != "" && is-type-key(c, sc.pkg.prefix + sc.module + "." + n) {
-            return sc.pkg.prefix + sc.module + "." + n;
-        }
-        if is-type-key(c, sc.pkg.prefix + n) { return sc.pkg.prefix + n; }
-        if is-type-key(c, "yel:std/" + n) { return "yel:std/" + n; }
-        n
+        let k = lookup(c, sc, n, "type");
+        if k != "" { return k; }
+        // (module.Name of a module that has none: the module's key in what is told)
+        let places = candidates(c, sc, n, "type");
+        if find-byte(n, 46) != none && places.len() == 1 { places[0] } else { n }
     }
 
     // a type as written where sc is, its names as keys (tps: the func's type parameters, left as
@@ -536,9 +847,9 @@ module checker {
             named(n) => {
                 if contains(tps, name-text(n)) { return t; }
                 let k = type-key(c, sc, name-text(n));
-                if c.aliases.has(k) {
+                if c.symbols.aliases.has(k) {
                     // a distinct type: its own, held as what it names
-                    if c.aliases[k].distinct {
+                    if c.symbols.aliases[k].distinct {
                         return Type.distinct-type({ name: k, base: alias-type(c, k), });
                     }
                     return alias-type(c, k);
@@ -572,18 +883,18 @@ module checker {
             return Type.error-type;
         }
         c.expanding.push(k);
-        let a = c.aliases[k];
+        let a = c.symbols.aliases[k];
         let t = known(c, resolve-type(c, a.scope, a.target, []), "type {base-name(k)}", false);
         c.expanding.pop();
         t
     }
 
     // the declarations the type sets open into
-    d-of: func(c: Checker) -> Decls { { records: c.records, variants: c.variants, } }
+    
 
     // whether every value of a is one of b (types as sets: semtype.yel)
     subtype: func(c: Checker, a: Type, b: Type) -> bool {
-        let d = d-of(c);
+        let d = c.symbols;
         semtype.is-empty(d, semtype.diff(d, semtype.translate(d, a), semtype.translate(d, b)))
     }
 
@@ -663,15 +974,23 @@ module checker {
     func-key: func(c: Checker, n: string) -> string {
         let own = own-key(c, n);
         if own != "" { return own; }
-        if c.builtins.has(n) && c.builtins[n].len() == 1 {
-            return c.builtins[n][0];
-        }
+        let here = builtins-here(c, n);
+        if here.len() == 1 { return here[0]; }
         ""
+    }
+
+    // the builtins named n that may be named where the func being checked is (a std module's
+    // private func is std's own)
+    builtins-here: func(c: Checker, n: string) -> list<string> {
+        match c.builtins.get(n) {
+            some(keys) => keys.filter({ k -> visible(c, c.scope, k) }),
+            none => [],
+        }
     }
 
     // whether a func's first parameter takes a call's first argument (as builtin-pick asks)
     takes-first: func(c: Checker, key: string, args: list<Expr>) -> bool {
-        let sig = c.funcs[key];
+        let sig = c.symbols.funcs[key];
         if sig.params.len() == 0 || args.len() == 0 { return false; }
         let t = resolve(widened(check(c, args[0], fresh(c), "the first argument of {base-name(key)}")));
         match t {
@@ -681,19 +1000,8 @@ module checker {
         could-fit(sig.params[0], t)
     }
 
-    // a func's name as the module's own or its package's top level's; "" for neither
-    own-key: func(c: Checker, n: string) -> string {
-        let sc = c.scope;
-        if sc.module != "" && c.funcs.has(sc.pkg.prefix + sc.module + "." + n) {
-            return sc.pkg.prefix + sc.module + "." + n;
-        }
-        // (a program without a package's name keys its items as the prelude does: a prelude's name
-        // is the prelude's)
-        if c.funcs.has(sc.pkg.prefix + n) && !(sc.pkg.prefix == "" && c.prelude.has(n)) {
-            return sc.pkg.prefix + n;
-        }
-        ""
-    }
+    // a func's name as the module's own or its package's top level's (lookup's); "" for neither
+    own-key: func(c: Checker, n: string) -> string { lookup(c, c.scope, n, "func") }
 
     // a builtin's key, under its name
     builtin: func(c: Checker, k: string) {
@@ -705,8 +1013,8 @@ module checker {
     // the one of the builtins named n whose first parameter takes the first argument's type (that
     // argument checked here, first: x.f(a) is f(x, a)); "" for no such name
     builtin-pick: func(c: Checker, n: string, args: list<Expr>) -> string {
-        if !c.builtins.has(n) { return ""; }
-        let keys = c.builtins[n];
+        let keys = builtins-here(c, n);
+        if keys.len() == 0 { return ""; }
         if args.len() == 0 {
             type-error(c, "{n}: which one depends on its first argument, and it has none");
             return "";
@@ -725,14 +1033,14 @@ module checker {
         }
         let fits: list<string> = [];
         for k in keys {
-            let sig = c.funcs[k];
+            let sig = c.symbols.funcs[k];
             if sig.params.len() > 0 && could-fit(sig.params[0], t) { fits.push(k); }
         }
         if fits.len() == 1 { return fits[0]; }
         // more than one: the ones taking this type itself before any taking every type (T)
         let particular: list<string> = [];
         for k in fits {
-            match c.funcs[k].params[0] {
+            match c.symbols.funcs[k].params[0] {
                 param(x) => {}
                 _ => particular.push(k),
             }
@@ -741,12 +1049,12 @@ module checker {
         // still more than one: the most particular, whose first parameter's type is one of every
         // other's (a set<K>, a map<K, ()>, before a map<K, V>)
         for k in particular {
-            let narrowest = particular.all({ other -> other == k || could-fit(c.funcs[other].params[0], c.funcs[k].params[0]) });
+            let narrowest = particular.all({ other -> other == k || could-fit(c.symbols.funcs[other].params[0], c.symbols.funcs[k].params[0]) });
             if narrowest { return k; }
         }
         let takes: list<string> = [];
         for k in keys {
-            let sig = c.funcs[k];
+            let sig = c.symbols.funcs[k];
             if sig.params.len() > 0 { takes.push(show-type(sig.params[0])); }
         }
         if fits.len() == 0 {
@@ -842,8 +1150,8 @@ module checker {
 
     // a generic func of yel's std
     std-generic: func(c: Checker, key: string) -> bool {
-        if !c.funcs.has(key) { return false; }
-        starts-with(key, "yel:std/") && c.funcs[key].type-params.len() > 0
+        if !c.symbols.funcs.has(key) { return false; }
+        starts-with(key, "yel:std/") && c.symbols.funcs[key].type-params.len() > 0
     }
 
     // the module a name is, where no local has that name ("" for none)
@@ -851,7 +1159,7 @@ module checker {
         match e.kind {
             name(n) => {
                 if !is-none(local-type(c, n)) { return ""; }
-                let k = module-key(c.scope, name-text(n));
+                let k = module-key(c, c.scope, name-text(n));
                 // a module of the standard library's, by its name (set.add(s, x))
                 if k == "" && c.std-modules.has(name-text(n)) { return "yel:std/" + name-text(n); }
                 k
@@ -876,7 +1184,7 @@ module checker {
             field(f) => {
                 let mk = module-ref(c, f.target);
                 if mk == "" { return ""; }
-                let k = mk + "." + f.name;
+                let k = member(c, mk, f.name, "type");
                 if has-members(c, k) {
                     k
                 } else {
@@ -891,20 +1199,22 @@ module checker {
     // generic func's (which instance?), nor an extern's (a C macro, or C types)
     func-value: func(c: Checker, n: string) -> string {
         if !is-none(local-type(c, intern(n))) { return ""; }
-        let k = func-key(c, n);
+        // (a name checked again, its key already: an included package's, as a / says, which no
+        // name written has)
+        let k = if n.contains("/") && c.symbols.funcs.has(n) { n } else { func-key(c, n) };
         if k == "" { return ""; }
-        if c.funcs[k].type-params.len() > 0 {
+        if c.symbols.funcs[k].type-params.len() > 0 {
             type-error(c, "{n} is generic: a generic func is not a value yet");
         }
-        if c.externs.has(k) { type-error(c, "{n} is an extern: an extern is not a value yet"); }
-        if c.async-funcs.has(k) {
+        if is-extern(c, k) { type-error(c, "{n} is an extern: an extern is not a value yet"); }
+        if is-async-func(c, k) {
             type-error(c, "{n} is async: an async func is not a value yet");
         }
         k
     }
 
     func-sig-type: func(c: Checker, k: string) -> Type {
-        let sig = c.funcs[k];
+        let sig = c.symbols.funcs[k];
         Type.func-type({ params: sig.params, result: sig.result, })
     }
 
@@ -976,16 +1286,195 @@ module checker {
         some(Type.unit-type)
     }
 
-    add-sig: func(c: Checker, span: Span, n: string, sig: FuncSig) {
-        c.span = span;
-        if c.funcs.has(n) { type-error(c, "func {n} is declared twice"); }
-        c.funcs.set(n, sig);
+    // a func's symbol, with whether it is async, an extern, and a WIT interface's func
+    add-sig: func(c: Checker, n: string, sig: FuncSymbol, is-async: bool, is-extern: bool, wit-module: string) {
+        c.span = sig.span;
+        if c.symbols.funcs.has(n) { type-error(c, "func {n} is declared twice"); }
+        sig.is-async = is-async;
+        sig.is-extern = is-extern;
+        sig.wit-module = wit-module;
+        c.symbols.funcs.set(n, sig);
     }
 
-    signature: func(tps: list<string>, params: list<Type>, result: Type) -> FuncSig {
+    // a func's signature, its type parameters as such (a yel func's: async, extern, WIT set by
+    // add-sig)
+    signature: func(tps: list<string>, params: list<Type>, names: list<string>, defaults: list<option<Expr>>, result: Type, scope: Scope, span: Span) -> FuncSymbol {
         let ps: list<Type> = [];
         for t in params { ps.push(generalize(t, tps)); }
-        { type-params: tps, params: ps, result: generalize(result, tps), }
+        {
+            type-params: tps,
+            params: ps,
+            names: names,
+            defaults: defaults,
+            result: generalize(result, tps),
+            is-async: false,
+            is-extern: false,
+            wit-module: "",
+            scope: scope,
+            span: span,
+        }
+    }
+
+    // ================================================================ directives and defaults
+
+    // a directive's value where it is written (as Odin's): #file, its file's path; #line and
+    // #column, its place's; #func, the func it is in; #location, all of them (std's
+    // source-location). #caller-location and #caller-expression are a parameter's default's only:
+    // the call's
+    directive-value: func(c: Checker, e: Expr, d: Directive, want: Type) -> Type {
+        let place = e.span;
+        if d.name == "file" {
+            e.kind = ExprKind.str-lit(source-path(c, place));
+            return Type.string-type;
+        }
+        if d.name == "line" || d.name == "column" {
+            e.kind = ExprKind.int-lit("{if d.name == "line" { place.line } else { place.col }}");
+            return infer-kind(c, e, want);
+        }
+        if d.name == "func" {
+            e.kind = ExprKind.str-lit(base-name(c.in-func));
+            return Type.string-type;
+        }
+        if d.name == "location" {
+            e.kind = location-literal(c, place);
+            return check(c, e, location-type(c), "#location");
+        }
+        if d.name == "caller-location" || d.name == "caller-expression" {
+            type-error(c, "#{d.name} is a parameter's default: the {if d.name == "caller-location" { "place" } else { "text" }} of a call that leaves it out");
+            return Type.error-type;
+        }
+        type-error(c, "#{d.name}: no such directive (#file, #line, #column, #func, #location; a parameter's default: #caller-location, #caller-expression(param))");
+        Type.error-type
+    }
+
+    // std's source-location: a place, as #location and #caller-location give it
+    location-type: func(c: Checker) -> Type {
+        let key = intern("yel:std/source-location");
+        if !c.symbols.records.has(key) { type-error(c, "#location: the standard library declares no source-location"); }
+        Type.named(key)
+    }
+
+    // { file, line, column, func } of a place, in the func being checked
+    location-literal: func(c: Checker, place: Span) -> ExprKind {
+        let field = { name: string, kind: ExprKind ->
+            let init: FieldInit = { name: name, value: node(kind, nowhere()), name-span: nowhere(), };
+            init
+        };
+        ExprKind.record-lit([
+            field("file", ExprKind.str-lit(source-path(c, place))),
+            field("line", ExprKind.int-lit("{place.line}")),
+            field("column", ExprKind.int-lit("{place.col}")),
+            field("func", ExprKind.str-lit(base-name(c.in-func))),
+        ])
+    }
+
+    // the path of the file a place is in, as it was read ("" for none)
+    source-path: func(c: Checker, place: Span) -> string {
+        if place.source < 0 { "" } else { c.context.sources[place.source].path }
+    }
+
+    // a call that leaves its last parameters out: each one's default given (none past the first
+    // with no default: the call's count is told wrong). A default as written is its own copy (a
+    // literal; #file, #line, #func: the callee's, where it is written), #caller-location the
+    // call's place, #caller-expression(p) the text of the argument given for p
+    given-defaults: func(c: Checker, sig: FuncSymbol, args: list<Expr>, at: Span) {
+        if args.len() >= sig.params.len() || sig.defaults.len() != sig.params.len() { return; }
+        let given = args.len();
+        for index in given..sig.params.len() {
+            match sig.defaults[index] {
+                some(d) => {
+                    let kind = match d.kind {
+                        directive(x) => {
+                            if x.name == "caller-location" {
+                                location-literal(c, at)
+                            } else if x.name == "caller-expression" {
+                                let named = if x.args.len() == 1 { sig.names.index-of(expr-name(x.args[0])) } else { -1 };
+                                ExprKind.str-lit(if named >= 0 && named < given { diagnostics.span-text(c.context, args[named].span) } else { "" })
+                            } else {
+                                ExprKind.directive({ name: x.name, args: [], })
+                            }
+                        }
+                        let literal => literal,
+                    };
+                    args.push(node(kind, if is-caller-directive(d) { nowhere() } else { d.span }));
+                }
+                none => { return; }
+            }
+        }
+    }
+
+    // whether a default is the call's (#caller-location, #caller-expression)
+    is-caller-directive: func(d: Expr) -> bool {
+        match d.kind {
+            directive(x) => x.name == "caller-location" || x.name == "caller-expression",
+            _ => false,
+        }
+    }
+
+    // a func's defaults, each of its parameter's type: a literal, or a directive
+    // (#caller-expression naming one of its parameters)
+    check-defaults: func(c: Checker, sig: FuncSymbol) {
+        for index in 0..sig.defaults.len() {
+            match sig.defaults[index] {
+                some(d) => {
+                    let what = "the default of {sig.names[index]}";
+                    let copy = match d.kind {
+                        int-lit(_) => some(node(d.kind, d.span)),
+                        float-lit(_) => some(node(d.kind, d.span)),
+                        char-lit(_) => some(node(d.kind, d.span)),
+                        bool-lit(_) => some(node(d.kind, d.span)),
+                        str-lit(_) => some(node(d.kind, d.span)),
+                        directive(x) => {
+                            if x.name == "caller-location" {
+                                some(node(location-literal(c, d.span), nowhere()))
+                            } else if x.name == "caller-expression" {
+                                if x.args.len() != 1 || !sig.names.contains(expr-name(x.args[0])) {
+                                    c.span = d.span;
+                                    type-error(c, "#caller-expression(p): p is one of {base-name(c.in-func)}'s parameters, whose argument's text it is");
+                                }
+                                some(node(ExprKind.str-lit(""), nowhere()))
+                            } else {
+                                some(node(ExprKind.directive({ name: x.name, args: [], }), d.span))
+                            }
+                        }
+                        _ => none,
+                    };
+                    match copy {
+                        some(value) => { let _ = check(c, value, sig.params[index], what); }
+                        none => {
+                            c.span = d.span;
+                            type-error(c, "{what} is a literal or a # directive");
+                        }
+                    }
+                }
+                none => {}
+            }
+        }
+    }
+
+    // whether the func key names is async (an async func's, or a WIT async func's)
+    is-async-func: func(c: Checker, key: string) -> bool {
+        match c.symbols.funcs.get(key) {
+            some(sig) => sig.is-async,
+            none => false,
+        }
+    }
+
+    // whether the func key names is an extern (no func value is made of one)
+    is-extern: func(c: Checker, key: string) -> bool {
+        match c.symbols.funcs.get(key) {
+            some(sig) => sig.is-extern,
+            none => false,
+        }
+    }
+
+    // whether the func key names is a WIT interface's (a stream or a future given one is moved:
+    // its end leaves the component)
+    is-wit: func(c: Checker, key: string) -> bool {
+        match c.symbols.funcs.get(key) {
+            some(sig) => sig.wit-module != "",
+            none => false,
+        }
     }
 
     check-func: func(c: Checker, f: Func) {
@@ -995,7 +1484,8 @@ module checker {
         c.scope = f.scope;
         c.span = f.span;
         c.type-params = f.type-params;
-        let sig = c.funcs[f.name];
+        let sig = c.symbols.funcs[f.name];
+        check-defaults(c, sig);
         c.scopes = [];
         c.marks = [];
         c.depths = [];
@@ -1006,7 +1496,8 @@ module checker {
         assigned-in(f.body, c.assigned);
         c.closure-depth = 0;
         c.unit = f.unit;
-        push-scope(c);
+        push-scope(c, f.body.span);
+        if c.noting { c.context.bodies.push({ span: f.body.span, scope: f.scope, }); }
         for i in 0..f.params.len() { bind(c, intern(f.params[i]), sig.params[i], f.marks[i]); }
         c.result = sig.result;
         // a generator (its body yields): a seq<T> given back, its values T; its body's value none
@@ -1048,7 +1539,7 @@ module checker {
     // a block's statements: its value's type (unit for none). keep: the value is used (else, as a
     // statement, its last if's or match's branches need not agree)
     check-block: func(c: Checker, b: Block, want: Type, keep: bool) -> Type {
-        push-scope(c);
+        push-scope(c, b.span);
         let value = Type.unit-type;
         // the scopes an if that leaves narrows the rest of the block in
         let exits = 0;
@@ -1113,7 +1604,10 @@ module checker {
                 }
                 assign(a) => {
                     match binding-of(c, a.name) {
-                        some(m) => c.bindings.assigns.set(a, m),
+                        some(m) => {
+                            c.bindings.assigns.set(a, m);
+                            if c.noting { note-use(c, a.name-span, "", some(m)); }
+                        }
                         none => {}
                     }
                     match local-type(c, a.name) {
@@ -1125,8 +1619,9 @@ module checker {
                                 not-found(c, "{a.name} is not declared", name-text(a.name), names-here(c));
                             } else {
                                 let shown = a.name;
+                                if c.noting { note-use(c, a.name-span, gk, none); }
                                 a.name = intern(gk);
-                                check-assign(c, c.globals[gk].ty, a.op, a.value, name-text(shown));
+                                check-assign(c, c.symbols.globals[gk].ty, a.op, a.value, name-text(shown));
                             }
                         }
                     }
@@ -1143,9 +1638,23 @@ module checker {
                             c,
                             ".{a.name} of a {show-type(rt)}: an anonymous record is a value, its fields not assigned (make another)",
                         ),
+                        // a record (a value): its field set where it is, a variable or a field
+                        named(n) => {
+                            if c.symbols.records.has(n) && c.symbols.records[n].value && !is-place(c, a.target) {
+                                type-error(c, "a record's field is set in a variable or a field, where the record is (a record is a value: this one is a copy)");
+                            }
+                        }
                         _ => {}
                     }
-                    check-assign(c, field-type(c, rt, a.name), a.op, a.value, ".{a.name}");
+                    let assigned = field-type(c, rt, a.name);
+                    if c.noting {
+                        if structural(rt) {
+                            note-structural(c, a.name-span, without-readonly(resolve(rt)), a.name, assigned);
+                        } else {
+                            note-use(c, a.name-span, field-key(c, rt, a.name), none);
+                        }
+                    }
+                    check-assign(c, assigned, a.op, a.value, ".{a.name}");
                 }
                 expr-stmt(x) => {
                     if x.is-value && keep { value = check(c, x.value, want, "the value"); }
@@ -1212,7 +1721,7 @@ module checker {
     // captures one of its bindings)
     check-for: func(c: Checker, f: For) {
         let outer = c.unit;
-        push-scope(c);
+        push-scope(c, f.body.span);
         match f.stop {
             none => {
                 // a list, or a fixed-length one
@@ -1358,7 +1867,7 @@ module checker {
         c.in-async = false;
         c.closure-depth += 1;
         c.unit = cl.unit;
-        push-scope(c);
+        push-scope(c, cl.body.span);
         for i in 0..n { bind(c, intern(cl.params[i]), params[i], cl.marks[i]); }
         c.result = result;
         c.loops = 0;
@@ -1472,7 +1981,7 @@ module checker {
             // an extern's readonly parameter only says it reads it (its result's type follows the
             // argument's: nothing readonly of a value given it comes back), and so does a generic
             // std func's (list.get over memory.yel's intrinsics, as the extern it replaced)
-            if relaxed && wanted-readonly && (c.externs.has(callee) || std-generic(c, callee)) {
+            if relaxed && wanted-readonly && (is-extern(c, callee) || std-generic(c, callee)) {
                 c.span = saved;
                 return;
             }
@@ -1675,7 +2184,17 @@ module checker {
         true
     }
 
+    // e's type, where want is what is wanted of it (every expression's way in: a literal is
+    // noted here, read before infer-kind lowers it, an interpolation into the calls making its text)
     infer: func(c: Checker, e: Expr, want: Type) -> Type {
+        if !c.noting { return infer-kind(c, e, want); }
+        let literal = literal-of(e);
+        let t = infer-kind(c, e, want);
+        note-literal(c, e.span, literal, t);
+        t
+    }
+
+    infer-kind: func(c: Checker, e: Expr, want: Type) -> Type {
         // a literal where a union of literals is wanted: its one value
         match literal-singleton(c, e, want) {
             some(t) => { return t; }
@@ -1709,6 +2228,7 @@ module checker {
             }
             bool-lit(b) => Type.bool-type,
             str-lit(s) => Type.string-type,
+            directive(d) => directive-value(c, e, d, want),
             unit => Type.unit-type,
             interp(parts) => {
                 for part in parts {
@@ -1751,9 +2271,14 @@ module checker {
                 Type.list-type(item)
             }
             name(n) => {
-                // a func as a value: named by its key from here on
-                let fk = func-value(c, name-text(n));
+                // a func as a value: named by its key from here on (the package's own constant or
+                // global hides a builtin of its name, as a local does: the prelude's free, say)
+                let text = name-text(n);
+                let hides-builtin = is-none(local-type(c, n)) && own-key(c, text) == ""
+                    && (const-key(c, text) != "" || global-key(c, text) != "");
+                let fk = if hides-builtin { "" } else { func-value(c, text) };
                 if fk != "" {
+                    if c.noting { note-use(c, e.span, fk, none); }
                     e.kind = ExprKind.name(intern(fk));
                     return func-sig-type(c, fk);
                 }
@@ -1761,30 +2286,51 @@ module checker {
                 if is-none(local-type(c, n)) {
                     let ck = const-key(c, name-text(n));
                     if ck != "" {
+                        if c.noting { note-use(c, e.span, ck, none); }
                         let v = const-copy(c, ck, e.span);
                         e.kind = v.kind;
-                        match c.consts[ck].ty {
+                        match c.symbols.consts[ck].ty {
                             some(t) => { return check(c, e, t, "the constant {n}"); }
                             none => { return infer(c, e, want); }
                         }
                     }
                 }
-                // a global (no local hides it): named by its key from here on
+                // a global (no local hides it): named by its key from here on (and one named so
+                // already, checked again: a method's target is, as each func that may take it is
+                // tried; a module's global's key, or an included package's: a dot or a / in it, which
+                // no local's name can have)
+                let keyed = find-byte(name-text(n), 46) != none || find-byte(name-text(n), 47) != none;
+                if keyed && c.symbols.globals.has(name-text(n)) {
+                    if c.noting { note-use(c, e.span, name-text(n), none); }
+                    return c.symbols.globals[name-text(n)].ty;
+                }
                 if is-none(local-type(c, n)) {
                     let gk = global-key(c, name-text(n));
                     if gk != "" {
+                        if c.noting { note-use(c, e.span, gk, none); }
                         e.kind = ExprKind.name(intern(gk));
-                        return c.globals[gk].ty;
+                        return c.symbols.globals[gk].ty;
                     }
                 }
                 // a local: which binding it is
                 match binding-of(c, n) {
-                    some(m) => c.bindings.exprs.set(e, m),
+                    some(m) => {
+                        c.bindings.exprs.set(e, m);
+                        if c.noting { note-use(c, e.span, "", some(m)); }
+                    }
                     none => {}
                 }
-                infer-name(c, name-text(n), want)
+                infer-name(c, name-text(n), want, e.span)
             }
             call(x) => {
+                // (a wait's and a start's: this call's, not an argument's a builtin's pick checks:
+                // wait read(made()) waits for read, made() a call of its own; given back to the
+                // call this is, before it)
+                let waited = c.async-call;
+                let starting = c.starting;
+                c.async-call = false;
+                c.starting = false;
+                let own-call = { -> c.async-call = waited; c.starting = starting; };
                 // a local holding a func: called through it, as any func value (its name read as
                 // where it is: a narrowed one's value of that kind)
                 match local-type(c, intern(x.name)) {
@@ -1793,6 +2339,7 @@ module checker {
                             callee: { kind: ExprKind.name(intern(x.name)), span: e.span, ty: t, },
                             args: x.args,
                         });
+                        own-call();
                         return infer(c, e, want);
                     }
                     none => {}
@@ -1813,48 +2360,72 @@ module checker {
                     none => {}
                 }
                 let key = func-key(c, x.name);
+                // (a name already its func's key, as module.f(a) is made: another package's too,
+                // which no name here resolves to)
+                if key == "" && c.symbols.funcs.has(x.name) { key = x.name; }
                 if key == "" { key = builtin-pick(c, x.name, x.args); }
-                if key != "" { x.name = key; }
+                if key != "" {
+                    if c.noting && c.symbols.funcs.has(key) { note-use(c, x.name-span, key, none); }
+                    x.name = key;
+                }
                 let given = x.args.len();
-                let t = infer-call(c, x.name, x.args, want);
+                own-call();
+                let t = infer-call(c, x.name, x.args, want, x.name-span);
                 x.type-args = c.last-type-args;
                 // a case given () carries nothing: its bare name
                 if given == 1 && x.args.len() == 0 { e.kind = ExprKind.name(intern(x.name)); }
                 t
             }
             method(m) => {
+                // (a wait's and a start's: this call's, not its target's: wait root().stat() waits
+                // for stat, root() a call of its own; given back to the call this is, before it)
+                let waited = c.async-call;
+                let starting = c.starting;
+                c.async-call = false;
+                c.starting = false;
+                let own-call = { -> c.async-call = waited; c.starting = starting; };
                 // Type.case(payload), module.Type.case(payload): the type named by its key from
                 // here on
                 let tk = type-ref(c, m.target);
-                if tk != "" && c.resources.has(intern(tk)) {
+                if c.noting && tk != "" { note-type-target(c, m.target, tk); }
+                if c.noting {
+                    let mk-site = if tk == "" { module-ref(c, m.target) } else { "" };
+                    if tk != "" || mk-site != "" {
+                        c.context.members.push({ span: m.name-span, ty: Type.unit-type, module: mk-site, type-key: tk, });
+                    }
+                }
+                if tk != "" && c.symbols.resources.has(intern(tk)) {
                     // Resource.f(a): the resource's constructor (new) or a static func
                     let key = tk + "." + m.name;
-                    if !c.funcs.has(key) {
+                    if !c.symbols.funcs.has(key) {
                         wit-not-found(c, "resource {base-name(tk)} has no func {m.name}", m.name, tk);
                         return Type.error-type;
                     }
-                    e.kind = ExprKind.call({ name: key, args: m.args, type-args: [], });
+                    e.kind = ExprKind.call({ name: key, args: m.args, type-args: [], name-span: m.name-span, });
+                    own-call();
                     return infer(c, e, want);
                 }
                 if tk != "" {
                     m.target.kind = ExprKind.name(intern(tk));
                     let given = m.args.len();
-                    let t = infer-case(c, tk, m.name, m.args);
+                    let t = infer-case(c, tk, m.name, m.args, m.name-span);
                     // Type.case(()) of a case carrying nothing: Type.case
                     if given == 1 && m.args.len() == 0 {
-                        e.kind = ExprKind.field({ target: m.target, name: m.name, });
+                        e.kind = ExprKind.field({ target: m.target, name: m.name, name-span: m.name-span, });
                     }
                     return t;
                 }
                 // module.f(a): a call of the module's func
                 let mk = module-ref(c, m.target);
                 if mk != "" {
-                    let key = mk + "." + m.name;
-                    if !c.funcs.has(key) {
+                    if c.noting { note-use(c, m.target.span, mk, none); }
+                    let key = member(c, mk, m.name, "func");
+                    if key == "" {
                         wit-not-found(c, "module {expr-name(m.target)} has no func {m.name}", m.name, mk);
                         return Type.error-type;
                     }
-                    e.kind = ExprKind.call({ name: key, args: m.args, type-args: [], });
+                    e.kind = ExprKind.call({ name: key, args: m.args, type-args: [], name-span: m.name-span, });
+                    own-call();
                     return infer(c, e, want);
                 }
                 // the call's arguments, its target first
@@ -1863,7 +2434,7 @@ module checker {
                 // xs.len() of a fixed-length list
                 match fixed-call(c, m.name, args) {
                     some(t) => {
-                        e.kind = ExprKind.call({ name: "~" + m.name, args: args, type-args: [], });
+                        e.kind = ExprKind.call({ name: "~" + m.name, args: args, type-args: [], name-span: m.name-span, });
                         return t;
                     }
                     none => {}
@@ -1872,13 +2443,15 @@ module checker {
                 if c.methods.has(m.name) {
                     match resolve(check(c, m.target, fresh(c), "a method's target")) {
                         named(n) => {
-                            if c.resources.has(n) && c.funcs.has(name-text(n) + "." + m.name) {
+                            if c.symbols.resources.has(n) && c.symbols.funcs.has(name-text(n) + "." + m.name) {
                                 e.kind = ExprKind.call({
                                     name: name-text(n) + "." + m.name,
                                     args: args,
                                     type-args: [],
+                                    name-span: m.name-span,
                                 });
-                                return infer(c, e, want);
+                    own-call();
+                    return infer(c, e, want);
                             }
                         }
                         _ => {}
@@ -1893,25 +2466,46 @@ module checker {
                     key = builtin-pick(c, m.name, args);
                 }
                 if key == "" { key = builtin-pick(c, m.name, args); }
-                if key != "" { m.name = key; }
+                if key != "" {
+                    if c.noting && c.symbols.funcs.has(key) { note-use(c, m.name-span, key, none); }
+                    m.name = key;
+                }
                 else {
                     // no func of that name: a resource's method yel has not
                     match resolve(check(c, m.target, fresh(c), "a method's target")) {
                         named(n) => {
-                            if c.resources.has(n) {
+                            if c.symbols.resources.has(n) {
                                 wit-not-found(c, "resource {base-name(name-text(n))} has no method {m.name}", m.name, name-text(n));
                             }
                         }
                         _ => {}
                     }
                 }
-                let t = infer-call(c, m.name, args, want);
+                own-call();
+                let t = infer-call(c, m.name, args, want, m.name-span);
+                // (the defaults given its parameters left out: the method's arguments, as the
+                // call's are)
+                for index in m.args.len() + 1..args.len() { m.args.push(args[index]); }
+                if c.noting { c.context.members.push({ span: m.name-span, ty: m.target.ty, module: "", type-key: "", }); }
                 m.type-args = c.last-type-args;
                 t
             }
             field(f) => {
                 let tk = type-ref(c, f.target);
-                if tk != "" && c.resources.has(intern(tk)) {
+                if c.noting && tk != "" { note-type-target(c, f.target, tk); }
+                let fmk-site = if tk == "" { module-ref(c, f.target) } else { "" };
+                if c.noting && (tk != "" || fmk-site != "") {
+                    c.context.members.push({ span: f.name-span, ty: Type.unit-type, module: fmk-site, type-key: tk, });
+                }
+                // x. with no name yet (told by the parser): what is before the dot noted, no more
+                if f.name == "" {
+                    if tk == "" && fmk-site == "" {
+                        let before = check(c, f.target, fresh(c), "a value");
+                        if c.noting { c.context.members.push({ span: f.name-span, ty: before, module: "", type-key: "", }); }
+                    }
+                    return Type.error-type;
+                }
+                if tk != "" && c.symbols.resources.has(intern(tk)) {
                     type-error(
                         c,
                         "{expr-name(f.target)}.{f.name}: a resource's func is called: {expr-name(f.target)}.{f.name}(...)",
@@ -1920,27 +2514,47 @@ module checker {
                 }
                 if tk != "" {
                     f.target.kind = ExprKind.name(intern(tk));
-                    return infer-case(c, tk, f.name, []);
+                    return infer-case(c, tk, f.name, [], f.name-span);
                 }
                 // module.f as a value
                 let fmk = module-ref(c, f.target);
-                if fmk != "" && c.funcs.has(fmk + "." + f.name) {
-                    let fk = fmk + "." + f.name;
-                    if c.funcs[fk].type-params.len() > 0 {
+                if c.noting && fmk != "" { note-use(c, f.target.span, fmk, none); }
+                let fk = if fmk == "" { "" } else { member(c, fmk, f.name, "func") };
+                if fk != "" {
+                    if c.symbols.funcs[fk].type-params.len() > 0 {
                         type-error(c, "{fk} is generic: a generic func is not a value yet");
                     }
                     e.kind = ExprKind.name(intern(fk));
                     return func-sig-type(c, fk);
                 }
+                // module.NAME, a module's constant: its literal, of its type
+                let ck = if fmk == "" { "" } else { member(c, fmk, f.name, "const") };
+                if ck != "" {
+                    let v = const-copy(c, ck, e.span);
+                    e.kind = v.kind;
+                    match c.symbols.consts[ck].ty {
+                        some(t) => { return check(c, e, t, "the constant {expr-name(f.target)}.{f.name}"); }
+                        none => { return infer(c, e, want); }
+                    }
+                }
                 if module-ref(c, f.target) != "" {
                     type-error(
                         c,
-                        "{expr-name(f.target)}.{f.name}: a module's func is called, and its types are named in types",
+                        "{expr-name(f.target)}.{f.name}: module {expr-name(f.target)} has no constant {f.name} (a module's func is called, and its types are named in types)",
                     );
                     return Type.error-type;
                 }
                 let t = check(c, f.target, fresh(c), "a record");
-                field-type(c, t, f.name)
+                if c.noting { c.context.members.push({ span: f.name-span, ty: t, module: "", type-key: "", }); }
+                let found = field-type(c, t, f.name);
+                if c.noting {
+                    if structural(t) {
+                        note-structural(c, f.name-span, without-readonly(resolve(t)), f.name, found);
+                    } else {
+                        note-use(c, f.name-span, field-key(c, t, f.name), none);
+                    }
+                }
+                found
             }
             binary(b) => infer-binary(c, b),
             unary(u) => {
@@ -1990,15 +2604,15 @@ module checker {
             try-as(x) => {
                 infer-is(c, x);
                 // some of the value, as what the test narrows it to
-                let d = d-of(c);
+                let d = c.symbols;
                 Type.option-type(split(c, x.value.ty, semtype.translate(d, x.ty), some(x.ty)).yes)
             }
             // checked once already (a conversion the checker made)
             widen(x) => x.ty,
             start-expr(x) => {
-                // std's host may start a task in a sync func: a sync WIT func that gives a stream and
-                // a future (read-via-stream), its task run by the executor of whoever reads it
-                if c.scope.pkg.id != "yel:std" { need-async(c, "start"); }
+                // anywhere: start never waits (the task is the executor's to run, once whoever
+                // started it waits, or an async export's call runs its tasks). A sync func or a
+                // closure may start one: an effect a load, std's host a stream's pump
                 if !is-async-call(c, x) {
                     type-error(c, "start begins an async func's call: start f(…), f an async func");
                 }
@@ -2069,54 +2683,61 @@ module checker {
         }
     }
 
-    infer-name: func(c: Checker, n: string, want: Type) -> Type {
+    infer-name: func(c: Checker, n: string, want: Type, at: Span) -> Type {
         match local-type(c, intern(n)) {
             some(t) => { return t; }
             none => {}
         }
         if n == "none" {
+            if c.noting { note-use(c, at, "builtin:option#none", none); }
             match resolve(want) {
                 option-type(x) => { return want; }
                 _ => {}
             }
             return Type.option-type(fresh(c));
         }
-        if is-result-case(c, n, want) { return infer-result(c, n, [], want); }
+        if is-result-case(c, n, want) {
+            if c.noting { note-use(c, at, "builtin:result#{n}", none); }
+            return infer-result(c, n, [], want);
+        }
         let wanted = wanted-case(c, n, want);
-        if wanted != "" { return infer-case(c, wanted, n, []); }
+        if wanted != "" { return infer-case(c, wanted, n, [], at); }
         // the two floats no numeral spells
         if n == "inf" || n == "nan" {
             let w = resolve(want);
             if fits-kind(2, w) { return w; }
             return fresh-kind(c, 2);
         }
-        if c.case-owner.has(n) {
-            let owner = c.case-owner[n];
-            if owner == "" {
-                type-error(c, "{n} is a case of more than one type: write Type.{n}");
-                return Type.error-type;
+        match case-variant(c, n, true) {
+            some(owner) => {
+                if owner == "" {
+                    type-error(c, "{n} is a case of more than one type: write Type.{n}");
+                    return Type.error-type;
+                }
+                return infer-case(c, owner, n, [], at);
             }
-            return infer-case(c, owner, n, []);
+            none => {}
         }
         not-found(c, "{n} is not declared", n, names-here(c));
         Type.error-type
     }
 
-    infer-call: func(c: Checker, n: string, args: list<Expr>, want: Type) -> Type {
+    infer-call: func(c: Checker, n: string, args: list<Expr>, want: Type, at: Span) -> Type {
         // an async func's call: what a wait or a start does (its arguments are not)
         let waited = c.async-call;
         c.async-call = false;
         // a start's call: its arguments' sites say so (the flag is this call's, not its arguments')
         let starting = c.starting;
         c.starting = false;
-        if c.async-funcs.has(n) && !waited {
+        if is-async-func(c, n) && !waited {
             type-error(
                 c,
                 "{base-name(n)} is async: wait {base-name(n)}(…) for its result, or start {base-name(n)}(…) for a future",
             );
         }
-        if c.funcs.has(n) {
-            let inst = instantiate(c, c.funcs[n]);
+        if c.symbols.funcs.has(n) {
+            given-defaults(c, c.symbols.funcs[n], args, at);
+            let inst = instantiate(c, c.symbols.funcs[n]);
             if args.len() != inst.params.len() {
                 type-error(c, "{n} takes {inst.params.len()} arguments, given {args.len()}");
                 // its arguments checked on their own; the call's result is still the func's
@@ -2136,7 +2757,7 @@ module checker {
                 if c.sites[k].callee == n { c.sites[k].result-readonly = readonly-result; }
             }
             same-value-twice(c, n, args, inst.params);
-            if c.wit-externs.has(n) {
+            if is-wit(c, n) {
                 for i in 0..args.len() { note-move(c, n, i, args[i]); }
             }
             c.last-type-args = inst.type-args;
@@ -2144,6 +2765,7 @@ module checker {
         }
         c.last-type-args = [];
         if n == "some" && args.len() == 1 {
+            if c.noting { note-use(c, at, "builtin:option#some", none); }
             let inner = fresh(c);
             match resolve(want) {
                 option-type(x) => { inner = x; }
@@ -2152,16 +2774,21 @@ module checker {
             check(c, args[0], inner, "some's payload");
             return Type.option-type(inner);
         }
-        if is-result-case(c, n, want) { return infer-result(c, n, args, want); }
+        if is-result-case(c, n, want) {
+            if c.noting { note-use(c, at, "builtin:result#{n}", none); }
+            return infer-result(c, n, args, want);
+        }
         let wanted = wanted-case(c, n, want);
-        if wanted != "" { return infer-case(c, wanted, n, args); }
-        if c.case-owner.has(n) {
-            let owner = c.case-owner[n];
-            if owner == "" {
-                type-error(c, "{n} is a case of more than one type: write Type.{n}(...)");
-                return Type.error-type;
+        if wanted != "" { return infer-case(c, wanted, n, args, at); }
+        match case-variant(c, n, true) {
+            some(owner) => {
+                if owner == "" {
+                    type-error(c, "{n} is a case of more than one type: write Type.{n}(...)");
+                    return Type.error-type;
+                }
+                return infer-case(c, owner, n, args, at);
             }
-            return infer-case(c, owner, n, args);
+            none => {}
         }
         // no func of that name: told, unless an argument is an error's (x.f() on what an error made
         // is that error's echo)
@@ -2178,8 +2805,8 @@ module checker {
     wanted-case: func(c: Checker, n: string, want: Type) -> string {
         match resolve(want) {
             named(k) => {
-                if !c.variants.has(k) { return ""; }
-                for kc in c.variants[k] {
+                if !c.symbols.variants.has(k) { return ""; }
+                for kc in c.symbols.variants[k].cases {
                     if kc.name == n { return name-text(k); }
                 }
                 ""
@@ -2193,7 +2820,7 @@ module checker {
         if n != "ok" && n != "err" { return false; }
         match resolve(want) {
             result-type(r) => true,
-            _ => !c.case-owner.has(n),
+            _ => case-variant(c, n, false) == none,
         }
     }
 
@@ -2233,16 +2860,21 @@ module checker {
     }
 
     // Type.case, or Type.case(payload); a flags type's Type.flag
-    infer-case: func(c: Checker, tname: string, cname: string, args: list<Expr>) -> Type {
+    infer-case: func(c: Checker, tname: string, cname: string, args: list<Expr>, at: Span) -> Type {
         let owner = intern(tname);
-        if c.flags.has(owner) {
-            if !contains(c.flags[owner], cname) {
-                not-found(c, "{tname} has no flag {cname}", cname, c.flags[owner]);
+        if c.noting {
+            let declared = (c.symbols.flags.has(owner) && contains(c.symbols.flags[owner].flags, cname))
+                || (c.symbols.variants.has(owner) && c.symbols.variants[owner].cases.any({ k -> k.name == cname }));
+            if declared { note-use(c, at, "{tname}#{cname}", none); }
+        }
+        if c.symbols.flags.has(owner) {
+            if !contains(c.symbols.flags[owner].flags, cname) {
+                not-found(c, "{tname} has no flag {cname}", cname, c.symbols.flags[owner].flags);
             }
             if args.len() != 0 { type-error(c, "{tname}.{cname} is a flag, not a func"); }
             return Type.named(owner);
         }
-        let known = if c.variants.has(owner) { c.variants[owner] } else { [] };
+        let known = if c.symbols.variants.has(owner) { c.symbols.variants[owner].cases } else { [] };
         for k in known {
             if k.name == cname {
                 if !k.has-payload && args.len() == 1 && is-unit-lit(args[0]) { args.pop(); }
@@ -2265,11 +2897,23 @@ module checker {
             }
         }
         let cases: list<string> = [];
-        if c.variants.has(owner) {
-            for k in c.variants[owner] { cases.push(k.name); }
+        if c.symbols.variants.has(owner) {
+            for k in c.symbols.variants[owner].cases { cases.push(k.name); }
         }
         not-found(c, "{tname} has no case {cname}", cname, cases);
         Type.error-type
+    }
+
+    // the key of field f of a value of type t0: its record's (or resource's) key and the field,
+    // record#field ("" for one of no declared record: an anonymous record's, a tuple's, a flag)
+    field-key: func(c: Checker, t0: Type, f: string) -> string {
+        match resolve(t0) {
+            readonly-type(x) => field-key(c, x, f),
+            named(n) => {
+                if c.symbols.records.has(n) && contains(c.symbols.records[n].fields, f) { "{name-text(n)}#{f}" } else { "" }
+            }
+            _ => "",
+        }
     }
 
     field-type: func(c: Checker, t0: Type, f: string) -> Type {
@@ -2295,23 +2939,23 @@ module checker {
             }
             named(n) => {
                 // a flag of a flags value, read as a bool
-                if c.flags.has(n) {
-                    if !contains(c.flags[n], f) {
-                        not-found(c, "{n} has no flag {f}", f, c.flags[n]);
+                if c.symbols.flags.has(n) {
+                    if !contains(c.symbols.flags[n].flags, f) {
+                        not-found(c, "{n} has no flag {f}", f, c.symbols.flags[n].flags);
                     }
                     return Type.bool-type;
                 }
-                if !c.records.has(n) {
+                if !c.symbols.records.has(n) {
                     type-error(c, ".{f} of {n}, which is not a record");
                     return Type.error-type;
                 }
-                let info = c.records[n];
+                let info = c.symbols.records[n];
                 let i = index-of(info.fields, f);
                 if i < 0 {
-                    not-found(c, "record {n} has no field {f}", f, info.fields);
+                    not-found(c, "{if info.value { "record" } else { "resource" }} {n} has no field {f}", f, info.fields);
                     return Type.error-type;
                 }
-                info.types[i]
+                info.field-types[i]
             }
             _ => {
                 type-error(
@@ -2412,6 +3056,7 @@ module checker {
                 for f in fields {
                     let i = index-of(r.fields, f.name);
                     check(c, f.value, if i < 0 { Type.error-type } else { r.types[i] }, "field {f.name}");
+                    if c.noting && i >= 0 { note-structural(c, f.name-span, w, f.name, r.types[i]); }
                 }
                 return w;
             }
@@ -2424,19 +3069,26 @@ module checker {
             // an anonymous record: each field's own type
             let types: list<Type> = [];
             for f in fields { types.push(check(c, f.value, fresh(c), "field {f.name}")); }
-            return anon-record-of(names, types);
+            let made = anon-record-of(names, types);
+            if c.noting {
+                for index in 0..fields.len() { note-structural(c, fields[index].name-span, made, fields[index].name, types[index]); }
+            }
+            return made;
         }
         let record-name = intern(target);
-        let info = c.records[record-name];
+        let info = c.symbols.records[record-name];
+        if c.noting {
+            for f in fields { if contains(info.fields, f.name) { note-use(c, f.name-span, "{target}#{f.name}", none); } }
+        }
         if !same-fields(info.fields, names) {
             type-error(
                 c,
-                "record {target} has the fields \{ {info.fields.join(", ")} \}, given \{ {names.join(", ")} \}",
+                "{if info.value { "record" } else { "resource" }} {target} has the fields \{ {info.fields.join(", ")} \}, given \{ {names.join(", ")} \}",
             );
         }
         for f in fields {
             let i = index-of(info.fields, f.name);
-            let ft = if i < 0 { Type.error-type } else { info.types[i] };
+            let ft = if i < 0 { Type.error-type } else { info.field-types[i] };
             check(
                 c,
                 f.value,
@@ -2451,14 +3103,14 @@ module checker {
     // of a union w with exactly them; "" for none (the literal is anonymous)
     wanted-record: func(c: Checker, w: Type, names: list<string>) -> string {
         match w {
-            named(n) => { if c.records.has(n) { return name-text(n); } }
+            named(n) => { if c.symbols.records.has(n) { return name-text(n); } }
             union-type(xs) => {
                 let found: list<string> = [];
                 for x in xs {
                     match resolve(x) {
                         named(n) => {
-                            if c.records.has(n) && same-fields(
-                                c.records[n].fields,
+                            if c.symbols.records.has(n) && same-fields(
+                                c.symbols.records[n].fields,
                                 names,
                             ) {
                                 found.push(name-text(n));
@@ -2488,7 +3140,7 @@ module checker {
         let before = c.context.errors.len();
         let vt = check(c, m.value, fresh(c), "a match's value");
         let saved = c.span;
-        let d = d-of(c);
+        let d = c.symbols;
         // what the arms before (without guards) left, and the local matched (narrowed in each arm)
         let rest = vt;
         let subject = match m.value.kind {
@@ -2501,7 +3153,7 @@ module checker {
         };
         for arm in m.arms {
             c.span = arm.span;
-            push-scope(c);
+            push-scope(c, arm.span);
             let seen: map<string, bool> = map.new();
             check-pattern(c, arm.pattern, vt, seen, false);
             let parts = split(
@@ -2559,7 +3211,7 @@ module checker {
                 if disjoint(c, t, ty) {
                     type-error(c, "a {show-type(t)} is never a {show-type(ty)}");
                 }
-                let d = d-of(c);
+                let d = c.symbols;
                 x.test = some(is-pattern(c, ty, t));
                 check-pattern(
                     c,
@@ -2590,7 +3242,7 @@ module checker {
                         "a range pattern on a {show-type(t)}: ranges are of integers or chars",
                     ),
                 }
-                if semtype.is-empty(d-of(c), pattern-type(c, d-of(c), p, t)) {
+                if semtype.is-empty(c.symbols, pattern-type(c, c.symbols, p, t)) {
                     type-error(c, "the range holds no value: its end is before its start");
                 }
             }
@@ -2601,6 +3253,7 @@ module checker {
             name(pn) => check-name-pattern(c, pn, t, seen, alt),
             case(pc) => {
                 settle(c, pc.name, t);
+                if c.noting { note-use(c, pc.name-span, case-key(c, t, pc.name), none); }
                 let pt = case-payload(c, pc.name, t);
                 // a case carrying nothing holds (): its pattern (), _ or a name (bound to ()); an
                 // option's some carries a payload, () too
@@ -2632,13 +3285,25 @@ module checker {
                             c,
                             "a record pattern on a {show-type(rt)} (annotate the value's type)",
                         );
-                        let empty: RecordInfo = { fields: [], types: [], };
+                        let empty: RecordShape = { fields: [], types: [], value: false, };
                         empty
                     }
                 };
                 for i in 0..pr.fields.len() {
                     let k = field-index(info.fields, pr.fields[i]);
                     if k < 0 { type-error(c, "a {show-type(rt)} has no field {pr.fields[i]}"); }
+                    // the field's use (but in { x }, whose name is the binding's: the binding is it)
+                    let shorthand = match pr.patterns[i] {
+                        name(pn) => pn.span == pr.field-spans[i],
+                        _ => false,
+                    };
+                    if c.noting && k >= 0 && !shorthand {
+                        if structural(rt) {
+                            note-structural(c, pr.field-spans[i], without-readonly(rt), pr.fields[i], info.types[k]);
+                        } else {
+                            note-use(c, pr.field-spans[i], field-key(c, rt, pr.fields[i]), none);
+                        }
+                    }
                     check-pattern(c, pr.patterns[i], if k < 0 { Type.error-type } else { info.types[k] }, seen, alt);
                 }
                 // ...rest: an anonymous record of the fields not named
@@ -2693,25 +3358,28 @@ module checker {
 
     // a record type's fields and their types (a declared record's, an anonymous one's); none for
     // another type
-    record-shape: func(c: Checker, t: Type) -> option<RecordInfo> {
+    record-shape: func(c: Checker, t: Type) -> option<RecordShape> {
         match resolve(t) {
             // a readonly record's fields read readonly
             readonly-type(x) => match record-shape(c, x) {
                 some(info) => {
                     let ts: list<Type> = [];
                     for y in info.types { ts.push(readonly-of(y)); }
-                    some({ fields: info.fields, types: ts, })
+                    some({ fields: info.fields, types: ts, value: info.value, })
                 }
                 none => none,
             },
-            named(n) => if c.records.has(n) { some(c.records[n]) } else { none },
-            anon-record(r) => some({ fields: r.fields, types: r.types, }),
+            named(n) => match c.symbols.records.get(n) {
+                some(r) => some({ fields: r.fields, types: r.field-types, value: r.value, }),
+                none => none,
+            },
+            anon-record(r) => some({ fields: r.fields, types: r.types, value: true, }),
             _ => none,
         }
     }
 
     // the anonymous record of a record's fields but named
-    rest-type: func(info: RecordInfo, named: list<string>) -> Type {
+    rest-type: func(info: RecordShape, named: list<string>) -> Type {
         let fs: list<string> = [];
         let ts: list<Type> = [];
         for i in 0..info.fields.len() {
@@ -2738,7 +3406,7 @@ module checker {
                 case(pc) => is-case-name(c, pc.name, rm),
                 name(pn) => is-case-name(c, pn.name, rm),
                 record(pr) => match rm {
-                    named(n) => c.records.has(n),
+                    named(n) => c.symbols.records.has(n),
                     anon-record(r) => {
                         let all = true;
                         for f in pr.fields {
@@ -2774,6 +3442,7 @@ module checker {
         settle(c, pn.name, t);
         if is-case-name(c, pn.name, t) {
             pn.kind = "case";
+            if c.noting { note-use(c, pn.span, case-key(c, t, pn.name), none); }
             return;
         }
         if !pn.binds {
@@ -2781,8 +3450,9 @@ module checker {
             if ck != "" {
                 pn.kind = "const";
                 pn.key = ck;
+                if c.noting { note-use(c, pn.span, ck, none); }
                 let v = const-copy(c, ck, pn.span);
-                match c.consts[ck].ty {
+                match c.symbols.consts[ck].ty {
                     some(ct) => unify(c, ct, t, "the constant {pn.name}"),
                     none => {}
                 }
@@ -2792,7 +3462,7 @@ module checker {
                 return;
             }
         }
-        if !pn.binds && c.case-owner.has(pn.name) {
+        if !pn.binds && case-variant(c, pn.name, false) != none {
             type-error(c, "{pn.name} is not a case of {show-type(resolve(t))}");
         }
         if !pn.binds {
@@ -2838,8 +3508,11 @@ module checker {
                 else if n == "ok" || n == "err" {
                     unify(c, Type.result-type({ ok: fresh(c), err: fresh(c), }), t, "a match");
                 } else if n == "true" || n == "false" { unify(c, Type.bool-type, t, "a match"); }
-                else if c.case-owner.has(n) && c.case-owner[n] != "" {
-                    unify(c, Type.named(intern(c.case-owner[n])), t, "a match");
+                else {
+                    match case-variant(c, n, false) {
+                        some(owner) => { if owner != "" { unify(c, Type.named(intern(owner)), t, "a match"); } }
+                        none => {}
+                    }
                 }
             }
             _ => {}
@@ -2864,8 +3537,8 @@ module checker {
             result-type(r) => n == "ok" || n == "err",
             bool-type => n == "true" || n == "false",
             named(k) => {
-                if !c.variants.has(k) { return false; }
-                for kc in c.variants[k] {
+                if !c.symbols.variants.has(k) { return false; }
+                for kc in c.symbols.variants[k].cases {
                     if kc.name == n { return true; }
                 }
                 false
@@ -2910,8 +3583,8 @@ module checker {
                 }
             }
             named(k) => {
-                if c.variants.has(k) {
-                    for kc in c.variants[k] {
+                if c.symbols.variants.has(k) {
+                    for kc in c.symbols.variants[k].cases {
                         if kc.name == n && kc.has-payload { return kc.payload; }
                     }
                 }
@@ -2945,7 +3618,7 @@ module checker {
     // a value of type vt none of the patterns fit, shown as a pattern: the type's values less
     // each pattern's, as sets (semtype.yel); none when none is left
     uncovered: func(c: Checker, patterns: list<Pattern>, vt0: Type) -> option<string> {
-        let d = d-of(c);
+        let d = c.symbols;
         // which values there are (readonly is who may write them, not which they are)
         let vt = without-readonly(vt0);
         let rest = semtype.translate(d, vt);
@@ -2971,7 +3644,7 @@ module checker {
     }
 
     // the values a pattern (checked) fits, of type t
-    pattern-type: func(c: Checker, d: Decls, p: Pattern, t1: Type) -> SemType {
+    pattern-type: func(c: Checker, d: Symbols, p: Pattern, t1: Type) -> SemType {
         let t0 = without-readonly(t1);
         let t = resolve(pattern-member(c, p, t0));
         match p {
@@ -3003,15 +3676,15 @@ module checker {
             record(pr) => {
                 match t {
                     named(rn) => {
-                        if !c.records.has(rn) { return semtype.translate(d, t); }
-                        let info = c.records[rn];
+                        if !c.symbols.records.has(rn) { return semtype.translate(d, t); }
+                        let info = c.symbols.records[rn];
                         let fields: list<SemType> = [];
                         for i in 0..info.fields.len() {
                             let k = field-index(pr.fields, info.fields[i]);
                             fields.push(if k < 0 {
-                                semtype.translate(d, info.types[i])
+                                semtype.translate(d, info.field-types[i])
                             } else {
-                                pattern-type(c, d, pr.patterns[k], info.types[i])
+                                pattern-type(c, d, pr.patterns[k], info.field-types[i])
                             });
                         }
                         semtype.product(name-text(rn), name-text(rn), fields)
@@ -3051,7 +3724,7 @@ module checker {
     }
 
     // a literal's one value (its type a literal type inside a union, else its kind)
-    literal-set: func(d: Decls, e: Expr) -> SemType {
+    literal-set: func(d: Symbols, e: Expr) -> SemType {
         match resolve(e.ty) {
             singleton(s) => semtype.translate(d, e.ty),
             _ => semtype.literal(e.ty, semtype.literal-key(e)),
@@ -3059,7 +3732,7 @@ module checker {
     }
 
     // the values of t's case n, its payload's in sub (none: any payload)
-    case-type: func(c: Checker, d: Decls, n: string, t: Type, sub: option<SemType>) -> SemType {
+    case-type: func(c: Checker, d: Symbols, n: string, t: Type, sub: option<SemType>) -> SemType {
         let payload = match sub {
             some(s) => s,
             none => semtype.translate(d, case-payload(c, n, t)),
@@ -3099,15 +3772,14 @@ module checker {
     // whether a builtin named n is async (one of several of that name: which one its first argument
     // picks is settled when the call is checked)
     async-builtin: func(c: Checker, n: string) -> bool {
-        if !c.builtins.has(n) { return false; }
-        c.builtins[n].any({ key -> c.async-funcs.has(key) })
+        builtins-here(c, n).any({ key -> is-async-func(c, key) })
     }
 
     // whether an expression is a call of an async func (its key settled by the checker, or a name
     // that is one)
     is-async-call: func(c: Checker, e: Expr) -> bool {
         match e.kind {
-            call(x) => c.async-funcs.has(x.name) || c.async-funcs.has(func-key(c, x.name)) || async-builtin(c, x.name),
+            call(x) => is-async-func(c, x.name) || is-async-func(c, func-key(c, x.name)) || async-builtin(c, x.name),
             method(m) => {
                 // module.f(a): the module's func, and only it; h.f(a) on a resource's handle: its method
                 match m.target.kind {
@@ -3116,20 +3788,32 @@ module checker {
                             some(t) => {
                                 match resolve(t) {
                                     named(r) => {
-                                        if c.resources.has(r) { return c.async-funcs.has(name-text(r) + "." + m.name); }
+                                        if c.symbols.resources.has(r) { return is-async-func(c, name-text(r) + "." + m.name); }
                                     }
                                     _ => {}
                                 }
                             }
                             none => {
-                                let mk = module-key(c.scope, name-text(n));
-                                if mk != "" { return c.async-funcs.has(mk + "." + m.name); }
+                                let mk = module-key(c, c.scope, name-text(n));
+                                if mk != "" { return is-async-func(c, mk + "." + m.name); }
                             }
                         }
                     }
-                    _ => {}
+                    _ => {
+                        // a handle's method on any other target (a call's result, a tuple's field,
+                        // a field): the method of the resource its type is (a target that names a
+                        // module's type, or a type, is no value)
+                        if type-ref(c, m.target) == "" && module-ref(c, m.target) == "" {
+                            match resolve(without-readonly(check(c, m.target, fresh(c), "a method's target"))) {
+                                named(r) => {
+                                    if c.symbols.resources.has(r) { return is-async-func(c, name-text(r) + "." + m.name); }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
-                c.async-funcs.has(m.name) || c.async-funcs.has(func-key(c, m.name)) || async-builtin(c, m.name)
+                is-async-func(c, m.name) || is-async-func(c, func-key(c, m.name)) || async-builtin(c, m.name)
             }
             _ => false,
         }
@@ -3172,12 +3856,7 @@ module checker {
     // an exported func's types: a literal or union type that crosses as a WIT enum or variant
     // named by an alias (its WIT name), an enum's strings WIT's names
     check-crossings: func(c: Checker, f: Func) {
-        let sc = f.scope;
-        if !(
-            sc.pkg.prefix == "" && sc.module != "" && sc.pkg.modules[sc.module] == "export"
-        ) {
-            return;
-        }
+        if !is-export(f.scope, c.reactor) { return; }
         c.span = f.span;
         c.scope = f.scope;
         c.in-func = f.name;
@@ -3203,13 +3882,13 @@ module checker {
             named(n) => {
                 if seen.has(name-text(n)) { return false; }
                 seen.set(name-text(n), true);
-                if c.records.has(n) {
-                    for x in c.records[n].types {
+                if c.symbols.records.has(n) {
+                    for x in c.symbols.records[n].field-types {
                         if holds-handles(c, x, seen) { return true; }
                     }
                 }
-                if c.variants.has(n) {
-                    for k in c.variants[n] {
+                if c.symbols.variants.has(n) {
+                    for k in c.symbols.variants[n].cases {
                         if holds-handles(c, k.payload, seen) { return true; }
                     }
                 }
@@ -3256,13 +3935,25 @@ module checker {
             named(n) => {
                 if seen.has(name-text(n)) { return; }
                 seen.set(name-text(n), true);
-                if c.records.has(n) {
-                    for x in c.records[n].types {
+                // a resource (a shared object) crosses as a WIT resource, a handle: the one a reactor's
+                // visible module declares, in that module's funcs (never a copy, which would lose
+                // what makes it one)
+                if c.symbols.records.has(n) && !c.symbols.records[n].value {
+                    let sc = c.resource-scopes[n];
+                    if !is-export(sc, c.reactor) || sc.module != c.scope.module {
+                        let d = diagnostics.error(c.span, "resource {base-name(name-text(n))} crosses WIT only as one this component exports: declared in the module whose funcs it crosses, a visible module of a program without main", "");
+                        diagnostics.help(d, "for a value copied across, declare it a record: record {base-name(name-text(n))} \{ … \}");
+                        tell(c, d);
+                    }
+                    return;
+                }
+                if c.symbols.records.has(n) {
+                    for x in c.symbols.records[n].field-types {
                         check-crossing(c, x, seen);
                     }
                 }
-                if c.variants.has(n) {
-                    for k in c.variants[n] { check-crossing(c, k.payload, seen); }
+                if c.symbols.variants.has(n) {
+                    for k in c.symbols.variants[n].cases { check-crossing(c, k.payload, seen); }
                 }
             }
             _ => {}
@@ -3352,7 +4043,7 @@ module checker {
 
     // whether a and b share no value
     disjoint: func(c: Checker, a: Type, b: Type) -> bool {
-        let d = d-of(c);
+        let d = c.symbols;
         semtype.is-empty(d, semtype.inter(d, semtype.translate(d, a), semtype.translate(d, b)))
     }
 
@@ -3440,7 +4131,7 @@ module checker {
                     option-type(y) => {
                         return Pattern.alt([
                             case-pattern(c, "none"),
-                            Pattern.case({ name: "some", sub: is-pattern(c, x, y), span: c.span, }),
+                            Pattern.case({ name: "some", sub: is-pattern(c, x, y), span: c.span, name-span: nowhere(), }),
                         ]);
                     }
                     _ => {}
@@ -3487,7 +4178,7 @@ module checker {
             kind: "case",
             key: "",
             value: none,
-            mark: { captured: false, unit: { env: false, }, ty: Type.unit-type, },
+            mark: { captured: false, unit: { env: false, }, ty: Type.unit-type, name: n, span: c.span, },
             span: c.span,
         })
     }
@@ -3515,7 +4206,7 @@ module checker {
                     name(n) => {
                         match narrowable(c, n) {
                             some(mark) => {
-                                let d = d-of(c);
+                                let d = c.symbols;
                                 let parts = split(
                                     c,
                                     x.value.ty,
@@ -3579,7 +4270,7 @@ module checker {
 
     // a scope where the names are narrowed (the same bindings, their types narrower)
     push-narrowing: func(c: Checker, ns: list<Narrowed>) {
-        push-scope(c);
+        push-scope(c, if c.extents.len() > 0 { c.extents[c.extents.len() - 1] } else { nowhere() });
         let i = c.scopes.len() - 1;
         for x in ns {
             c.scopes[i].set(x.name, x.ty);
@@ -3592,7 +4283,7 @@ module checker {
     // union goes to one side, or (some of its values in p) to both; yes takes the members of pt
     // (p as a type, when there is one) a partial member holds
     split: func(c: Checker, vt: Type, p: SemType, pt: option<Type>) -> Split {
-        let d = d-of(c);
+        let d = c.symbols;
         let members = union-members(vt);
         let yes: list<Type> = [];
         let no: list<Type> = [];
@@ -3678,25 +4369,24 @@ module checker {
 
     // a constant's name where the func being checked is: the module's own, then its package's top
     // level; "" for neither
-    const-key: func(c: Checker, n: string) -> string {
-        let sc = c.scope;
-        if sc.module != "" && c.consts.has(sc.pkg.prefix + sc.module + "." + n) {
-            return sc.pkg.prefix + sc.module + "." + n;
+    const-key: func(c: Checker, n: string) -> string { lookup(c, c.scope, n, "const") }
+
+    // whether an expression names where a value is: a variable, or a field of a place or of a
+    // resource (a record's field is set there, not in a copy)
+    is-place: func(c: Checker, e: Expr) -> bool {
+        match e.kind {
+            name(n) => true,
+            field(f) => match resolve(f.target.ty) {
+                named(n) => (c.symbols.records.has(n) && !c.symbols.records[n].value) || is-place(c, f.target),
+                _ => is-place(c, f.target),
+            },
+            _ => false,
         }
-        if c.consts.has(sc.pkg.prefix + n) { return sc.pkg.prefix + n; }
-        ""
     }
 
     // a global's name where the func being checked is (as const-key: the module's own, then its
     // package's top level); "" for neither
-    global-key: func(c: Checker, n: string) -> string {
-        let sc = c.scope;
-        if sc.module != "" && c.globals.has(sc.pkg.prefix + sc.module + "." + n) {
-            return sc.pkg.prefix + sc.module + "." + n;
-        }
-        if c.globals.has(sc.pkg.prefix + n) { return sc.pkg.prefix + n; }
-        ""
-    }
+    global-key: func(c: Checker, n: string) -> string { lookup(c, c.scope, n, "global") }
 
     // a global: its type resolved; it starts as a literal of it, or as its zero value (no code of
     // the program runs before its first: what a global needs made, the program makes)
@@ -3744,15 +4434,15 @@ module checker {
             anon-record(r) => r.types.all({ x -> has-zero(c, x) }),
             fixed-list(x) => has-zero(c, x.item),
             distinct-type(x) => has-zero(c, x.base),
-            // a flags type's: none set
-            named(n) => c.flags.has(n),
+            // a flags type's: none set; a record's (a value's): each field's
+            named(n) => c.symbols.flags.has(n) || (c.symbols.records.has(n) && c.symbols.records[n].value && c.symbols.records[n].field-types.all({ x -> has-zero(c, x) })),
             _ => false,
         }
     }
 
     // a constant's literal, copied to where it is used (checked there)
     const-copy: func(c: Checker, k: string, span: Span) -> Expr {
-        copy-literal(c.consts[k].value, span)
+        copy-literal(c.symbols.consts[k].value, span)
     }
 
     copy-literal: func(e: Expr, span: Span) -> Expr {

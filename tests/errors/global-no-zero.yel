@@ -1,4 +1,4 @@
 // error: 3:1: a Node has no zero value for the global head to start as
-record Node { value: s64, }
+resource Node { value: s64, }
 let head: Node;
 main: func() {}

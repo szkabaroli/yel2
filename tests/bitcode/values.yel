@@ -1,6 +1,6 @@
 // floats, closures, maps and sets, and a func that never returns, built both ways
 
-record Counter { count: s64, }
+resource Counter { count: s64, }
 
 fail: func(message: string) -> never {
     panic(message)

@@ -3,9 +3,9 @@
 
 from "wasi:clocks" include monotonic-clock;
 
-record Node { value: s32, next: option<Node>, }
+resource Node { value: s32, next: option<Node>, }
 
-record LinkedList { head: option<Node>, size: s32, }
+resource LinkedList { head: option<Node>, size: s32, }
 
 // the node after o (none after none)
 after: func(o: option<Node>) -> option<Node> {

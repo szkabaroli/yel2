@@ -1,0 +1,32 @@
+// the host's dom (yel:ui's), as a module that prints each op and gives nodes ids from 1: a view
+// runs natively against it as it runs against the shell's host
+module dom {
+    variant color { red, green, blue, white, black, transparent, rgba(tuple<u8, u8, u8, u8>), }
+
+    variant attribute-value {
+        str(string),
+        bool(bool),
+        s32(s32),
+        f64(f64),
+        color(color),
+    }
+
+    @(private) let next: u32;
+
+    @(private) made: func(what: string) -> u32 {
+        next += 1;
+        print("  {what} -> {next}\n");
+        next
+    }
+
+    create-element: func(tag: string) -> u32 { made("create-element {tag}") }
+    create-text: func(content: string) -> u32 { made("create-text \"{content}\"") }
+    create-comment: func(content: string) -> u32 { made("create-comment {content}") }
+    set-attribute: func(node: u32, name: string, value: attribute-value) { print("  set-attribute {node} {name} {value:?}\n"); }
+    set-style: func(node: u32, name: string, value: attribute-value) { print("  set-style {node} {name} {value:?}\n"); }
+    set-text-content: func(node: u32, content: string) { print("  set-text-content {node} \"{content}\"\n"); }
+    append-child: func(parent: u32, child: u32) { print("  append-child {parent} {child}\n"); }
+    insert-before: func(parent: u32, node: u32, reference: u32) { print("  insert-before {parent} {node} {reference}\n"); }
+    remove: func(node: u32) { print("  remove {node}\n"); }
+    add-event-listener: func(node: u32, event: string, handler-id: u32) { print("  add-event-listener {node} {event} {handler-id}\n"); }
+}

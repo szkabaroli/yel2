@@ -126,6 +126,7 @@ module opt {
             callees: map.new(),
             flows: map.new(),
             mutable-locals: map.new(),
+            env-escapes: map.new(),
         };
         for f in funcs { p.funcs.set(f.name, f); }
         param-escapes(p, funcs);
@@ -205,7 +206,7 @@ module opt {
 
 // a body copied into another func: its locals from base, its labels from lbase, its returns
 // leaving block exit with their value in dest (-1: none)
-record Clone { base: s64, lbase: s64, exit: s64, dest: s64, }
+resource Clone { base: s64, lbase: s64, exit: s64, dest: s64, }
 
 module opt {
     clone-body: func(c: Clone, body: list<Node>) -> list<Node> {

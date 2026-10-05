@@ -3,7 +3,7 @@
 
 flags Access { read, write, execute, }
 
-record Entry { ok: bool, name: string, size: u64, }
+resource Entry { ok: bool, name: string, size: u64, }
 
 enum Dir { north, south, }
 

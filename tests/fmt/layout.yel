@@ -1,0 +1,24 @@
+// What a second formatting must keep as the first made it: a module's funcs (their -> no closure's),
+// a condition broken only where its line is too long (not because its block is), an if's elses as
+// a call's last argument breaking together, a call breaking around a list broken inside it, and a
+// call's last argument breaking alone past the comma a broken list was given
+
+module shapes {
+    // the area of a square
+    area: func<T>(side: s64, label: T) -> s64 { side * side }
+    describe: func(side: s64) -> string { "a square of side {side}" }
+}
+
+pick: func(on: bool, message: string) -> string { if on { message } else { "" } }
+
+combine: func(first: s64, second: list<s64>, third: bool) -> s64 { first + second.len() + (if third { 1 } else { 0 }) }
+
+main: func() -> s32 {
+    let value = 3;
+    if value > 1 && value < 100 && shapes.area(value, "label") > 4 { print("{shapes.describe(value)} has a large enough area\n"); }
+    print(pick(value > 1, if value == 3 { "three, as it is meant to be in this test" } else { "something else entirely" }));
+    let wide = combine(value, [value * 1000000, value * 2000000, value * 3000000, value * 4000000, value * 5000000], value > 2);
+    let nested = combine(value, [value, value], combine(value, [value * 1000000, value * 2000000, value * 3000000, value * 4000000,], true) > 0);
+    print("{wide} {nested}\n");
+    0
+}

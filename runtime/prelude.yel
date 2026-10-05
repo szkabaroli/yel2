@@ -35,5 +35,5 @@ to-string: func<T>(v: T) -> string { "{v}" }
 // lists
 
 // maps: values by keys of any type (K: equal as == says, hashed to match), in the order they were
-// set (sets, a map<K, ()>: runtime/std/set.yel)
+// set (sets, a map<K, ()>: runtime/std/core/collections/set.yel)
 

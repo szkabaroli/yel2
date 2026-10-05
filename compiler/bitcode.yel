@@ -9,9 +9,17 @@
 // value ids relative to the instruction, names in the module's value symbol table, no string table),
 // with opaque pointers' types (a function's record names its function type, an alloca, a load or a
 // call the type they work on).
+//
+// Debug info (yelc -g) is LLVM's metadata, which LLVM makes DWARF of: a compile unit, its files,
+// a subprogram for each func of the program's own, each instruction's line and column (DEBUG_LOC
+// after it), the types (DWARF's base types, pointers, structs and their members), and each named
+// local's variable, declared at its slot (DEBUG_RECORD_DECLARE, the slot as function-local
+// metadata). The metadata's strings are METADATA_STRING_OLD records (no blob: every record here is
+// unabbreviated), its records laid out as LLVM 22's writer lays them out (sizes as numbers, not as
+// metadata: its reader takes both).
 
 // the bits written so far: whole bytes, and the bits of the word being filled (low first)
-record BitWriter {
+resource BitWriter {
     out: list<u8>,
     word: u64,
     used: s64,
@@ -24,7 +32,7 @@ record BitWriter {
 
 // a module being made: its types (each once, by key: a record's code and operands), its globals
 // (each a module string constant's), its funcs, its attributes, and its target
-record BcModule {
+resource BcModule {
     triple: string,
     type-keys: list<string>,
     type-codes: list<s64>,
@@ -37,27 +45,63 @@ record BcModule {
     groups: list<list<u64>>,
     set-keys: list<string>,
     sets: list<list<u64>>,
+    // debug info: whether it is made, what made it (the compile unit's producer), and the source
+    // files (absolute paths), each a DIFile
+    debug: bool,
+    producer: string,
+    files: list<string>,
+    // the debug types (each a DIType), and each one's index by its key (a yel type's: made once)
+    debug-types: list<BcDebugType>,
+    debug-type-keys: map<string, s64>,
 }
+
+// a debug type (a DIType): basic (kind 0: its name, size in bits, DWARF encoding), a pointer (1: to
+// base), a struct's member (2: its name, base, size and offset in bits), or a struct (3: its name,
+// size, and members: indices of member types). Each is one metadata record, a struct two (the node
+// of its members, then itself)
+resource BcDebugType { kind: s64, name: string, size: s64, encoding: s64, base: s64, offset: s64, members: list<s64>, }
+
+// a local's debug info (its DILocalVariable): its name, where it is declared, which parameter it
+// is (from 1; 0 for none), its debug type (an index), and the slot it lives in (an alloca)
+resource BcVariable { name: string, line: s64, col: s64, arg: s64, ty: s64, slot: BcValue, }
+
+// the debug info's metadata ids, as the module's metadata block numbers them: each func's
+// subprogram (-1 for none), each of its variables' and their locations', the empty expression's,
+// and how many there are (a func's own metadata numbered after)
+resource BcDebugIds {
+    subprograms: list<s64>,
+    variables: list<list<s64>>,
+    locations: list<list<s64>>,
+    expression: s64,
+    count: s64,
+}
+
+// the metadata being written: the next record's id, and each string's
+resource BcMetadata { w: BitWriter, next: s64, strings: map<string, s64>, }
+
+// a func's debug info (its DISubprogram): its name as the source writes it, its symbol's
+// (linkage), its file (an index into the module's files) and the line it is declared on
+resource BcSubprogram { name: string, linkage: string, file: s64, line: s64, }
 
 // a param's attributes (index: 1 for the first param, 0 for the result), each as its record has it
 // (sret, byval, align, zeroext, signext below)
-record BcParamAttributes { index: s64, attributes: list<u64>, }
+resource BcParamAttributes { index: s64, attributes: list<u64>, }
 
 // a global: a constant holding bytes (an [n x i8]), private to the module (a C string's, terminated,
 // ends in a NUL besides: an [n + 1 x i8]); or (external) one the runtime defines, of type ty. align:
 // its alignment as a record has it (log2 of the bytes, + 1; 0 for its type's)
 // writable: a variable (a program's global), else a constant
-record BcGlobal { name: string, ty: s64, bytes: string, terminated: bool, external: bool, align: u64, elements: list<BcElement>, writable: bool, }
+resource BcGlobal { name: string, ty: s64, bytes: string, terminated: bool, external: bool, align: u64, elements: list<BcElement>, writable: bool, }
 
 // an element of a global's aggregate (a struct's field, an array's item): of type ty, an integer
 // (kind 0, value its bits), null (1), or another global's address (2, value its index)
-record BcElement { ty: s64, kind: s64, value: u64, }
+resource BcElement { ty: s64, kind: s64, value: u64, }
 
 // a func: its name and function type, whether it has a body (else it is declared: the C runtime's,
 // libc's) and is the module's own (internal); its params' count; its attribute set (0: none); its constants (each a type and a
 // value: an integer's bits; or (const-kinds) a null pointer, an undefined value); its blocks of
 // instructions
-record BcFunc {
+resource BcFunc {
     name: string,
     ty: s64,
     defined: bool,
@@ -75,12 +119,19 @@ record BcFunc {
     blocks: list<list<BcInst>>,
     // how many of its instructions give a value (the next one's number)
     values: s64,
+    // its debug info (none: a func of no source's, the runtime's, a helper's), and the source
+    // line and column the instructions added now come from (0: none, as the last's)
+    subprogram: option<BcSubprogram>,
+    line: s64,
+    col: s64,
+    // its locals' debug info (each declared at its slot)
+    variables: list<BcVariable>,
 }
 
 // an instruction: its record's code, its operands, and whether it gives a value (made: its value's
 // number in the order instructions were added, -1 for none; written: its place in the blocks'
 // order, which the writer numbers by)
-record BcInst { code: s64, operands: list<BcOperand>, gives: bool, made: s64, }
+resource BcInst { code: s64, operands: list<BcOperand>, gives: bool, made: s64, line: s64, col: s64, }
 
 // an operand: a number as it is (a type, a block, an opcode), or a value (relative to the
 // instruction, as version 1 says; absolute: an alloca's count)
@@ -185,7 +236,8 @@ module bitcode {
     module-of: func(triple: string) -> BcModule {
         {
             triple: triple, type-keys: [], type-codes: [], type-operands: [], globals: [], funcs: [],
-            group-keys: [], groups: [], set-keys: [], sets: [],
+            group-keys: [], groups: [], set-keys: [], sets: [], debug: false, producer: "", files: [],
+            debug-types: [], debug-type-keys: map.new(),
         }
     }
 
@@ -231,7 +283,8 @@ module bitcode {
     add-func: func(m: BcModule, name: string, ty: s64, params: s64, defined: bool, internal: bool) -> s64 {
         m.funcs.push({
             name: name, ty: ty, defined: defined, internal: internal, params: params, attributes: 0, param-attributes: [], function-attributes: [],
-            const-types: [], const-values: [], const-kinds: [], blocks: [[],], values: 0,
+            const-types: [], const-values: [], const-kinds: [], blocks: [[],], values: 0, subprogram: none, line: 0,
+            col: 0, variables: [],
         });
         m.funcs.len() - 1
     }
@@ -391,8 +444,39 @@ module bitcode {
         for g in m.globals {
             if !g.external { count += 1 + g.elements.filter({ e -> e.kind != 2 }).len(); }
         }
+        // (and with debug info, the module flags' four i32s)
+        if m.debug { count += flag-values().len(); }
         count
     }
+
+    // ---- debug info
+
+    // debug info made for the module: what made it (the compile unit's producer); the i32 its
+    // module flags hold made a type now (before the types are written)
+    debug-info: func(m: BcModule, producer: string) {
+        m.debug = true;
+        m.producer = producer;
+        let _ = int-type(m, 32);
+    }
+
+    // a source file's index among the module's (each a DIFile), added the first time
+    file-index: func(m: BcModule, path: string) -> s64 {
+        let at = m.files.index-of(path);
+        if at >= 0 { return at; }
+        m.files.push(path);
+        m.files.len() - 1
+    }
+
+    // a debug type added: its index
+    debug-type: func(m: BcModule, kind: s64, name: string, size: s64, encoding: s64, base: s64, offset: s64, members: list<s64>) -> s64 {
+        m.debug-types.push({ kind: kind, name: name, size: size, encoding: encoding, base: base, offset: offset, members: members, });
+        m.debug-types.len() - 1
+    }
+
+    // the module flags' values (i32s, as module constants): Dwarf Version's behavior (7: max) and
+    // value (5), Debug Info Version's (2: warning) and value (3: the one LLVM reads; another is
+    // dropped)
+    flag-values: func() -> list<u64> { [7, 5, 2, 3,] }
 
     // a func's integer constant (bits: its value's, in the type's width): its value
     integer: func(f: BcFunc, ty: s64, bits: u64) -> BcValue {
@@ -428,7 +512,7 @@ module bitcode {
 
     // an instruction at block's end: the value it gives (none for one that gives none)
     add-inst: func(f: BcFunc, block: s64, code: s64, operands: list<BcOperand>, gives: bool) -> option<BcValue> {
-        f.blocks[block].push({ code: code, operands: operands, gives: gives, made: if gives { f.values } else { -1 }, });
+        f.blocks[block].push({ code: code, operands: operands, gives: gives, made: if gives { f.values } else { -1 }, line: f.line, col: f.col, });
         if !gives { return none; }
         f.values += 1;
         some(BcValue.instruction(f.values - 1))
@@ -540,7 +624,23 @@ module bitcode {
                 else if g.bytes.len() == 0 { emit-record(w, 2, []); }
                 else { emit-record(w, 8, chars(g.bytes)); }
             }
+            // the module flags' values, after the initializers
+            if m.debug {
+                emit-record(w, 1, [int-type(m, 32) as u64,]);
+                for value in flag-values() { emit-record(w, 4, [signed(value),]); }
+            }
             end-block(w);
+        }
+        // debug info: METADATA_KIND (dbg, kind 0: what a func's subprogram is attached as), then
+        // the module's metadata (each func's subprogram's id, -1 for none)
+        let ids: BcDebugIds = { subprograms: [], variables: [], locations: [], expression: 0, count: 0, };
+        if m.debug {
+            enter-block(w, 22, 3);
+            let kind: list<u64> = [0,];
+            for c in chars("dbg") { kind.push(c); }
+            emit-record(w, 6, kind);
+            end-block(w);
+            ids = write-metadata(w, m);
         }
         // VALUE_SYMTAB: the names of the globals and the funcs
         enter-block(w, 14, 4);
@@ -556,8 +656,9 @@ module bitcode {
         }
         end-block(w);
         // each body, in the funcs' order
-        for f in m.funcs {
-            if f.defined { write-func(w, m, f); }
+        for index in 0..m.funcs.len() {
+            let f = m.funcs[index];
+            if f.defined { write-func(w, m, f, ids, if m.debug { index } else { -1 }); }
         }
         end-block(w);
         align(w);
@@ -569,7 +670,10 @@ module bitcode {
     // a func's body: its blocks' count, its constants, its instructions (each value relative to the
     // instruction's number: the module's values, the params, the constants, then the instructions
     // that give one)
-    write-func: func(w: BitWriter, m: BcModule, f: BcFunc) {
+    // (at: its index among the module's funcs, for its debug info's ids; -1 for none: then no
+    // instruction has a location, and no local is declared)
+    write-func: func(w: BitWriter, m: BcModule, f: BcFunc, ids: BcDebugIds, at: s64) {
+        let subprogram = if at >= 0 { ids.subprograms[at] } else { -1 };
         // the module's values: its globals, its funcs, and the globals' initializers
         let base = m.globals.len() + m.funcs.len() + constant-count(m);
         let params = base;
@@ -606,8 +710,22 @@ module bitcode {
                 }
             }
         }
+        // its variables' slots, as function-local metadata (VALUE: the slot's type, a pointer, and
+        // its value), numbered after the module's metadata
+        let declared = subprogram >= 0 && f.variables.len() > 0;
+        if declared {
+            enter-block(w, 15, 3);
+            for variable in f.variables {
+                emit-record(w, 2, [pointer-type(m) as u64, absolute-id(m, variable.slot, params, constants, written) as u64,]);
+            }
+            end-block(w);
+        }
         let number = first;
-        for block in f.blocks {
+        // the last location written (DEBUG_LOC_AGAIN gives an instruction it again)
+        let last-line = 0;
+        let last-col = 0;
+        for block-index in 0..f.blocks.len() {
+            let block = f.blocks[block-index];
             for inst in block {
                 let operands: list<u64> = [];
                 for o in inst.operands {
@@ -624,9 +742,187 @@ module bitcode {
                 }
                 emit-record(w, inst.code, operands);
                 if inst.gives { number += 1; }
+                // its location: DEBUG_LOC (line, column, scope, inlined-at, implicit, and the key
+                // instructions' atom group and rank), or DEBUG_LOC_AGAIN for the last one again
+                if subprogram >= 0 && inst.line > 0 {
+                    if inst.line == last-line && inst.col == last-col {
+                        emit-record(w, 33, []);
+                    } else {
+                        emit-record(w, 35, [inst.line as u64, inst.col as u64, (subprogram + 1) as u64, 0, 0, 0, 0,]);
+                        last-line = inst.line;
+                        last-col = inst.col;
+                    }
+                }
+            }
+            // each variable declared at its slot, before the entry block's branch (a debug record
+            // goes before the instruction read last: DEBUG_RECORD_DECLARE, its location, its
+            // variable, its expression, its slot's metadata, each by its id as it is)
+            if declared && block-index == 0 {
+                for index in 0..f.variables.len() {
+                    emit-record(w, 62, [
+                        ids.locations[at][index] as u64,
+                        ids.variables[at][index] as u64,
+                        ids.expression as u64,
+                        (ids.count + index) as u64,
+                    ]);
+                }
             }
         }
+        // its subprogram, attached to it (METADATA_ATTACHMENT: kind dbg, the node)
+        if subprogram >= 0 {
+            enter-block(w, 16, 3);
+            emit-record(w, 11, [0, subprogram as u64,]);
+            end-block(w);
+        }
         end-block(w);
+    }
+
+    // the module's metadata (METADATA_BLOCK), each record's id the next (a string's, a value's, a
+    // node's; NAME and NAMED_NODE take none), an operand naming another its id + 1 (0: none) but
+    // in a NAMED_NODE: the module flags (Dwarf Version, Debug Info Version: llvm.module.flags), the
+    // files, the compile unit (llvm.dbg.cu), each func's subprogram, the empty expression, the
+    // debug types, and each func's variables (and the places they are declared). Their ids
+    write-metadata: func(w: BitWriter, m: BcModule) -> BcDebugIds {
+        enter-block(w, 15, 4);
+        let md: BcMetadata = { w: w, next: 0, strings: map.new(), };
+        // the flags' values: module constants after the globals' initializers
+        let i32 = int-type(m, 32) as u64;
+        let first = (m.globals.len() + m.funcs.len() + constant-count(m) - flag-values().len()) as u64;
+        let values: list<s64> = [];
+        for index in 0..flag-values().len() { values.push(md-record(md, 2, [i32, first + index as u64,])); }
+        let dwarf = md-record(md, 3, [ref(values[0]), ref(md-string(md, "Dwarf Version")), ref(values[1]),]);
+        let version = md-record(md, 3, [ref(values[2]), ref(md-string(md, "Debug Info Version")), ref(values[3]),]);
+        // FILE: distinct, its name, its directory, no checksum
+        let files: list<s64> = [];
+        for path in m.files {
+            let slash = path.find-last("/").unwrap-or(-1);
+            let name = path.substring(slash + 1, path.len());
+            let directory = if slash > 0 { path.substring(0, slash) } else { "/" };
+            files.push(md-record(md, 16, [0, ref(md-string(md, name)), ref(md-string(md, directory)), 0, 0,]));
+        }
+        let main-file = if files.len() > 0 { ref(files[0]) } else { 0 };
+        // COMPILE_UNIT: distinct, its language (DW_LANG_C11: yel has no DWARF code of its own),
+        // its file, producer, not optimized, no flags, runtime version, split file, emission
+        // FullDebug, then none of its lists, and split debug inlining (as LLVM's default)
+        let unit = md-record(md, 20, [
+            1, 29, main-file, ref(md-string(md, m.producer)), 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            0, 0,
+        ]);
+        // a subprogram's type: no types told (SUBROUTINE_TYPE: no old type refs, no flags, the
+        // empty node, C's calling convention)
+        let none-list = md-record(md, 3, []);
+        let signature = md-record(md, 19, [2, 0, ref(none-list), 0,]);
+        let subprograms: list<s64> = [];
+        for f in m.funcs {
+            match f.subprogram {
+                some(sp) => {
+                    // SUBPROGRAM: distinct with its unit and flags (7), scope (its file), name,
+                    // linkage name, file, line, type, scope line, no containing type, flags
+                    // (Definition: 8), no virtual index, no DI flags, its unit, then none of the
+                    // rest
+                    let file = ref(files[sp.file]);
+                    subprograms.push(md-record(md, 21, [
+                        7, file, ref(md-string(md, sp.name)), ref(md-string(md, sp.linkage)), file, sp.line as u64,
+                        ref(signature), sp.line as u64, 0, 8, 0, 0, ref(unit), 0, 0, 0, 0, 0, 0, 0, 0,
+                    ]));
+                }
+                none => subprograms.push(-1),
+            }
+        }
+        // the empty expression (EXPRESSION: version 3, shifted past the distinct bit)
+        let expression = md-record(md, 29, [6,]);
+        // the debug types: each one's id known before any is written (a record's field may point
+        // at the record: a reference forward), a struct's the second of its two
+        // (their names written first: a string written among them would move the ids)
+        for t in m.debug-types {
+            if t.kind != 1 { let _ = md-string(md, t.name); }
+        }
+        let type-ids: list<s64> = [];
+        let at = md.next;
+        for t in m.debug-types {
+            if t.kind == 3 { at += 1; }
+            type-ids.push(at);
+            at += 1;
+        }
+        let type-ref = { index: s64 -> if index < 0 { 0 } else { ref(type-ids[index]) } };
+        for t in m.debug-types {
+            if t.kind == 0 {
+                // BASIC_TYPE: DW_TAG_base_type, its name, size, no alignment, its encoding
+                let _ = md-record(md, 15, [0, 36, ref(md-string(md, t.name)), t.size as u64, 0, t.encoding as u64, 0, 0, 0,]);
+            } else if t.kind == 1 {
+                // DERIVED_TYPE: DW_TAG_pointer_type, to its base
+                let _ = md-record(md, 17, [0, 15, 0, 0, 0, 0, type-ref(t.base), t.size as u64, 0, 0, 0, 0, 0, 0, 0,]);
+            } else if t.kind == 2 {
+                // DERIVED_TYPE: DW_TAG_member, its name, base, size and offset
+                let _ = md-record(md, 17, [
+                    0, 13, ref(md-string(md, t.name)), 0, 0, 0, type-ref(t.base), t.size as u64, 0, t.offset as u64, 0, 0, 0, 0, 0,
+                ]);
+            } else {
+                // its members' node, then COMPOSITE_TYPE: DW_TAG_structure_type, its name, size,
+                // members, and no enum kind (-1 as a u32)
+                let members = md-record(md, 3, t.members.map({ member -> type-ref(member) }));
+                let name = ref(md-string(md, t.name));
+                let _ = md-record(md, 18, [
+                    2, 19, name, 0, 0, 0, 0, t.size as u64, 0, 0, 0, ref(members), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    4294967295, 0,
+                ]);
+            }
+        }
+        // each func's variables: LOCAL_VAR (with an alignment field: none), its scope (the
+        // subprogram), name, file, line, type, which parameter, no flags; then LOCATION, where it
+        // is declared (its scope by its id as it is)
+        let variables: list<list<s64>> = [];
+        let locations: list<list<s64>> = [];
+        for index in 0..m.funcs.len() {
+            let f = m.funcs[index];
+            let vars: list<s64> = [];
+            let places: list<s64> = [];
+            match f.subprogram {
+                some(sp) => {
+                    for v in f.variables {
+                        vars.push(md-record(md, 28, [
+                            2, ref(subprograms[index]), ref(md-string(md, v.name)), ref(files[sp.file]), v.line as u64, type-ref(v.ty),
+                            v.arg as u64, 0, 0, 0,
+                        ]));
+                        places.push(md-record(md, 7, [0, v.line as u64, v.col as u64, subprograms[index] as u64, 0, 0, 0, 0,]));
+                    }
+                }
+                none => {}
+            }
+            variables.push(vars);
+            locations.push(places);
+        }
+        named(md, "llvm.module.flags", [dwarf as u64, version as u64,]);
+        named(md, "llvm.dbg.cu", [unit as u64,]);
+        end-block(w);
+        { subprograms: subprograms, variables: variables, locations: locations, expression: expression, count: md.next, }
+    }
+
+    // a metadata operand naming the node of that id (its id + 1)
+    ref: func(id: s64) -> u64 { (id + 1) as u64 }
+
+    // a metadata string's id (METADATA_STRING_OLD: its bytes), written once
+    md-string: func(md: BcMetadata, text: string) -> s64 {
+        match md.strings.get(text) {
+            some(id) => id,
+            none => {
+                md.strings.set(text, md.next);
+                md-record(md, 1, chars(text))
+            }
+        }
+    }
+
+    // a metadata record written: its id
+    md-record: func(md: BcMetadata, code: s64, operands: list<u64>) -> s64 {
+        emit-record(md.w, code, operands);
+        md.next += 1;
+        md.next - 1
+    }
+
+    // named metadata: NAME (its name), then NAMED_NODE (its nodes' ids, as they are)
+    named: func(md: BcMetadata, name: string, nodes: list<u64>) {
+        emit-record(md.w, 4, chars(name));
+        emit-record(md.w, 10, nodes);
     }
 
     absolute-id: func(m: BcModule, v: BcValue, params: s64, constants: s64, written: list<s64>) -> s64 {

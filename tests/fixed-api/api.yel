@@ -3,7 +3,7 @@
 
 package test:fixed@0.1.0;
 
-export module api {
+module api {
     record Pixel { rgb: list<u8, 3>, alpha: u8, }
 
     flip: func(v: list<s32, 3>) -> list<s32, 3> { [v[2], v[1], v[0]] }

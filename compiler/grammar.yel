@@ -1,0 +1,1929 @@
+// The parser: a file's tokens (lexer.lex-file's: each string in pieces) to its syntax tree
+// (syntax.yel's, lossless: every byte of the file in it). Each construct is a node of its kind,
+// wrapped once parsed around what was built since a mark taken before it (a call around its
+// callee, a binary around its left); whitespace and comments before a construct are its holder's.
+// What a construct's errors pass over is an error node, so the tree of a broken file is whole.
+// Its errors are told as they are met (a missing token just past the last taken), the statement
+// or declaration in error passed over to where the next one starts. What the tree means (the
+// declarations and expressions the checker reads) is lower.yel's.
+//
+// The parser reads tokens in units: a string is one (its quotes, its text and its interpolations)
+// where it is taken whole (an include's package, an attribute's value) or looked past; an
+// expression's string is read piece by piece, each interpolation's expression parsed where it is
+// (an error in one is its own: the statement goes on past it).
+
+resource Grammar {
+    toks: list<Token>,
+    // each token's kind, text and whether it is a %name (what lookahead reads: no token copied)
+    kinds: list<TokenKind>,
+    texts: list<string>,
+    escaped: list<bool>,
+    starts: list<s64>,
+    // each precedence level's operators, lowest first
+    levels: list<list<string>>,
+    // the unit after each token (a string's start: the token past its end), and before
+    next-unit: list<s64>,
+    pos: s64,
+    context: Context,
+    source: s64,
+    tree: TreeBuilder,
+    recovering: bool,
+    quiet: bool,
+    // the characters no token starts with, inside an interpolation (the lexer told none there:
+    // told where one is parsed)
+    unknowns: list<Token>,
+    // the module the parser is in ("" at the top), and the attributes on what it parses
+    // (@(observable), @(context): where they may go)
+    module: string,
+    observable: bool,
+    in-context: bool,
+}
+
+module grammar {
+    // the syntax tree of sources[source], kept in the context's trees (an analysis's: a build
+    // lowers each file's as it is read, and keeps none)
+    parse-file: func(context: Context, source: s64) -> GreenNode {
+        let g = grammar(context, source);
+        for step in 0..g.toks.len() {
+            if is-kind(g, 0, TokenKind.eof) { break; }
+            recovering-declaration(g);
+        }
+        let green = tree.finish-file(g.tree);
+        if !context.exits { context.trees.set(source, green); }
+        green
+    }
+
+    // the syntax tree of sources[source] as one expression (a source made of a call: a regex
+    // literal's value), kept in the context's trees
+    parse-expression: func(context: Context, source: s64) -> GreenNode {
+        let g = grammar(context, source);
+        expr(g);
+        if !is-kind(g, 0, TokenKind.eof) { fail(g, "unexpected {found(g)} after an interpolation's expression"); }
+        let green = tree.finish-file(g.tree);
+        if !context.exits { context.trees.set(source, green); }
+        green
+    }
+
+    @(private) grammar: func(context: Context, source: s64) -> Grammar {
+        let before = context.errors.len();
+        let text = context.sources[source].text;
+        let lexed = lexer.lex-file(text, context, source);
+        let toks: list<Token> = [];
+        let unknowns: list<Token> = [];
+        for t in lexed {
+            if t.kind == TokenKind.unknown { unknowns.push(t); } else { toks.push(t); }
+        }
+        let g: Grammar = {
+            toks: toks,
+            kinds: toks.map({ t -> t.kind }),
+            texts: toks.map({ t -> t.text }),
+            escaped: toks.map({ t -> t.escaped }),
+            starts: toks.map({ t -> t.start }),
+            levels: [
+                ["||",], ["&&",], ["==", "!=",], ["<", "<=", ">", ">=",], ["|",], ["^",], ["&",], ["<<", ">>",],
+                ["+", "-",], ["*", "/", "%",],
+            ],
+            next-unit: units(toks),
+            pos: 0,
+            context: context,
+            source: source,
+            tree: tree.builder(text),
+            recovering: false,
+            quiet: context.errors.len() > before,
+            unknowns: unknowns,
+            module: "",
+            observable: false,
+            in-context: false,
+        };
+        g
+    }
+
+    // the unit after each token: the next, but past a whole string from its start
+    @(private) units: func(toks: list<Token>) -> list<s64> {
+        let out: list<s64> = [];
+        for index in 0..toks.len() { out.push(index + 1); }
+        let open: list<s64> = [];
+        for index in 0..toks.len() {
+            if toks[index].kind == TokenKind.string-start { open.push(index); }
+            else if toks[index].kind == TokenKind.string-end && open.len() > 0 {
+                out[open.pop()] = index + 1;
+            }
+        }
+        // (an unterminated string: to the file's end)
+        for index in open { out[index] = toks.len() - 1; }
+        out
+    }
+
+    // ---- tokens
+
+    // the token o units past the next (a string's: its start), the end of the file's past the last
+    tok: func(g: Grammar, o: s64) -> Token {
+        let at = unit-at(g, o);
+        if at >= g.toks.len() { return g.toks[g.toks.len() - 1]; }
+        if at < 0 { return g.toks[0]; }
+        g.toks[at]
+    }
+
+    // the index of the unit o past the next (o < 0: the token o before it)
+    @(private) unit-at: func(g: Grammar, o: s64) -> s64 {
+        if o < 0 { return g.pos + o; }
+        let at = g.pos;
+        for step in 0..o {
+            if at >= g.toks.len() - 1 { return g.toks.len() - 1; }
+            at = g.next-unit[at];
+        }
+        at
+    }
+
+    here: func(g: Grammar) -> Span { tok(g, 0).span }
+
+    // from start to the end of the last token taken
+    span-from: func(g: Grammar, start: Span) -> Span {
+        let last = tok(g, -1).span;
+        { source: start.source, line: start.line, col: start.col, end-line: last.end-line, end-col: last.end-col, }
+    }
+
+    text: func(g: Grammar) -> string { g.texts[index-at(g, 0)] }
+
+    // the next unit as an error says what was found: quoted (a string by its text), or the end of
+    // the file
+    found: func(g: Grammar) -> string {
+        if is-kind(g, 0, TokenKind.eof) { return "the end of the file"; }
+        if is-string(g, 0) { return "'{string-text(g, g.pos)}'"; }
+        "'{text(g)}'"
+    }
+
+    // a string's text as written between its quotes (a multiline one's, its lines past its indent)
+    string-text: func(g: Grammar, start: s64) -> string {
+        let opening = g.toks[start];
+        let src = g.context.sources[g.source].text;
+        let after = g.next-unit[start];
+        let closing = g.toks[after - 1];
+        let end = if closing.kind == TokenKind.string-end && after - 1 > start { closing.start } else { src.len() };
+        if opening.text == "\"\"\"" {
+            let m = lexer.multiline(src, g.context, g.source, opening.start, opening.span.line, opening.span.col, true);
+            return m.text;
+        }
+        src.substring(opening.end, end)
+    }
+
+    // the next unit taken: a token, or a string whole
+    advance: func(g: Grammar) {
+        if g.pos >= g.toks.len() - 1 { return; }
+        let after = g.next-unit[g.pos];
+        for index in g.pos..after {
+            if index < g.toks.len() - 1 { tree.token(g.tree, g.toks[index]); }
+        }
+        g.pos = if after < g.toks.len() { after } else { g.toks.len() - 1 };
+    }
+
+    // the next token taken (a string's piece)
+    bump: func(g: Grammar) {
+        if g.pos >= g.toks.len() - 1 { return; }
+        tree.token(g.tree, g.toks[g.pos]);
+        g.pos += 1;
+    }
+
+    // the next unit's text, taken (a string's text as written between its quotes)
+    next: func(g: Grammar) -> string {
+        let v = if is-string(g, 0) { string-text(g, g.pos) } else { text(g) };
+        advance(g);
+        v
+    }
+
+    // the index of the unit at o, within the tokens (the end of the file's past them)
+    @(private) index-at: func(g: Grammar, o: s64) -> s64 {
+        let at = if o == 0 { g.pos } else { unit-at(g, o) };
+        if at >= g.toks.len() { g.toks.len() - 1 } else if at < 0 { 0 } else { at }
+    }
+
+    // whether the unit at o is the operator or name v (a name written %name is never the keyword
+    // of its word)
+    at-off: func(g: Grammar, v: string, o: s64) -> bool {
+        let at = index-at(g, o);
+        let kind = g.kinds[at];
+        (kind == TokenKind.id || kind == TokenKind.op || kind == TokenKind.float || kind == TokenKind.char
+            || kind == TokenKind.regex) && !g.escaped[at] && g.texts[at] == v
+    }
+
+    at: func(g: Grammar, v: string) -> bool { at-off(g, v, 0) }
+
+    // whether the unit at o is of kind k (a string's: is-string)
+    is-kind: func(g: Grammar, o: s64, k: TokenKind) -> bool { g.kinds[index-at(g, o)] == k }
+
+    is-string: func(g: Grammar, o: s64) -> bool { g.kinds[index-at(g, o)] == TokenKind.string-start }
+
+    // ---- the tree
+
+    // where the tree is, past the whitespace and comments before the next token (the holder's)
+    mark: func(g: Grammar) -> TreeMark {
+        tree.trivia(g.tree, g.starts[g.pos]);
+        tree.mark(g.tree)
+    }
+
+    // what was built since at made a node of kind
+    wrap: func(g: Grammar, at: TreeMark, kind: NodeKind) {
+        tree.start-at(g.tree, at, kind);
+        tree.finish(g.tree);
+    }
+
+    // ---- errors
+
+    // a syntax error at the next token, kept: the parser goes on (recovering, until the statement
+    // or declaration is passed over); its callers go on as if what was not there were
+    fail: func(g: Grammar, message: string) { fail-at(g, here(g), message); }
+
+    // an error at what a span covers
+    fail-at: func(g: Grammar, at: Span, message: string) {
+        if g.recovering || g.quiet { return; }
+        g.recovering = true;
+        diagnostics.report(g.context, diagnostics.error(at, message, ""));
+    }
+
+    // a missing token is told just past the last one taken, where it belongs
+    fail-missing: func(g: Grammar, message: string) {
+        if g.pos == 0 {
+            fail(g, message);
+            return;
+        }
+        let last = tok(g, -1).span;
+        let at: Span = { source: last.source, line: last.end-line, col: last.end-col, end-line: last.end-line, end-col: last.end-col + 1, };
+        fail-at(g, at, message);
+    }
+
+    // an error told with the parse going on (not recovering): what comes after still parses
+    tell: func(g: Grammar, at: Span, message: string) {
+        if g.recovering || g.quiet { return; }
+        diagnostics.report(g.context, diagnostics.error(at, message, ""));
+    }
+
+    // past an error, the statement or declaration it is in passed over (from its first token,
+    // start): to its ; (taken), past a { … } that closes it (and a ; after), or to the } of what
+    // holds it (left for its holder), its brackets matched as they open and close (one left open
+    // given up, so a } still closes what it belongs to). What it passes over is an error node; the
+    // parser goes on from there, no longer recovering
+    pass-over: func(g: Grammar, start: s64) {
+        let begun = mark(g);
+        let from = g.pos;
+        let to = passed-to(g, start);
+        g.recovering = false;
+        if to > from {
+            for index in from..to {
+                if index < g.toks.len() - 1 { tree.token(g.tree, g.toks[index]); }
+            }
+            g.pos = to;
+            wrap(g, begun, NodeKind.error);
+        }
+    }
+
+    // where pass-over goes on from (start: the statement's first token)
+    @(private) passed-to: func(g: Grammar, start: s64) -> s64 {
+        let open: list<string> = [];
+        let index = start;
+        loop {
+            if index >= g.toks.len() { return g.pos; }
+            let t = g.toks[index];
+            if t.kind == TokenKind.eof { return index; }
+            // (a string: one token)
+            if t.kind == TokenKind.string-start {
+                index = g.next-unit[index];
+                continue;
+            }
+            let bracket = t.kind == TokenKind.op;
+            if bracket && (t.text == "\{" || t.text == "(" || t.text == "[") { open.push(t.text); }
+            else if bracket && (t.text == "\}" || t.text == ")" || t.text == "]") {
+                let opener = if t.text == "\}" { "\{" } else if t.text == ")" { "(" } else { "[" };
+                // the brackets it closes past, left open, given up
+                loop {
+                    if open.len() == 0 || open[open.len() - 1] == opener { break; }
+                    open.pop();
+                }
+                if open.len() == 0 {
+                    // the holder's: left for it
+                    return if index >= g.pos { index } else { g.pos };
+                }
+                open.pop();
+                if open.len() == 0 && t.text == "\}" && index + 1 >= g.pos {
+                    let after = g.next-unit[index];
+                    let following = if after < g.toks.len() { g.toks[after] } else { g.toks[g.toks.len() - 1] };
+                    // if … { } else { }: the else is the statement's too; a ; after it, taken
+                    if following.kind == TokenKind.op && following.text == ";" { return g.next-unit[after]; }
+                    if !(following.kind == TokenKind.id && following.text == "else") { return after; }
+                }
+            } else if bracket && t.text == ";" && !open.contains("\{") && index >= g.pos {
+                return index + 1;
+            }
+            index = g.next-unit[index];
+        }
+        g.pos
+    }
+
+    // v taken; where the next unit is another, an error (and it is left)
+    expect: func(g: Grammar, v: string) {
+        if !at(g, v) {
+            fail-missing(g, "expected '{v}', found {found(g)}");
+            return;
+        }
+        advance(g);
+    }
+
+    // a name taken (its text): never a directive, nor a keyword but written %name (a case's name
+    // before a ( and a member's after a . may be one: Kind.return(x))
+    name: func(g: Grammar) -> string {
+        if !is-kind(g, 0, TokenKind.id) { fail(g, "expected a name, found {found(g)}"); }
+        if tok(g, 0).text.starts-with("#") { fail(g, "expected a name, found the directive {tok(g, 0).text}"); }
+        let member = at-off(g, "(", 1) || (g.pos > 0 && tok(g, -1).kind == TokenKind.op && tok(g, -1).text == ".");
+        if !tok(g, 0).escaped && !member && is-keyword(tok(g, 0).text) {
+            fail(g, "expected a name, found the keyword {tok(g, 0).text} (a name of that word is written %{tok(g, 0).text})");
+        }
+        next(g)
+    }
+
+    // whether a word is one of yel's keywords (never a name, but written %name)
+    is-keyword: func(word: string) -> bool {
+        word == "if" || word == "else" || word == "match" || word == "for" || word == "in" || word == "return"
+            || word == "break" || word == "continue" || word == "let" || word == "as" || word == "is"
+    }
+
+    // ================================================================ types
+
+    // a type: one, or a union of several (A | B)
+    parse-type: func(g: Grammar) {
+        let begun = mark(g);
+        readonly-member(g);
+        if !at(g, "|") { return; }
+        for step in g.pos..g.toks.len() {
+            if !at(g, "|") { break; }
+            advance(g);
+            readonly-member(g);
+        }
+        wrap(g, begun, NodeKind.union-type);
+    }
+
+    // a type, and & readonly after it (tighter than |)
+    readonly-member: func(g: Grammar) {
+        let begun = mark(g);
+        type-member(g);
+        if at(g, "&") && at-off(g, "readonly", 1) {
+            advance(g);
+            advance(g);
+            wrap(g, begun, NodeKind.readonly-type);
+        }
+    }
+
+    // a type a union is made of: a literal (its one value: "get", 3, -1, 'a', true) or a range
+    // of them (1..=9), (), { field: T }, or a type named (with its arguments)
+    type-member: func(g: Grammar) {
+        let begun = mark(g);
+        if is-kind(g, 0, TokenKind.int) || is-kind(g, 0, TokenKind.float)
+            || is-string(g, 0) || is-kind(g, 0, TokenKind.char) || at(g, "-")
+            && (is-kind(g, 1, TokenKind.int) || is-kind(g, 1, TokenKind.float)) || at(g, "true")
+            || at(g, "false") {
+            let written = tok(g, 0);
+            let first = unary(g);
+            if at(g, "..=") || at(g, "..") {
+                advance(g);
+                unary(g);
+                range-ends(g, first, written);
+                wrap(g, begun, NodeKind.range-type);
+                return;
+            }
+            literal-kind(g, first);
+            wrap(g, begun, NodeKind.literal-type);
+            return;
+        }
+        // (): unit
+        if at(g, "(") {
+            advance(g);
+            expect(g, ")");
+            wrap(g, begun, NodeKind.unit-type);
+            return;
+        }
+        // { x: s32, y: string }: an anonymous record
+        if at(g, "\{") {
+            advance(g);
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    break;
+                }
+                let field = mark(g);
+                name(g);
+                expect(g, ":");
+                parse-type(g);
+                wrap(g, field, NodeKind.record-type-field);
+                if !at(g, "\}") { expect(g, ","); }
+            }
+            wrap(g, begun, NodeKind.record-type);
+            return;
+        }
+        let n = name(g);
+        if at(g, ".") {
+            advance(g);
+            n = n + "." + name(g);
+        }
+        // func(T, U) -> R
+        if n == "func" && at(g, "(") {
+            advance(g);
+            for step in g.pos..g.toks.len() {
+                if at(g, ")") { break; }
+                parse-type(g);
+                if !at(g, ")") { expect(g, ","); }
+            }
+            expect(g, ")");
+            if at(g, "->") {
+                advance(g);
+                parse-type(g);
+            }
+            wrap(g, begun, NodeKind.func-type);
+            return;
+        }
+        if n == "map" || n == "set" || n == "list" || n == "option" || n == "future" || n == "seq" || n == "stream"
+            || n == "writer" || n == "tuple" || n == "result" {
+            type-args(g, n);
+        }
+        if n == "_" { fail(g, "_ is only a result's absent payload"); }
+        wrap(g, begun, NodeKind.named-type);
+    }
+
+    // a type's arguments, as its name takes them: map<K, V>, set<T>, list<T> (list<T, N>,
+    // list<T, ?>), option<T>, …, tuple<T, …>, result<T, E> (_ for none, either left out)
+    type-args: func(g: Grammar, n: string) {
+        let begun = mark(g);
+        if n == "map" || n == "set" {
+            expect(g, "<");
+            parse-type(g);
+            if n == "map" {
+                expect(g, ",");
+                parse-type(g);
+            }
+            expect(g, ">");
+        } else if n == "tuple" {
+            expect(g, "<");
+            let items = 0;
+            for step in g.pos..g.toks.len() {
+                if at(g, ">") {
+                    advance(g);
+                    if items == 0 { fail(g, "a tuple needs a type (no value's type is ())"); }
+                    break;
+                }
+                parse-type(g);
+                items += 1;
+                if !at(g, ">") { expect(g, ","); }
+            }
+        } else if n == "result" {
+            if at(g, "<") {
+                advance(g);
+                result-part(g);
+                if at(g, ",") {
+                    advance(g);
+                    if !at(g, ">") {
+                        result-part(g);
+                        if at(g, ",") { advance(g); }
+                    }
+                }
+                expect(g, ">");
+            }
+        } else {
+            expect(g, "<");
+            parse-type(g);
+            if at(g, ",") { advance(g); }
+            // list<T, N> or list<T, ?>: fixed-length
+            if n == "list" && (at(g, "?") || is-kind(g, 0, TokenKind.int)) {
+                if is-kind(g, 0, TokenKind.int) { let _ = fixed-len(g, text(g)); }
+                advance(g);
+            }
+            expect(g, ">");
+        }
+        wrap(g, begun, NodeKind.type-args);
+    }
+
+    // a result's payload type, or _ for none
+    result-part: func(g: Grammar) {
+        if at(g, "_") {
+            let begun = mark(g);
+            advance(g);
+            wrap(g, begun, NodeKind.named-type);
+            return;
+        }
+        parse-type(g);
+    }
+
+    // a fixed-length list's length: a decimal from 1
+    fixed-len: func(g: Grammar, s: string) -> s64 {
+        let n = 0;
+        for k in 0..s.len() {
+            let c = s.byte-at(k);
+            if !is-digit(c) || n > 100000000 { fail(g, "a list's length is a decimal integer: {s}"); }
+            n = n * 10 + (c - 48);
+        }
+        if n < 1 { fail(g, "a fixed-length list holds at least one item"); }
+        n
+    }
+
+    // a literal type's value: a number, a string, a char or a bool (- before a number); not a
+    // string that interpolates
+    literal-kind: func(g: Grammar, kind: NodeKind) {
+        if kind != NodeKind.literal && kind != NodeKind.string-lit && kind != NodeKind.unary-expr {
+            fail(g, "a literal type is a number, a string, a char or a bool");
+        }
+    }
+
+    // a range type's first end: an integer or a char (- before a number)
+    range-ends: func(g: Grammar, first: NodeKind, written: Token) {
+        let integer = first == NodeKind.literal && (written.kind == TokenKind.int || written.kind == TokenKind.char);
+        if !integer && first != NodeKind.unary-expr { fail(g, "a range type is of integers or chars"); }
+    }
+
+    // ================================================================ patterns
+
+    // a pattern: alternatives (p | q), each a single one
+    pattern: func(g: Grammar) {
+        let begun = mark(g);
+        single-pattern(g);
+        if !at(g, "|") { return; }
+        for step in g.pos..g.toks.len() {
+            if !at(g, "|") { break; }
+            advance(g);
+            single-pattern(g);
+        }
+        wrap(g, begun, NodeKind.alt-pattern);
+    }
+
+    // _; let and a pattern (its names binding), let n: T; a literal or a range; { field: pattern,
+    // field, ...rest }; (a, b) or (p); name(pattern); a name
+    single-pattern: func(g: Grammar) {
+        let begun = mark(g);
+        if at(g, "_") {
+            advance(g);
+            wrap(g, begun, NodeKind.wild-pattern);
+            return;
+        }
+        if at(g, "let") {
+            advance(g);
+            if is-kind(g, 0, TokenKind.id) && at-off(g, ":", 1) {
+                name(g);
+                advance(g);
+                type-member(g);
+                wrap(g, begun, NodeKind.typed-pattern);
+                return;
+            }
+            single-pattern(g);
+            wrap(g, begun, NodeKind.let-pattern);
+            return;
+        }
+        if is-kind(g, 0, TokenKind.int) || is-kind(g, 0, TokenKind.float)
+            || is-string(g, 0) || is-kind(g, 0, TokenKind.char) || at(g, "-") && (
+            is-kind(g, 1, TokenKind.int) || is-kind(g, 1, TokenKind.float)
+        ) {
+            unary(g);
+            if at(g, "..=") || at(g, "..") {
+                advance(g);
+                unary(g);
+                wrap(g, begun, NodeKind.range-pattern);
+                return;
+            }
+            wrap(g, begun, NodeKind.literal-pattern);
+            return;
+        }
+        if at(g, "\{") {
+            advance(g);
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    break;
+                }
+                // ...rest: the fields not named, last
+                if at(g, "...") {
+                    let rest = mark(g);
+                    advance(g);
+                    let named = name(g);
+                    wrap(g, rest, NodeKind.rest-pattern);
+                    if !at(g, "\}") { expect(g, ","); }
+                    if !at(g, "\}") { fail(g, "...{named} is a record pattern's last"); }
+                    continue;
+                }
+                let field = mark(g);
+                name(g);
+                if at(g, ":") {
+                    advance(g);
+                    pattern(g);
+                }
+                wrap(g, field, NodeKind.record-pattern-field);
+                if !at(g, "\}") { expect(g, ","); }
+            }
+            wrap(g, begun, NodeKind.record-pattern);
+            return;
+        }
+        if at(g, "(") {
+            advance(g);
+            if at(g, ")") {
+                advance(g);
+                wrap(g, begun, NodeKind.tuple-pattern);
+                return;
+            }
+            pattern(g);
+            if at(g, ")") {
+                advance(g);
+                wrap(g, begun, NodeKind.paren-pattern);
+                return;
+            }
+            for step in g.pos..g.toks.len() {
+                if at(g, ")") {
+                    advance(g);
+                    break;
+                }
+                expect(g, ",");
+                if at(g, ")") {
+                    advance(g);
+                    break;
+                }
+                pattern(g);
+            }
+            wrap(g, begun, NodeKind.tuple-pattern);
+            return;
+        }
+        name(g);
+        if at(g, "(") {
+            advance(g);
+            pattern(g);
+            expect(g, ")");
+            wrap(g, begun, NodeKind.case-pattern);
+            return;
+        }
+        wrap(g, begun, NodeKind.name-pattern);
+    }
+
+    // ================================================================ what was just built
+
+    // the node the parser finished last (an expression just parsed: what follows it may depend on
+    // what it is)
+    last-node: func(g: Grammar) -> option<GreenNode> {
+        let holder = g.tree.open[g.tree.open.len() - 1];
+        if holder.children.len() == 0 { return none; }
+        match holder.children[holder.children.len() - 1] {
+            node(n) => some(n),
+            token(t) => none,
+        }
+    }
+
+    // what an expression is, as what follows it asks (its parens looked through: (f)(x) is a
+    // call of f); a string that interpolates is an interpolation's
+    shape: func(n: GreenNode) -> NodeKind {
+        if n.kind == NodeKind.paren-expr {
+            for child in n.children {
+                match child {
+                    node(inner) => { return shape(inner); }
+                    token(t) => {}
+                }
+            }
+        }
+        if n.kind == NodeKind.string-lit {
+            for child in n.children {
+                match child {
+                    node(inner) => { if inner.kind == NodeKind.interpolation { return NodeKind.interpolation; } }
+                    token(t) => {}
+                }
+            }
+        }
+        n.kind
+    }
+
+    // what the expression just parsed is (error: none was)
+    last-shape: func(g: Grammar) -> NodeKind {
+        match last-node(g) {
+            some(n) => shape(n),
+            none => NodeKind.error,
+        }
+    }
+
+    // whether an expression ends at its brace (an if, a match or a block: it takes no ; as a
+    // statement)
+    ends-at-brace: func(kind: NodeKind) -> bool {
+        kind == NodeKind.if-expr || kind == NodeKind.match-expr || kind == NodeKind.block
+    }
+
+    // ================================================================ blocks and statements
+
+    // whether a { opens a closure literal: its params (names, each with a type or not, between
+    // commas) and then -> (a record literal's name: value never reaches one)
+    closure-ahead: func(g: Grammar) -> bool {
+        if at-off(g, "->", 1) { return true; }
+        let k = 1;
+        for step in 0..g.toks.len() {
+            if !is-kind(g, k, TokenKind.id) { return false; }
+            k += 1;
+            if at-off(g, ":", k) {
+                k += 1;
+                let depth = 0;
+                let braces = 0;
+                for skip in 0..g.toks.len() {
+                    if depth == 0 && braces == 0 && (at-off(g, ",", k) || at-off(g, "->", k)) { break; }
+                    if at-off(g, "\{", k) { braces += 1; }
+                    if at-off(g, "\}", k) {
+                        if braces == 0 { return false; }
+                        braces -= 1;
+                    }
+                    if at-off(g, "(", k) || at-off(g, "<", k) || at-off(g, "[", k) { depth += 1; }
+                    if at-off(g, ")", k) || at-off(g, ">", k) || at-off(g, "]", k) { depth -= 1; }
+                    if at-off(g, ";", k) || at-off(g, "=", k) || depth < 0 || is-kind(g, k, TokenKind.eof) {
+                        return false;
+                    }
+                    k += 1;
+                }
+            }
+            if at-off(g, "->", k) { return true; }
+            if !at-off(g, ",", k) { return false; }
+            k += 1;
+        }
+        false
+    }
+
+    // { params -> body }: a closure literal (its body a block's, without its {)
+    closure: func(g: Grammar) {
+        expect(g, "\{");
+        for step in g.pos..g.toks.len() {
+            if at(g, "->") { break; }
+            let param = mark(g);
+            name(g);
+            if at(g, ":") {
+                advance(g);
+                parse-type(g);
+            }
+            wrap(g, param, NodeKind.closure-param);
+            if !at(g, "->") { expect(g, ","); }
+        }
+        expect(g, "->");
+        block-rest(g);
+    }
+
+    block: func(g: Grammar) {
+        let begun = mark(g);
+        expect(g, "\{");
+        block-rest(g);
+        wrap(g, begun, NodeKind.block);
+    }
+
+    // a block's statements, after its {, and its }
+    block-rest: func(g: Grammar) {
+        for step in g.pos..g.toks.len() {
+            if at(g, "\}") {
+                advance(g);
+                return;
+            }
+            let first = g.pos;
+            statement(g);
+            if g.recovering { pass-over(g, first); }
+        }
+    }
+
+    // a statement's ; taken. One missing before a line after it (x. being written above another
+    // line) is told, and the statement taken as ended there: nothing is passed over
+    end-statement: func(g: Grammar) {
+        if !at(g, ";") && next-line-statement(g) {
+            let last = tok(g, -1).span;
+            tell(g, { source: last.source, line: last.end-line, col: last.end-col, end-line: last.end-line, end-col: last.end-col + 1, }, "expected ';', found {found(g)}");
+            return;
+        }
+        expect(g, ";");
+    }
+
+    // whether the next token is on a line after the last token's (and not a } or the file's end)
+    next-line-statement: func(g: Grammar) -> bool {
+        g.pos > 0 && !at(g, "\}") && !is-kind(g, 0, TokenKind.eof) && tok(g, 0).span.line > tok(g, -1).span.end-line
+    }
+
+    statement: func(g: Grammar) {
+        let begun = mark(g);
+        if at(g, "let") {
+            advance(g);
+            // a record's, a tuple's or _: a pattern, its names binding
+            let destructures = at(g, "\{") || at(g, "(") || at(g, "_");
+            if destructures { pattern(g); } else { name(g); }
+            if at(g, ":") {
+                advance(g);
+                parse-type(g);
+            }
+            expect(g, "=");
+            expr(g);
+            end-statement(g);
+            wrap(g, begun, NodeKind.let-stmt);
+            return;
+        }
+        if at(g, "return") {
+            advance(g);
+            if !at(g, ";") { expr(g); }
+            end-statement(g);
+            wrap(g, begun, NodeKind.return-stmt);
+            return;
+        }
+        // wait for x in s { … }: each item of a stream, waited for in turn
+        if at(g, "wait") && at-off(g, "for", 1) {
+            advance(g);
+            advance(g);
+            name(g);
+            expect(g, "in");
+            expr(g);
+            block(g);
+            wrap(g, begun, NodeKind.wait-for-stmt);
+            return;
+        }
+        // loop { … } (loop is a name otherwise)
+        if at(g, "loop") && at-off(g, "\{", 1) {
+            advance(g);
+            block(g);
+            wrap(g, begun, NodeKind.loop-stmt);
+            return;
+        }
+        if at(g, "for") {
+            advance(g);
+            name(g);
+            expect(g, "in");
+            expr(g);
+            if at(g, "..") || at(g, "..=") {
+                advance(g);
+                expr(g);
+            }
+            block(g);
+            wrap(g, begun, NodeKind.for-stmt);
+            return;
+        }
+        if at(g, "break") || at(g, "continue") {
+            let kind = if at(g, "break") { NodeKind.break-stmt } else { NodeKind.continue-stmt };
+            advance(g);
+            end-statement(g);
+            wrap(g, begun, kind);
+            return;
+        }
+        // an if, a match or a block that starts a statement is the statement (as Rust's): what
+        // follows its } is the next one, not an operator's other side
+        let start = here(g);
+        if at(g, "if") || at(g, "match") || at(g, "\{") { postfix(g); } else { expr(g); }
+        let target = last-node(g);
+        let kind = last-shape(g);
+        let target-span = span-from(g, start);
+        for op in ["=", "+=", "-=", "*=", "/=", "%=",] {
+            if at(g, op) {
+                advance(g);
+                expr(g);
+                end-statement(g);
+                assignable(g, target, kind, op, target-span);
+                wrap(g, begun, NodeKind.assign-stmt);
+                return;
+            }
+        }
+        if at(g, ";") {
+            advance(g);
+            wrap(g, begun, NodeKind.expr-stmt);
+            return;
+        }
+        // an if, a match or a block needs no `;`
+        if ends-at-brace(kind) {
+            wrap(g, begun, NodeKind.expr-stmt);
+            return;
+        }
+        if !at(g, "\}") {
+            if next-line-statement(g) {
+                end-statement(g);
+            } else {
+                fail(g, "expected ';' after an expression, found {found(g)}");
+            }
+        }
+        wrap(g, begun, NodeKind.expr-stmt);
+    }
+
+    // what is assigned: a variable, a field, or a list's item (xs[i] = v, xs.at(i) = v; with = only)
+    assignable: func(g: Grammar, target: option<GreenNode>, kind: NodeKind, op: string, at: Span) {
+        if kind == NodeKind.name-ref || kind == NodeKind.field-expr { return; }
+        let item = kind == NodeKind.index-expr || match target {
+            some(n) => kind == NodeKind.method-call-expr && method-name(n) == "at" && call-arity(n) == 1,
+            none => false,
+        };
+        if !item {
+            fail-at(g, at, "only a variable, a field or a list's item can be assigned");
+            return;
+        }
+        if op != "=" {
+            fail-at(g, at, "xs[i] {op} v would read xs and i twice: write xs[i] = xs[i] {from-byte(op.byte-at(0))} v");
+        }
+    }
+
+    // a method call's name (the name after its .)
+    @(private) method-name: func(n: GreenNode) -> string {
+        let dot = false;
+        for child in n.children {
+            match child {
+                token(t) => {
+                    if t.kind == TokenKind.op && t.text == "." { dot = true; }
+                    else if dot && t.kind == TokenKind.id { return t.text; }
+                }
+                node(inner) => {}
+            }
+        }
+        ""
+    }
+
+    // how many arguments a call's argument list holds
+    @(private) call-arity: func(n: GreenNode) -> s64 {
+        for child in n.children {
+            match child {
+                node(inner) => {
+                    if inner.kind == NodeKind.arg-list {
+                        let count = 0;
+                        for arg in inner.children {
+                            match arg {
+                                node(x) => { count += 1; }
+                                token(t) => {}
+                            }
+                        }
+                        return count;
+                    }
+                }
+                token(t) => {}
+            }
+        }
+        0
+    }
+
+    // ================================================================ expressions
+
+    expr: func(g: Grammar) { binary(g, 0); }
+
+    // the operator of ops next, or "": << and >> are two adjacent < or > tokens (and then no
+    // comparison)
+    op-at: func(g: Grammar, ops: list<string>) -> string {
+        if g.kinds[g.pos] != TokenKind.op { return ""; }
+        let t = g.texts[g.pos];
+        let doubled = (t == "<" || t == ">") && at-off(g, t, 1) && adjacent(g);
+        for op in ops {
+            if doubled && op == t + t { return op; }
+            if !doubled && op == t { return op; }
+        }
+        ""
+    }
+
+    // whether the next two tokens touch
+    adjacent: func(g: Grammar) -> bool {
+        let a = tok(g, 0).span;
+        let b = tok(g, 1).span;
+        a.end-line == b.line && a.end-col == b.col
+    }
+
+    binary: func(g: Grammar, level: s64) {
+        if level == 10 {
+            cast(g);
+            return;
+        }
+        let ops = g.levels[level];
+        let begun = mark(g);
+        binary(g, level + 1);
+        // x is T, as a comparison is
+        if level == 3 && at(g, "is") {
+            advance(g);
+            parse-type(g);
+            wrap(g, begun, NodeKind.is-expr);
+            return;
+        }
+        for step in g.pos..g.toks.len() {
+            let op = op-at(g, ops);
+            if op == "" { return; }
+            advance(g);
+            if op == "<<" || op == ">>" { advance(g); }
+            binary(g, level + 1);
+            wrap(g, begun, NodeKind.binary-expr);
+        }
+    }
+
+    // x as T, x as? T: tighter than * and +, looser than - and !
+    cast: func(g: Grammar) {
+        let begun = mark(g);
+        unary(g);
+        for step in g.pos..g.toks.len() {
+            if !at(g, "as") { return; }
+            advance(g);
+            if at(g, "?") {
+                advance(g);
+                type-member(g);
+                wrap(g, begun, NodeKind.try-cast-expr);
+            } else {
+                type-member(g);
+                wrap(g, begun, NodeKind.cast-expr);
+            }
+        }
+    }
+
+    // yield v, start f(x), wait …, -x, !x, else a postfix expression: what it is
+    unary: func(g: Grammar) -> NodeKind {
+        let begun = mark(g);
+        if at(g, "yield") {
+            advance(g);
+            expr(g);
+            wrap(g, begun, NodeKind.yield-expr);
+            return NodeKind.yield-expr;
+        }
+        // start f(x) (a name after it: start alone is a variable's)
+        if at(g, "start") && is-kind(g, 1, TokenKind.id) {
+            advance(g);
+            postfix(g);
+            wrap(g, begun, NodeKind.start-expr);
+            return NodeKind.start-expr;
+        }
+        // wait f(x), wait a | b, wait { a: x, b: y } (wait alone is a variable's)
+        let waits = is-kind(g, 1, TokenKind.id) || at-off(g, "\{", 1) && is-kind(g, 2, TokenKind.id) && at-off(g, ":", 3);
+        if at(g, "wait") && waits {
+            advance(g);
+            if at(g, "\{") {
+                advance(g);
+                for step in g.pos..g.toks.len() {
+                    if at(g, "\}") {
+                        advance(g);
+                        wrap(g, begun, NodeKind.wait-expr);
+                        return NodeKind.wait-expr;
+                    }
+                    let field = mark(g);
+                    name(g);
+                    expect(g, ":");
+                    expr(g);
+                    wrap(g, field, NodeKind.wait-field);
+                    if !at(g, "\}") { expect(g, ","); }
+                }
+            }
+            postfix(g);
+            for step in g.pos..g.toks.len() {
+                if !at(g, "|") { break; }
+                advance(g);
+                postfix(g);
+            }
+            wrap(g, begun, NodeKind.wait-expr);
+            return NodeKind.wait-expr;
+        }
+        if at(g, "-") || at(g, "!") {
+            advance(g);
+            unary(g);
+            wrap(g, begun, NodeKind.unary-expr);
+            return NodeKind.unary-expr;
+        }
+        postfix(g);
+        last-shape(g)
+    }
+
+    call-args: func(g: Grammar) {
+        let begun = mark(g);
+        expect(g, "(");
+        for step in g.pos..g.toks.len() {
+            if at(g, ")") {
+                advance(g);
+                break;
+            }
+            expr(g);
+            if !at(g, ")") { expect(g, ","); }
+        }
+        wrap(g, begun, NodeKind.arg-list);
+    }
+
+    postfix: func(g: Grammar) {
+        // an if, a match or a block ends at its brace ({ … }.f is not read as one); in parens it
+        // is an operand like any
+        let parenthesized = at(g, "(");
+        let begun = mark(g);
+        primary(g);
+        if ends-at-brace(last-shape(g)) && !parenthesized { return; }
+        for step in g.pos..g.toks.len() {
+            if at(g, ".") {
+                advance(g);
+                // (a member's name is written on its dot's line: one on a line after it is what
+                // follows, not this member's name: x. being written above another line)
+                let dot = tok(g, -1).span;
+                if !is-kind(g, 0, TokenKind.int) && !is-kind(g, 0, TokenKind.id) || tok(g, 0).span.line > dot.end-line {
+                    // (no name after the .: told, and kept as a member with none)
+                    tell(g, { source: dot.source, line: dot.end-line, col: dot.end-col, end-line: dot.end-line, end-col: dot.end-col, }, "expected a name after .");
+                    wrap(g, begun, NodeKind.field-expr);
+                    continue;
+                }
+                if is-kind(g, 0, TokenKind.int) {
+                    advance(g);
+                    wrap(g, begun, NodeKind.field-expr);
+                } else {
+                    name(g);
+                    if at(g, "(") {
+                        call-args(g);
+                        wrap(g, begun, NodeKind.method-call-expr);
+                    } else {
+                        wrap(g, begun, NodeKind.field-expr);
+                    }
+                }
+            } else if at(g, "(") && last-shape(g) == NodeKind.name-ref {
+                call-args(g);
+                wrap(g, begun, NodeKind.call-expr);
+            } else if at(g, "(") {
+                // a call of any other expression's value: xs[i](), make()(), (x.f)(a)
+                call-args(g);
+                wrap(g, begun, NodeKind.apply-expr);
+            } else if at(g, "[") {
+                // xs[i] is xs.at(i)
+                advance(g);
+                expr(g);
+                expect(g, "]");
+                wrap(g, begun, NodeKind.index-expr);
+            } else {
+                return;
+            }
+        }
+    }
+
+    primary: func(g: Grammar) {
+        let begun = mark(g);
+        if is-kind(g, 0, TokenKind.int) || is-kind(g, 0, TokenKind.float) {
+            advance(g);
+            wrap(g, begun, NodeKind.literal);
+            return;
+        }
+        if is-kind(g, 0, TokenKind.char) {
+            check-char(g, tok(g, 0));
+            advance(g);
+            wrap(g, begun, NodeKind.literal);
+            return;
+        }
+        if is-string(g, 0) {
+            string-lit(g);
+            return;
+        }
+        if at(g, "true") || at(g, "false") {
+            advance(g);
+            wrap(g, begun, NodeKind.literal);
+            return;
+        }
+        // /pattern/flags: a regex literal
+        if is-kind(g, 0, TokenKind.regex) {
+            advance(g);
+            wrap(g, begun, NodeKind.regex-lit);
+            return;
+        }
+        // #name, #name(args): a directive
+        if is-kind(g, 0, TokenKind.id) && tok(g, 0).text.starts-with("#") {
+            advance(g);
+            if at(g, "(") { call-args(g); }
+            wrap(g, begun, NodeKind.directive);
+            return;
+        }
+        // (e), (), or a tuple: (a, b), and (a,) of one
+        if at(g, "(") {
+            advance(g);
+            if at(g, ")") {
+                advance(g);
+                wrap(g, begun, NodeKind.unit-expr);
+                return;
+            }
+            expr(g);
+            if at(g, ")") {
+                advance(g);
+                wrap(g, begun, NodeKind.paren-expr);
+                return;
+            }
+            expect(g, ",");
+            for step in g.pos..g.toks.len() {
+                if at(g, ")") {
+                    advance(g);
+                    break;
+                }
+                expr(g);
+                if !at(g, ")") { expect(g, ","); }
+            }
+            wrap(g, begun, NodeKind.tuple-expr);
+            return;
+        }
+        if at(g, "[") {
+            advance(g);
+            for step in g.pos..g.toks.len() {
+                if at(g, "]") {
+                    advance(g);
+                    break;
+                }
+                expr(g);
+                if !at(g, "]") { expect(g, ","); }
+            }
+            wrap(g, begun, NodeKind.list-expr);
+            return;
+        }
+        if at(g, "if") {
+            advance(g);
+            expr(g);
+            block(g);
+            if at(g, "else") {
+                advance(g);
+                if at(g, "if") { primary(g); } else { block(g); }
+            }
+            wrap(g, begun, NodeKind.if-expr);
+            return;
+        }
+        // a closure literal: { params -> body }
+        if at(g, "\{") && closure-ahead(g) {
+            closure(g);
+            wrap(g, begun, NodeKind.closure);
+            return;
+        }
+        // a record literal: { name: value, ... } (any other { is a block)
+        if at(g, "\{") && is-kind(g, 1, TokenKind.id) && at-off(g, ":", 2) {
+            advance(g);
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    break;
+                }
+                let field = mark(g);
+                name(g);
+                expect(g, ":");
+                expr(g);
+                wrap(g, field, NodeKind.record-field);
+                if !at(g, "\}") { expect(g, ","); }
+            }
+            wrap(g, begun, NodeKind.record-expr);
+            return;
+        }
+        if at(g, "match") {
+            advance(g);
+            expr(g);
+            expect(g, "\{");
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    break;
+                }
+                let arm = mark(g);
+                pattern(g);
+                if at(g, "if") {
+                    advance(g);
+                    expr(g);
+                }
+                expect(g, "=>");
+                // a block; a { that opens a record literal or a closure is an expression's
+                let literal = is-kind(g, 1, TokenKind.id) && at-off(g, ":", 2) || closure-ahead(g);
+                if at(g, "\{") && !literal { block(g); } else { expr(g); }
+                if at(g, ",") { advance(g); }
+                wrap(g, arm, NodeKind.match-arm);
+            }
+            wrap(g, begun, NodeKind.match-expr);
+            return;
+        }
+        if at(g, "\{") {
+            block(g);
+            return;
+        }
+        if is-kind(g, 0, TokenKind.id) {
+            advance(g);
+            wrap(g, begun, NodeKind.name-ref);
+            return;
+        }
+        fail(g, "unexpected {found(g)}");
+    }
+
+    // ---- strings, read in pieces
+
+    // "text {expr} text": its quotes, its text (its escapes checked), each interpolation
+    string-lit: func(g: Grammar) {
+        let begun = mark(g);
+        bump(g);
+        for step in g.pos..g.toks.len() {
+            let t = g.toks[g.pos];
+            if t.kind == TokenKind.string-text {
+                check-escapes(g, t);
+                bump(g);
+            } else if t.kind == TokenKind.interp-start {
+                interpolation(g);
+            } else {
+                if t.kind == TokenKind.string-end { bump(g); }
+                break;
+            }
+        }
+        wrap(g, begun, NodeKind.string-lit);
+    }
+
+    // {expr} or {expr:spec}: the expression parsed as its own (an error in it its own, the
+    // statement going on past it; quiet where a character in it is no token's, which is told)
+    interpolation: func(g: Grammar) {
+        let begun = mark(g);
+        let opening = g.toks[g.pos];
+        bump(g);
+        // where its expression ends: its format's :, or its }
+        let end = g.pos;
+        loop {
+            if end >= g.toks.len() - 1 { break; }
+            let t = g.toks[end];
+            if t.kind == TokenKind.interp-end || t.kind == TokenKind.string-end && g.next-unit[end] == end + 1 && false { break; }
+            if t.kind == TokenKind.op && t.text == ":" && end + 1 < g.toks.len() && g.toks[end + 1].kind == TokenKind.format-spec { break; }
+            if t.kind == TokenKind.interp-end { break; }
+            end = g.next-unit[end];
+        }
+        let code-end = if end < g.toks.len() { g.toks[end].start } else { opening.end };
+        let outer-recovering = g.recovering;
+        let outer-quiet = g.quiet;
+        g.recovering = false;
+        let unknown = false;
+        for u in g.unknowns {
+            if u.start >= opening.end && u.start < code-end {
+                diagnostics.report(g.context, diagnostics.error(u.span, "unexpected character '{u.text}'", ""));
+                unknown = true;
+            }
+        }
+        if unknown { g.quiet = true; }
+        // (an empty one: what the expression would be is nothing)
+        expr(g);
+        if g.pos < end { fail(g, "unexpected {found(g)} after an interpolation's expression"); }
+        // what its error left of it, passed over
+        if g.pos < end {
+            let rest = mark(g);
+            for index in g.pos..end { tree.token(g.tree, g.toks[index]); }
+            g.pos = end;
+            wrap(g, rest, NodeKind.error);
+        }
+        g.recovering = outer-recovering;
+        g.quiet = outer-quiet;
+        // its format (std's: [[fill]align][0][width][.precision][? x X b o])
+        if g.pos < g.toks.len() - 1 && g.toks[g.pos].kind == TokenKind.op && g.toks[g.pos].text == ":" {
+            bump(g);
+            let spec = g.toks[g.pos];
+            if spec.kind == TokenKind.format-spec {
+                match format-spec(spec.text) {
+                    some(_) => {}
+                    none => fail-at(g, { source: spec.span.source, line: spec.span.line, col: spec.span.col, end-line: spec.span.line, end-col: spec.span.col + 2, }, "unknown format spec '{spec.text}': [[fill]align][0][width][.precision][? x X b o]"),
+                }
+                bump(g);
+            }
+        }
+        if g.toks[g.pos].kind == TokenKind.interp-end { bump(g); }
+        wrap(g, begun, NodeKind.interpolation);
+    }
+
+    // a string's text's escapes: WAVE's (\\ \" \' \n \r \t \u\{hex\}) and yel's \{ \} \0
+    check-escapes: func(g: Grammar, t: Token) {
+        let raw = t.text;
+        let index = 0;
+        loop {
+            if index >= raw.len() { break; }
+            if raw.byte-at(index) == 92 {
+                index += escape-checked(g, t, index);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    // the escape at raw[at] (a backslash) checked, as the parser read it: how many bytes it takes
+    @(private) escape-checked: func(g: Grammar, t: Token, at: s64) -> s64 {
+        let raw = t.text;
+        let d = raw.byte-at(at + 1);
+        if d == 110 || d == 116 || d == 114 || d == 48 || d == 92 || d == 34 || d == 39 || d == 123 || d == 125 { return 2; }
+        if d == 117 && raw.byte-at(at + 2) == 123 {
+            let code = 0;
+            for j in at + 3..raw.len() {
+                let h = raw.byte-at(j);
+                if h == 125 {
+                    if j == at + 3 || code > 1114111 || (code >= 55296 && code <= 57343) {
+                        raw-fail(g, t, at, "\\u\{...\} needs a Unicode scalar value");
+                    }
+                    return j + 1 - at;
+                }
+                if !radix-digit(h, 16) || j - at > 9 {
+                    raw-fail(g, t, at, "\\u\{...\} takes 1 to 6 hex digits");
+                }
+                code = code * 16 + hex-value(h);
+            }
+        }
+        raw-fail(g, t, at, "unknown escape \\{from-byte(d)}");
+        2
+    }
+
+    // an error at byte at of a token's text (where it is in the file)
+    raw-fail: func(g: Grammar, t: Token, at: s64, message: string) {
+        let src = g.context.sources[g.source].text;
+        let where = lexer.place-in(src, t.start, t.span.line, t.span.col, t.start + at);
+        fail-at(g, { source: g.source, line: where.line, col: where.col, end-line: where.line, end-col: where.col + 2, }, message);
+    }
+
+    // a char literal: an escape, or one UTF-8 scalar
+    check-char: func(g: Grammar, t: Token) {
+        let raw = t.text;
+        // (its text starts past its opening quote)
+        let inner: Token = {
+            kind: t.kind,
+            text: raw,
+            span: { source: t.span.source, line: t.span.line, col: t.span.col + 1, end-line: t.span.end-line, end-col: t.span.end-col, },
+            indent: -1,
+            template: false,
+            start: t.start + 1,
+            end: t.end,
+            escaped: false,
+        };
+        let n = raw.len();
+        let width = 0;
+        if n > 0 && raw.byte-at(0) == 92 {
+            let taken = escape-checked(g, inner, 0);
+            if taken != n { raw-fail(g, inner, 0, "a char is one character"); }
+            return;
+        }
+        let b = if n > 0 { raw.byte-at(0) } else { 0 };
+        width = if b < 128 { 1 } else if b >= 240 { 4 } else if b >= 224 { 3 } else { 2 };
+        if n == 0 || n != width { raw-fail(g, inner, 0, "a char is one character"); }
+    }
+
+    // ================================================================ declarations
+
+    // a declaration, or (past an error in it) what is left of it passed over (a stray token: an
+    // error of its own)
+    recovering-declaration: func(g: Grammar) {
+        let begun = mark(g);
+        let first = g.pos;
+        let kind = declaration(g);
+        if g.recovering { pass-over(g, first); }
+        if g.pos == first {
+            advance(g);
+            kind = NodeKind.error;
+        }
+        wrap(g, begun, kind);
+    }
+
+    // a declaration (its attributes first): what it is
+    declaration: func(g: Grammar) -> NodeKind {
+        // @(private), @(private="file"), @(observable), @(test), @(context): one or several
+        if at(g, "@") && at-off(g, "(", 1) {
+            let attribute = mark(g);
+            advance(g);
+            advance(g);
+            let observable = false;
+            let in-context = false;
+            loop {
+                if at(g, "private") {
+                    advance(g);
+                    if at(g, "=") {
+                        advance(g);
+                        if !is-string(g, 0) { fail(g, "expected @(private=\"file\")"); }
+                        let v = next(g);
+                        if v != "file" { fail(g, "@(private=\"{v}\"): private is the package's (@(private)) or the file's (@(private=\"file\"))"); }
+                    }
+                } else if at(g, "observable") {
+                    advance(g);
+                    observable = true;
+                } else if at(g, "test") {
+                    advance(g);
+                } else if at(g, "context") {
+                    advance(g);
+                    in-context = true;
+                } else {
+                    fail(g, "an attribute @(...) is @(private), @(private=\"file\"), @(observable), @(test) or @(context)");
+                    wrap(g, attribute, NodeKind.attribute);
+                    return NodeKind.error;
+                }
+                if !at(g, ",") { break; }
+                advance(g);
+            }
+            expect(g, ")");
+            wrap(g, attribute, NodeKind.attribute);
+            if observable && !at(g, "resource") && !at(g, "@") && !at(g, "record") {
+                fail(g, "@(observable) goes on a resource: it tells who reads and writes its fields");
+                return NodeKind.error;
+            }
+            let outer-observable = g.observable;
+            g.observable = outer-observable || observable;
+            if in-context && !at(g, "let") && !at(g, "@") {
+                fail(g, "@(context) goes on a global (let name: T;): each task's own value of it");
+                return NodeKind.error;
+            }
+            let outer-context = g.in-context;
+            g.in-context = outer-context || in-context;
+            let kind = declaration(g);
+            g.observable = outer-observable;
+            g.in-context = outer-context;
+            return kind;
+        }
+        // name: … (a func, in member syntax): a declaration of that name, whatever word it is
+        let named = is-kind(g, 0, TokenKind.id) && at-off(g, ":", 1);
+        // package ns:name@version;
+        if !named && at(g, "package") && is-kind(g, 1, TokenKind.id) && !at-off(g, ":", 1) {
+            advance(g);
+            let _ = package-id(g);
+            if g.module != "" { fail(g, "a package is named at the top of a file, not in a module"); }
+            return NodeKind.package-decl;
+        }
+        // from "<package>" include a, b as c;
+        if !named && at(g, "from") && is-string(g, 1) {
+            if g.module != "" { fail(g, "an include goes at the top of a file, not in a module"); }
+            advance(g);
+            advance(g);
+            if next(g) != "include" { fail-missing(g, "expected include"); }
+            include-names(g);
+            return NodeKind.include-decl;
+        }
+        if !named && at(g, "extern") && at-off(g, "module", 1) {
+            fail(g, "extern module, an interface the host implements, comes with WIT imports");
+        }
+        // module name { ... }: one layer
+        if !named && at(g, "module") && is-kind(g, 1, TokenKind.id) && at-off(g, "\{", 2) {
+            if g.module != "" { fail(g, "module {g.module} holds a module: modules are one layer"); }
+            advance(g);
+            let m = name(g);
+            expect(g, "\{");
+            let outer = g.module;
+            g.module = m;
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    g.module = outer;
+                    return NodeKind.module-decl;
+                }
+                if is-kind(g, 0, TokenKind.eof) {
+                    fail(g, "module {m} is not closed");
+                    g.module = outer;
+                    return NodeKind.module-decl;
+                }
+                recovering-declaration(g);
+            }
+            g.module = outer;
+            return NodeKind.module-decl;
+        }
+        // view Name { fields; its element }
+        if !named && at(g, "view") && is-kind(g, 1, TokenKind.id) && at-off(g, "\{", 2) {
+            view-decl(g);
+            return NodeKind.view-decl;
+        }
+        // record Name { fields }, resource Name { fields }
+        if !named && (at(g, "record") || (at(g, "resource") && is-kind(g, 1, TokenKind.id) && at-off(g, "\{", 2))) {
+            let value = at(g, "record");
+            let observable = g.observable;
+            g.observable = false;
+            if observable && value {
+                fail(g, "@(observable) goes on a resource: a record is a value, copied where it goes, so no one sees it change");
+            }
+            advance(g);
+            let rname = name(g);
+            expect(g, "\{");
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    return NodeKind.record-decl;
+                }
+                let field = mark(g);
+                // @(ignored): a field of an observable resource no one is told of
+                if at(g, "@") && at-off(g, "(", 1) {
+                    advance(g);
+                    advance(g);
+                    if !at(g, "ignored") { fail(g, "a field's attribute is @(ignored)"); }
+                    advance(g);
+                    expect(g, ")");
+                    if !observable { fail(g, "@(ignored) is for a field of an @(observable) resource: {rname} is not one"); }
+                }
+                name(g);
+                expect(g, ":");
+                parse-type(g);
+                wrap(g, field, NodeKind.field-decl);
+                if !at(g, "\}") { expect(g, ","); }
+            }
+            return NodeKind.record-decl;
+        }
+        // type name = T; type name = distinct T;
+        if !named && at(g, "type") && is-kind(g, 1, TokenKind.id) && at-off(g, "=", 2) {
+            advance(g);
+            name(g);
+            expect(g, "=");
+            let distinct = at(g, "distinct") && !at-off(g, ";", 1) && !at-off(g, "|", 1);
+            if distinct { advance(g); }
+            parse-type(g);
+            expect(g, ";");
+            return NodeKind.type-decl;
+        }
+        // let name: T; let name: T = value; (a global)
+        if !named && at(g, "let") && is-kind(g, 1, TokenKind.id) {
+            advance(g);
+            name(g);
+            expect(g, ":");
+            parse-type(g);
+            if at(g, "=") {
+                advance(g);
+                expr(g);
+            }
+            expect(g, ";");
+            return NodeKind.global-decl;
+        }
+        // const name = value; const name: T = value;
+        if !named && at(g, "const") && is-kind(g, 1, TokenKind.id) {
+            advance(g);
+            name(g);
+            if at(g, ":") {
+                advance(g);
+                parse-type(g);
+            }
+            expect(g, "=");
+            expr(g);
+            expect(g, ";");
+            return NodeKind.const-decl;
+        }
+        if !named && at(g, "flags") {
+            advance(g);
+            name(g);
+            expect(g, "\{");
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    return NodeKind.flags-decl;
+                }
+                let flag = mark(g);
+                name(g);
+                wrap(g, flag, NodeKind.flag);
+                if !at(g, "\}") { expect(g, ","); }
+            }
+            return NodeKind.flags-decl;
+        }
+        if !named && (at(g, "variant") || at(g, "enum")) {
+            advance(g);
+            name(g);
+            expect(g, "\{");
+            for step in g.pos..g.toks.len() {
+                if at(g, "\}") {
+                    advance(g);
+                    return NodeKind.variant-decl;
+                }
+                let case = mark(g);
+                name(g);
+                if at(g, "(") {
+                    advance(g);
+                    parse-type(g);
+                    expect(g, ")");
+                }
+                wrap(g, case, NodeKind.case-decl);
+                if !at(g, "\}") { expect(g, ","); }
+            }
+            return NodeKind.variant-decl;
+        }
+        // @c(name = "c_func", keeps = "p", gives = "q"): an extern's C name, and what it does
+        // with its parameters that their types cannot say
+        let c-named = false;
+        if at(g, "@") {
+            let attribute = mark(g);
+            advance(g);
+            if name(g) != "c" { fail(g, "the only attribute is @c(name = \"...\")"); }
+            expect(g, "(");
+            loop {
+                let key = name(g);
+                expect(g, "=");
+                if !is-string(g, 0) { fail(g, "expected a string: @c({key} = \"...\")"); }
+                next(g);
+                if key == "name" { c-named = true; }
+                else if key != "keeps" && key != "gives" { fail(g, "@c takes name, keeps and gives"); }
+                if !at(g, ",") { break; }
+                advance(g);
+            }
+            expect(g, ")");
+            if !c-named { fail(g, "expected @c(name = \"...\")"); }
+            wrap(g, attribute, NodeKind.c-attribute);
+        }
+        let fname = name(g);
+        expect(g, ":");
+        let is-extern = at(g, "extern");
+        if is-extern { advance(g); }
+        if at(g, "async") { advance(g); }
+        expect(g, "func");
+        // type parameters: func<T, U>(...)
+        if at(g, "<") {
+            let params = mark(g);
+            advance(g);
+            for step in g.pos..g.toks.len() {
+                if at(g, ">") {
+                    advance(g);
+                    break;
+                }
+                name(g);
+                if !at(g, ">") { expect(g, ","); }
+            }
+            wrap(g, params, NodeKind.type-params);
+        }
+        declare-params(g, fname, is-extern, c-named);
+        NodeKind.func-decl
+    }
+
+    // a package's id as written up to its ; (ns:name@version)
+    package-id: func(g: Grammar) -> string {
+        let parts: list<string> = [];
+        for step in g.pos..g.toks.len() {
+            if at(g, ";") {
+                advance(g);
+                return parts.join("");
+            }
+            if is-kind(g, 0, TokenKind.eof) { fail(g, "expected ';' after the package's name"); }
+            parts.push(next(g));
+        }
+        parts.join("")
+    }
+
+    // an include's names, each with its alias (a as b), up to its ;
+    include-names: func(g: Grammar) {
+        for step in g.pos..g.toks.len() {
+            let included = mark(g);
+            name(g);
+            if at(g, "as") {
+                advance(g);
+                name(g);
+            }
+            wrap(g, included, NodeKind.include-name);
+            if at(g, ";") {
+                advance(g);
+                return;
+            }
+            expect(g, ",");
+        }
+    }
+
+    // a func's parameters (each name: T, or name: T = default), result and body (or, for an
+    // extern, its ;)
+    declare-params: func(g: Grammar, fname: string, is-extern: bool, c-named: bool) {
+        let list = mark(g);
+        expect(g, "(");
+        let defaulted = false;
+        for step in g.pos..g.toks.len() {
+            if at(g, ")") {
+                advance(g);
+                wrap(g, list, NodeKind.param-list);
+                if at(g, "->") {
+                    advance(g);
+                    parse-type(g);
+                }
+                if is-extern {
+                    if !c-named { fail(g, "extern func {fname} needs @c(name = \"...\")"); }
+                    expect(g, ";");
+                } else {
+                    block(g);
+                }
+                return;
+            }
+            let param = mark(g);
+            let named-at = here(g);
+            let pname = name(g);
+            expect(g, ":");
+            parse-type(g);
+            if at(g, "=") {
+                advance(g);
+                expr(g);
+                defaulted = true;
+            } else if defaulted {
+                fail-at(g, named-at, "parameter {pname} needs a default: every one after a parameter with a default has one");
+            }
+            wrap(g, param, NodeKind.param);
+            if !at(g, ")") { expect(g, ","); }
+        }
+        wrap(g, list, NodeKind.param-list);
+    }
+
+    // ================================================================ views
+
+    // view Name { fields; its element }: its fields (name: T = value;, @(private) or not) and one
+    // element at its top
+    view-decl: func(g: Grammar) {
+        let span = here(g);
+        advance(g);
+        let vname = name(g);
+        if g.module == "" { fail(g, "view {vname} goes in a module: the module is its WIT interface"); }
+        expect(g, "\{");
+        let top = false;
+        for step in g.pos..g.toks.len() {
+            if g.recovering { return; }
+            if at(g, "\}") {
+                advance(g);
+                break;
+            }
+            if is-kind(g, 0, TokenKind.eof) {
+                fail(g, "view {vname} is not closed");
+                return;
+            }
+            let field = mark(g);
+            let private = false;
+            if at(g, "@") && at-off(g, "(", 1) && at-off(g, "private", 2) && at-off(g, ")", 3) {
+                for k in 0..4 { advance(g); }
+                private = true;
+            }
+            // name: T = value; (a field: a prop, its value to start with)
+            if is-kind(g, 0, TokenKind.id) && at-off(g, ":", 1) {
+                name(g);
+                expect(g, ":");
+                parse-type(g);
+                expect(g, "=");
+                expr(g);
+                expect(g, ";");
+                wrap(g, field, NodeKind.view-field);
+                continue;
+            }
+            if private {
+                fail(g, "@(private) in a view is a field's: @(private) name: T = value;");
+                return;
+            }
+            if is-kind(g, 0, TokenKind.id) && at-off(g, "\{", 1) {
+                if top {
+                    fail(g, "view {vname} has one element at its top: put its elements in one (a VStack)");
+                    return;
+                }
+                view-element(g);
+                top = true;
+                continue;
+            }
+            fail(g, "expected a field (name: T = value;) or the view's element (Name \{ … \})");
+            return;
+        }
+        if g.recovering { return; }
+        if !top { fail-at(g, span, "view {vname} has no element: what it shows"); }
+    }
+
+    // Name { items }: an element (the host's: Text, VStack)
+    view-element: func(g: Grammar) {
+        let begun = mark(g);
+        name(g);
+        expect(g, "\{");
+        view-items(g, true);
+        wrap(g, begun, NodeKind.view-element);
+    }
+
+    // a view's items up to the } that closes them: text ("…"), an element, if, for; and in an
+    // element (in-element), its attributes (name: value, style.name: value) and handlers (on event
+    // { … })
+    view-items: func(g: Grammar, in-element: bool) {
+        for step in g.pos..g.toks.len() {
+            if at(g, "\}") {
+                advance(g);
+                return;
+            }
+            if is-kind(g, 0, TokenKind.eof) {
+                fail(g, "expected \} closing the view's items");
+                return;
+            }
+            let start = here(g);
+            let item = mark(g);
+            if is-string(g, 0) {
+                expr(g);
+                wrap(g, item, NodeKind.view-text);
+            } else if at(g, "if") {
+                view-if(g);
+            } else if at(g, "for") && is-kind(g, 1, TokenKind.id) && at-off(g, "in", 2) {
+                view-for(g);
+            } else if at(g, "on") && is-kind(g, 1, TokenKind.id) && at-off(g, "\{", 2) {
+                advance(g);
+                let event = name(g);
+                block(g);
+                wrap(g, item, NodeKind.view-handler);
+                if !in-element { fail-at(g, start, "on {event} is an element's: put it in one"); }
+            } else if at(g, "style") && at-off(g, ".", 1) && is-kind(g, 2, TokenKind.id) && at-off(g, ":", 3) {
+                advance(g);
+                advance(g);
+                view-attribute(g, item, in-element, start);
+            } else if is-kind(g, 0, TokenKind.id) && at-off(g, ":", 1) {
+                view-attribute(g, item, in-element, start);
+            } else if is-kind(g, 0, TokenKind.id) && at-off(g, "\{", 1) {
+                view-element(g);
+            } else {
+                fail(g, "expected text (\"…\"), an element (Name \{ … \}), an attribute (name: value), on event \{ … \}, if or for");
+                return;
+            }
+            if at(g, ",") { advance(g); }
+            if g.recovering { return; }
+        }
+    }
+
+    view-attribute: func(g: Grammar, item: TreeMark, in-element: bool, start: Span) {
+        let aname = name(g);
+        expect(g, ":");
+        expr(g);
+        wrap(g, item, NodeKind.view-attribute);
+        if !in-element { fail-at(g, start, "{aname} is an element's attribute: put it in one"); }
+    }
+
+    // if cond { items } else { items } (else if …: an if in the else's items)
+    view-if: func(g: Grammar) {
+        let begun = mark(g);
+        advance(g);
+        expr(g);
+        expect(g, "\{");
+        view-items(g, false);
+        if at(g, "else") {
+            advance(g);
+            if at(g, "if") {
+                view-if(g);
+            } else {
+                expect(g, "\{");
+                view-items(g, false);
+            }
+        }
+        wrap(g, begun, NodeKind.view-if);
+    }
+
+    // for name in items key(key) { body }: a row for each item, kept by its key
+    view-for: func(g: Grammar) {
+        let begun = mark(g);
+        advance(g);
+        let item = name(g);
+        expect(g, "in");
+        expr(g);
+        if !at(g, "key") { fail(g, "a view's for says what keeps each row: for {item} in … key({item}) \{ … \}"); }
+        advance(g);
+        expect(g, "(");
+        expr(g);
+        expect(g, ")");
+        expect(g, "\{");
+        view-items(g, false);
+        wrap(g, begun, NodeKind.view-for);
+    }
+}

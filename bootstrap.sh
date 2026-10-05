@@ -99,6 +99,74 @@ for test in $tests; do
 		echo "  ok   $name"
 	fi
 done
+# tests/testing: yelc test's runner of the package's tests (std:testing's expectations; three that
+# fail, each ending only its own process, a snapshot that differs among them; an async one; ones in
+# a module), its report as tests/testing.runner.out has it (built as a program instead, its tests
+# left out: above). Its snapshots (tests/testing/snapshots) are all there: none is written
+build/yelc2 test tests/testing build/testing-runner.c
+$CC $CFLAGS -o build/testing-runner build/testing-runner.c $LIBS
+build/testing-runner > build/testing-runner.out 2>&1 || true
+if cmp -s tests/testing.runner.out build/testing-runner.out; then
+	echo "  ok   testing (yelc test)"
+else
+	echo "  FAIL testing (yelc test): diff tests/testing.runner.out build/testing-runner.out"
+	failed=1
+fi
+# tests/host: the host's interfaces (imports, the clock's waits, resources, the filesystem, TCP, name
+# lookups), natively std's host: yelc test's runner of them, every test passing
+build/yelc2 test tests/host build/host-tests.c
+$CC $CFLAGS -o build/host-tests build/host-tests.c $LIBS
+if build/host-tests > build/host-tests.out 2>&1; then
+	echo "  ok   host ($(tail -n 1 build/host-tests.out))"
+else
+	echo "  FAIL host: build/host-tests.out"
+	failed=1
+fi
+# std's own tests, beside it (a package's *.test.yel): yelc test of std's core (runtime/std/core,
+# its folders one package) and of each of its packages that has any, each run, and again under
+# YEL_GC_STRESS=1 (a collection before every allocation): every test passes
+for package in runtime/std/*/; do
+	package=${package%/}
+	# (core's are in its folders)
+	ls "$package"/*.test.yel > /dev/null 2>&1 || ls "$package"/*/*.test.yel > /dev/null 2>&1 || continue
+	name=std$(echo "${package#runtime/std}" | tr / -)
+	build/yelc2 test "$package" "build/$name-tests.c"
+	$CC $CFLAGS -o "build/$name-tests" "build/$name-tests.c" $LIBS
+	if "build/$name-tests" > "build/$name-tests.out" 2>&1 && YEL_GC_STRESS=1 "build/$name-tests" > "build/$name-tests.stress.out" 2>&1; then
+		echo "  ok   $name ($(tail -n 1 "build/$name-tests.out"))"
+	else
+		echo "  FAIL $name: build/$name-tests.out, build/$name-tests.stress.out"
+		failed=1
+	fi
+done
+# the compiler's own tests (compiler/*.test.yel): small programs built as IR in memory
+# (analysis.lower), and what its passes make of them (escape.yel's flow, releases.yel's ends let go)
+build/yelc2 test compiler build/compiler-tests.c
+$CC $CFLAGS -o build/compiler-tests build/compiler-tests.c $LIBS
+if build/compiler-tests > build/compiler-tests.out 2>&1; then
+	echo "  ok   compiler ($(tail -n 1 build/compiler-tests.out))"
+else
+	echo "  FAIL compiler: build/compiler-tests.out"
+	failed=1
+fi
+# tests/fmt/*.yel: yelc --fmt lays each out as tests/fmt/<name>.out has it, and lays that out again
+# as it is
+for test in tests/fmt/*.yel; do
+	name=fmt-$(basename "$test" .yel)
+	cp "$test" "build/$name.yel"
+	build/yelc2 --fmt "build/$name.yel" > /dev/null
+	cp "build/$name.yel" "build/$name.again.yel"
+	build/yelc2 --fmt "build/$name.again.yel" > /dev/null
+	if ! cmp -s "${test%.yel}.out" "build/$name.yel"; then
+		echo "  FAIL $name: diff ${test%.yel}.out build/$name.yel"
+		failed=1
+	elif ! cmp -s "build/$name.yel" "build/$name.again.yel"; then
+		echo "  FAIL $name: formatted again it changes: diff build/$name.yel build/$name.again.yel"
+		failed=1
+	else
+		echo "  ok   $name"
+	fi
+done
 # --full: the compiler compiling itself with a collection every GC_STRESS allocations makes the same C
 if [ "$full" -eq 1 ]; then
 	YEL_GC_STRESS=${GC_STRESS:-5000} build/yelc2 compiler build/yelc3.stress.c
@@ -166,20 +234,13 @@ fi
 # with WASI_SDK set (a wasi-sdk directory) and wasmtime installed: the compiler as wasm compiles
 # itself, collecting in linear memory, with a collection every 50 allocations, and makes the same C
 if [ -n "${WASI_SDK:-}" ]; then
-	# WASI 0.3 components: tests/imports and tests/resources as commands (the same output as natively), and tests/component
+	# WASI 0.3 components: tests/host's tests as one (each a call), commands whose stdio and exit are
+	# theirs (the same output as natively), and tests/component
 	# (exports only) called by the host, each call's result as tests/component.calls.out has it
 	"$WASI_SDK/bin/clang" --target=wasm32-wasip3 $OPT -Iruntime -c -o build/yel-wasm.o runtime/yel.c
 	wasm() { "$WASI_SDK/bin/clang" --target=wasm32-wasip3 $OPT -Iruntime -Wl,-z,stack-size=8388608 "$@" build/yel-wasm.o -lm; }
 	# a component that hangs fails (killed after two minutes) instead of stopping the run
 	run() { perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y "$@"; }
-	build/yelc2 tests/imports.yel build/imports.c --wit build/imports-wit
-	wasm -Wl,--component-type,build/imports-wit -o build/imports.wasm build/imports.c
-	if run build/imports.wasm | cmp -s tests/imports.out -; then echo "  ok   imports (component)"; else echo "  FAIL imports (component)"; failed=1; fi
-	# async: an async main waiting for the host's clock (WASI 0.3: the executor waits on the
-	# host's waitable set), the same output as natively
-	build/yelc2 tests/host-waits.yel build/host-waits.c --wit build/host-waits-wit
-	wasm -Wl,--component-type,build/host-waits-wit -o build/host-waits.wasm build/host-waits.c
-	if run build/host-waits.wasm | cmp -s tests/host-waits.out -; then echo "  ok   host waits (component)"; else echo "  FAIL host waits (component)"; failed=1; fi
 	# stdin to stdout as streams (a stream and a future in a tuple: nested ones cross too)
 	build/yelc2 tests/cat.yel build/cat.c --wit build/cat-wit
 	wasm -Wl,--component-type,build/cat-wit -o build/cat.wasm build/cat.c
@@ -189,14 +250,6 @@ if [ -n "${WASI_SDK:-}" ]; then
 	build/yelc2 tests/stdin-drop.yel build/stdin-drop.c --wit build/stdin-drop-wit
 	wasm -Wl,--component-type,build/stdin-drop-wit -o build/stdin-drop.wasm build/stdin-drop.c
 	if head -c 2000000 /dev/zero | run build/stdin-drop.wasm | cmp -s tests/stdin-drop.component.out -; then echo "  ok   host ends let go (component)"; else echo "  FAIL host ends let go (component)"; failed=1; fi
-	# resources: a socket (the network granted) and the working directory preopened, as natively
-	build/yelc2 tests/resources.yel build/resources.c --wit build/resources-wit
-	wasm -Wl,--component-type,build/resources-wit -o build/resources.wasm build/resources.c
-	if run -S inherit-network=y --dir . build/resources.wasm | cmp -s tests/resources.out -; then echo "  ok   resources (component)"; else echo "  FAIL resources (component)"; failed=1; fi
-	# wasi:filesystem used directly: the host's own (natively, std's host gives the same output)
-	build/yelc2 tests/filesystem.yel build/filesystem.c --wit build/filesystem-wit
-	wasm -Wl,--component-type,build/filesystem-wit -o build/filesystem.wasm build/filesystem.c
-	if run --dir . build/filesystem.wasm | cmp -s tests/filesystem.out -; then echo "  ok   filesystem (component)"; else echo "  FAIL filesystem (component)"; failed=1; fi
 	# fixed-length lists across a component boundary: tests/fixed-caller's imports plugged (wac) into
 	# tests/fixed-api's exports (wasmtime's --invoke cannot write them yet)
 	if command -v wac > /dev/null; then
@@ -209,6 +262,36 @@ if [ -n "${WASI_SDK:-}" ]; then
 			echo "  ok   fixed-length lists (components)"
 		else
 			echo "  FAIL fixed-length lists (components)"
+			failed=1
+		fi
+		# a resource exported: tests/res-caller's import of it plugged into tests/res-api (two
+		# handles made, methods called through them, each dropped: its destructor runs)
+		build/yelc2 tests/res-api build/res-api.c --wit build/res-api-wit
+		wasm -mexec-model=reactor -Wl,--component-type,build/res-api-wit -o build/res-api.wasm build/res-api.c
+		build/yelc2 tests/res-caller build/res-caller.c -I build/res-api-wit --wit build/res-caller-wit
+		wasm -Wl,--component-type,build/res-caller-wit -o build/res-caller.wasm build/res-caller.c
+		wac plug build/res-caller.wasm --plug build/res-api.wasm -o build/resources-exported.wasm
+		if run build/resources-exported.wasm | cmp -s tests/resources-exported.component.out -; then
+			echo "  ok   resources exported (components)"
+		else
+			echo "  FAIL resources exported (components)"
+			failed=1
+		fi
+		# a UI component lowered by hand as templates will be (tests/ui-counter), its yel:ui/dom given
+		# by a stand-in host (tests/ui-dom: each call printed) and driven as the shell would
+		# (tests/ui-driver): the wire, call by call
+		build/yelc2 tests/ui-dom build/ui-dom.c --wit build/ui-dom-wit
+		wasm -mexec-model=reactor -Wl,--component-type,build/ui-dom-wit -o build/ui-dom.wasm build/ui-dom.c
+		build/yelc2 tests/ui-counter build/ui-counter.c -I tests/ui-wit --wit build/ui-counter-wit
+		wasm -mexec-model=reactor -Wl,--component-type,build/ui-counter-wit -o build/ui-counter.wasm build/ui-counter.c
+		build/yelc2 tests/ui-driver build/ui-driver.c -I build/ui-counter-wit -I tests/ui-wit --wit build/ui-driver-wit
+		wasm -Wl,--component-type,build/ui-driver-wit -o build/ui-driver.wasm build/ui-driver.c
+		wac plug build/ui-counter.wasm --plug build/ui-dom.wasm -o build/ui-counter-hosted.wasm
+		wac plug build/ui-driver.wasm --plug build/ui-counter-hosted.wasm -o build/ui.wasm
+		if run build/ui.wasm 2>&1 | cmp -s tests/ui.component.out -; then
+			echo "  ok   ui component (components)"
+		else
+			echo "  FAIL ui component (components)"
 			failed=1
 		fi
 		# streams and futures across WIT (WASI 0.3): tests/stream-caller's imports plugged into
@@ -229,6 +312,34 @@ if [ -n "${WASI_SDK:-}" ]; then
 	wasm -mexec-model=reactor -Wl,--component-type,build/component-wit -o build/component.wasm build/component.c
 	while read -r call; do run --invoke "$call" build/component.wasm; done < tests/component.calls > build/component.calls.out 2>&1
 	if cmp -s tests/component.calls.out build/component.calls.out; then echo "  ok   component (exports)"; else echo "  FAIL component: diff tests/component.calls.out build/component.calls.out"; failed=1; fi
+	# tests/host as a component: the host's own interfaces (the network and name lookups granted)
+	if WASMTIME_FLAGS="-S inherit-network=y -S allow-ip-name-lookup=y" YELC=build/yelc2 tools/test-component.sh tests/host > build/host-component.out 2>&1; then
+		echo "  ok   host ($(tail -n 1 build/host-component.out), component)"
+	else
+		echo "  FAIL host (component): build/host-component.out"
+		failed=1
+	fi
+	# yelc test for a component: the runner an export interface (tests: names, run), each test a call
+	# of its own on a fresh instance (tools/test-component.sh), its report the native runner's
+	YELC=build/yelc2 tools/test-component.sh tests/testing > build/testing-component.out 2>&1 || true
+	if cmp -s tests/testing.runner.out build/testing-component.out; then
+		echo "  ok   testing (yelc test, component)"
+	else
+		echo "  FAIL testing (yelc test, component): diff tests/testing.runner.out build/testing-component.out"
+		failed=1
+	fi
+	# an export module's private func (@(private)) is the component's own: not in its WIT
+	if grep -rq "tally-step" build/component-wit; then echo "  FAIL component: tally-step (@(private)) is in its WIT"; failed=1; else echo "  ok   component (a private func not exported)"; fi
+	# a view (examples/hello: yel-solid's hello as a yel view) built as the shell's hosts take it
+	# (WASI 0.2, Y_HOSTED), its WIT the resource a view lowers to
+	if YELC=build/yelc2 sh examples/hello/build.sh > build/hello-example.log 2>&1 \
+		&& grep -q "resource app" examples/hello/build/hello-wit/*.wit \
+		&& grep -q "dispatch: func(handler-id: u32);" examples/hello/build/hello-wit/*.wit; then
+		echo "  ok   view hello example (component)"
+	else
+		echo "  FAIL view hello example (component): build/hello-example.log"
+		failed=1
+	fi
 	# --full: the compiler as a WASI 0.3 component (its files through wasi:filesystem, the host's)
 	# compiles itself, under stress (an 8 MiB stack, as native has: wasm-ld's default is 64 KiB,
 	# less than the parser's recursion needs)

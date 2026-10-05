@@ -1,5 +1,5 @@
 // error: 3:5: a stream or a future crosses WIT only in an async func's type: make nums async
-export module api {
+module api {
     nums: func() -> stream<s32> {
         let (s, w) = stream-pair(1);
         s

@@ -14,10 +14,12 @@
 // wasm), calling the runtime's start (the collector, the arguments), the program's main, and its end
 // (stdout flushed, main's value the exit code).
 
+from "std:cli" include environment;
+
 // a func being lowered: the module (and its types), the func, its IR, the block instructions go to,
 // each local's slot (none for a () one), and the loops and labeled blocks around (each label, where
 // its continue goes: -1 for a block's, and where its break goes)
-record Lower {
+resource Lower {
     m: BcModule,
     types: Types,
     made: Made,
@@ -54,7 +56,7 @@ record Lower {
 
 // what a module's types are made of: the module, the program's declarations, the target's C ABI
 // (imports: a WIT import's wrapper's C name to its native host's: imports-hosts in gen.yel)
-record Types { m: BcModule, g: Gen, abi: string, imports: map<string, string>, }
+resource Types { m: BcModule, g: Gen, abi: string, imports: map<string, string>, }
 
 // (gen's core imports: Types.g.core-imports, by their C names)
 
@@ -63,7 +65,7 @@ record Types { m: BcModule, g: Gen, abi: string, imports: map<string, string>, }
 // (codegen's pure-call: it reads and writes no memory, and collects nothing)
 // (calling-pure: the call being made is such a one); the program's globals, by key (each a
 // variable of the module's, zero to start with)
-record Made { singletons: map<string, s64>, pure: map<string, bool>, calling-pure: bool, globals: map<string, s64>, }
+resource Made { singletons: map<string, s64>, pure: map<string, bool>, calling-pure: bool, globals: map<string, s64>, }
 
 // a canonical struct (abi.yel's A_<id>): its members (their C names, and their canonical types:
 // abi-of's), and its union's (the last member, u: each case's, and none, a byte)
@@ -84,6 +86,13 @@ module llvm {
         let types: Types = { m: m, g: g, abi: abi, imports: imports, };
         let made: Made = { singletons: map.new(), pure: map.new(), calling-pure: false, globals: map.new(), };
         let index: map<string, s64> = map.new();
+        if g.context.debug {
+            bitcode.debug-info(m, "yelc");
+            // (the compile unit's file: the first, main's)
+            for f in funcs {
+                if f.key == "main" && f.span.source >= 0 { let _ = bitcode.file-index(m, source-path(g, f.span.source)); }
+            }
+        }
         // a func made only for another target (a helper's build: a native host's wrapper, a
         // component's): not this module's
         let wasm = abi == "wasm32";
@@ -101,6 +110,8 @@ module llvm {
                 let pointer = bitcode.pointer-type(m);
                 index.set(f.c-name, bitcode.add-func(m, f.c-name, bitcode.func-type(m, bitcode.int-type(m, 32), [pointer,]), 1, true, true));
                 index.set(start-name(f), bitcode.add-func(m, start-name(f), bitcode.func-type(m, pointer, params), params.len(), true, true));
+                described(types, f, index[f.c-name]);
+                described(types, f, index[start-name(f)]);
                 continue;
             }
             // a component's export: the host's to call (by its name, on wasm)
@@ -109,6 +120,7 @@ module llvm {
                 bitcode.set-attributes(m, at, [{ index: -1, attributes: bitcode.string-attribute("wasm-export-name", f.export-name), },]);
             }
             index.set(f.c-name, at);
+            described(types, f, at);
         }
         for f in funcs {
             lower-func(types, made, f, index, externs);
@@ -206,6 +218,177 @@ module llvm {
         }
     }
 
+    // a func of source's debug info (yelc -g): its subprogram, on the line it is declared on, in
+    // its file (absolute: what a debugger finds it by); its instructions' first location there
+    described: func(types: Types, ir: IrFunc, at: s64) {
+        let m = types.m;
+        if !m.debug || ir.span.source < 0 || ir.span.line <= 0 { return; }
+        let f = m.funcs[at];
+        f.subprogram = some({
+            name: base-name(ir.key),
+            linkage: f.name,
+            file: bitcode.file-index(m, source-path(types.g, ir.span.source)),
+            line: ir.span.line,
+        });
+        f.line = ir.span.line;
+        f.col = ir.span.col;
+    }
+
+    // each named local's debug info (yelc -g): its variable, declared at its slot, where its
+    // binding is written (else where the func is), a parameter's number among the params
+    declare-locals: func(l: Lower) {
+        let ir = l.ir;
+        match l.f.subprogram {
+            some(_) => {}
+            none => { return; }
+        }
+        for k in 0..ir.locals.len() {
+            let local = ir.locals[k];
+            if local.name == "" { continue; }
+            let slot = match l.slots[k] {
+                some(at) => at,
+                none => { continue; }
+            };
+            let line = ir.span.line;
+            let col = ir.span.col;
+            match local.binding {
+                some(mark) => {
+                    if mark.span.source == ir.span.source && mark.span.line > 0 {
+                        line = mark.span.line;
+                        col = mark.span.col;
+                    }
+                }
+                none => {}
+            }
+            l.f.variables.push({
+                name: local.name,
+                line: line,
+                col: col,
+                arg: ir.params.index-of(k) + 1,
+                ty: debug-type(l.types, ir, local.ty),
+                slot: slot,
+            });
+        }
+    }
+
+    // a value's debug type (an index into the module's), as its slot holds it: a number, a bool,
+    // a char as DWARF's base types; a string's { len, data }; a record's or a variant's object
+    // behind its pointer (its fields; a variant's tag); a tuple's, an anonymous record's, an
+    // option's or a result's fields; a list, a map, a stream as a pointer; anything else a struct
+    // of its size, by its name. Each made once, by how its type shows
+    debug-type: func(ty: Types, f: IrFunc, t0: Type) -> s64 {
+        let m = ty.m;
+        let t = resolve(t0);
+        let key = show-type(t);
+        match m.debug-type-keys.get(key) {
+            some(index) => { return index; }
+            none => {}
+        }
+        if needs-representing(t) {
+            // a record (a value): held as the anonymous record of its fields, named as declared
+            let shown = represented(t);
+            match (t, shown) {
+                (named(n), anon-record(r)) => {
+                    let made = debug-struct(ty, f, base-name(name-text(n)), r.fields, r.types);
+                    m.debug-type-keys.set(key, made);
+                    return made;
+                }
+                _ => { return debug-type(ty, f, shown); }
+            }
+        }
+        let pointer-bits = calling.pointer-bytes(ty.abi) * 8;
+        let bits = size-align(ty, f, t)[0] * 8;
+        // DWARF's encodings: boolean 2, float 4, signed 5, unsigned 7, unsigned char 8, UTF 16
+        let made = match t {
+            num(n) => bitcode.debug-type(m, 0, n, bits, if n == "f32" || n == "f64" { 4 } else if signed(t) { 5 } else { 7 }, -1, 0, []),
+            bool-type => bitcode.debug-type(m, 0, "bool", 8, 2, -1, 0, []),
+            char-type => bitcode.debug-type(m, 0, "char", 32, 16, -1, 0, []),
+            string-type => {
+                let len = debug-type(ty, f, Type.num("s64"));
+                let byte = bitcode.debug-type(m, 0, "u8", 8, 8, -1, 0, []);
+                let data = bitcode.debug-type(m, 1, "", pointer-bits, 0, byte, 0, []);
+                let members = [
+                    bitcode.debug-type(m, 2, "len", 64, 0, len, 0, []),
+                    bitcode.debug-type(m, 2, "data", pointer-bits, 0, data, 64, []),
+                ];
+                bitcode.debug-type(m, 3, "string", 64 + pointer-bits, 0, -1, 0, members)
+            }
+            named(n) => {
+                let kind = gen.named-kind(ty.g, n);
+                if kind == "record" || kind == "variant" {
+                    // (the pointer made first, and known by its key: a field may point at it)
+                    let pointer = bitcode.debug-type(m, 1, "", pointer-bits, 0, -1, 0, []);
+                    m.debug-type-keys.set(key, pointer);
+                    let object = if kind == "record" {
+                        let r = ty.g.symbols.records[n];
+                        debug-struct(ty, f, base-name(name-text(n)), r.fields, r.field-types)
+                    } else {
+                        let tag = bitcode.debug-type(m, 2, "tag", 32, 0, debug-type(ty, f, Type.num("u32")), 0, []);
+                        bitcode.debug-type(m, 3, base-name(name-text(n)), object-layout(ty, f, n)[0] * 8, 0, -1, 0, [tag,])
+                    };
+                    m.debug-types[pointer].base = object;
+                    return pointer;
+                }
+                bitcode.debug-type(m, 0, base-name(name-text(n)), bits, 7, -1, 0, [])
+            }
+            tuple-type(xs) => {
+                let names: list<string> = [];
+                for index in 0..xs.len() { names.push("{index}"); }
+                debug-struct(ty, f, key, names, xs)
+            }
+            // (a record held by value: the anonymous record of its fields, named as declared)
+            anon-record(r) => debug-struct(ty, f, if r.name != "" { base-name(r.name) } else { key }, r.fields, r.types),
+            option-type(x) => debug-struct(ty, f, key, ["some", "value",], [Type.bool-type, x,]),
+            result-type(r) => debug-struct(ty, f, key, ["ok", "value", "error",], [Type.bool-type, r.ok, r.err,]),
+            list-type(_) => debug-opaque(ty, key, pointer-bits),
+            map-type(_) => debug-opaque(ty, key, pointer-bits),
+            buffer-type => debug-opaque(ty, key, pointer-bits),
+            stream-type(_) => debug-opaque(ty, key, pointer-bits),
+            future-type(_) => debug-opaque(ty, key, pointer-bits),
+            seq-type(_) => debug-opaque(ty, key, pointer-bits),
+            _ => bitcode.debug-type(m, 3, key, bits, 0, -1, 0, []),
+        };
+        m.debug-type-keys.set(key, made);
+        made
+    }
+
+    // a struct of fields (their names and types), laid out as the module's struct of them is
+    debug-struct: func(ty: Types, f: IrFunc, name: string, names: list<string>, types: list<Type>) -> s64 {
+        let members: list<s64> = [];
+        let offset = 0;
+        let align = 1;
+        for index in 0..names.len() {
+            let layout = size-align(ty, f, types[index]);
+            offset = round-up(offset, layout[1]);
+            let base = debug-type(ty, f, types[index]);
+            members.push(bitcode.debug-type(ty.m, 2, names[index], layout[0] * 8, 0, base, offset * 8, []));
+            offset += layout[0];
+            if layout[1] > align { align = layout[1]; }
+        }
+        bitcode.debug-type(ty.m, 3, name, round-up(offset, align) * 8, 0, -1, 0, members)
+    }
+
+    // a pointer to what DWARF is not told the inside of (a list's, a map's), by its type's name
+    debug-opaque: func(ty: Types, name: string, pointer-bits: s64) -> s64 {
+        let object = bitcode.debug-type(ty.m, 3, name, 0, 0, -1, 0, []);
+        bitcode.debug-type(ty.m, 1, "", pointer-bits, 0, object, 0, [])
+    }
+
+    // a source's path, absolute (what a debugger finds it by, from anywhere)
+    source-path: func(g: Gen, source: s64) -> string {
+        let path = g.context.sources[source].path;
+        if path.starts-with("/") { path } else { "{environment.get-initial-cwd().unwrap-or(".")}/{path}" }
+    }
+
+    // where the instructions made next come from: n's place, where it has one in the func's own
+    // file (one inlined from another file's: the place before it)
+    locate: func(l: Lower, n: Node) {
+        if n.span.line > 0 && n.span.source == l.ir.span.source {
+            l.f.line = n.span.line;
+            l.f.col = n.span.col;
+        }
+    }
+
     lower-func: func(types: Types, made: Made, ir: IrFunc, index: map<string, s64>, externs: map<string, string>) {
         let m = types.m;
         let f = m.funcs[index[ir.c-name]];
@@ -232,6 +415,7 @@ module llvm {
                 l.slots.push(some(slot));
             }
         }
+        declare-locals(l);
         // the collector's roots (its frame pushed), then each param's value stored in its slot
         // (and its pointers in their roots)
         frame-start(l);
@@ -309,7 +493,34 @@ module llvm {
         if ir.async {
             let task = must(call(index[start-name(ir)], given, true));
             let _ = call(index[types.g.funcs["yel:std/async.run-tasks"].c-name], [task,], false);
-            let done = must(call(finish, [bitcode.integer(f, i64, 0),], true));
+            // its result, from its frame (field 1), the exit status: read before anything
+            // allocates again, so no collection lets the done task go first (as the C backend's)
+            let status = if is-unit(ir.result) {
+                bitcode.integer(f, i64, 0)
+            } else {
+                let frame = task-frame(types, ir);
+                let field = must(bitcode.add-inst(f, 0, 43, [
+                    BcOperand.raw(1),
+                    BcOperand.raw(frame as u64),
+                    BcOperand.value(task),
+                    BcOperand.value(bitcode.integer(f, i32, 0)),
+                    BcOperand.value(bitcode.integer(f, i32, 1)),
+                ], true));
+                let value = must(bitcode.add-inst(f, 0, 20, [
+                    BcOperand.value(field),
+                    BcOperand.raw(value-type(types, ir, ir.result) as u64),
+                    BcOperand.raw(align-code(size-align(types, ir, ir.result)[1])),
+                    BcOperand.raw(0),
+                ], true));
+                if bits(ir.result) == 64 { value } else {
+                    must(bitcode.add-inst(f, 0, 3, [
+                        BcOperand.value(value),
+                        BcOperand.raw(i64 as u64),
+                        BcOperand.raw(if signed(ir.result) { 2 } else { 1 }),
+                    ], true))
+                }
+            };
+            let done = must(call(finish, [status,], true));
             let _ = bitcode.add-inst(f, 0, 10, [BcOperand.value(done),], false);
             return;
         }
@@ -345,7 +556,17 @@ module llvm {
         }
     }
 
+    // a statement lowered, its instructions at its place (and its parts' at theirs)
     stmt: func(l: Lower, n: Node) {
+        let line = l.f.line;
+        let col = l.f.col;
+        locate(l, n);
+        stmt-kind(l, n);
+        l.f.line = line;
+        l.f.col = col;
+    }
+
+    stmt-kind: func(l: Lower, n: Node) {
         match n.kind {
             assign(x) => {
                 let v = match x.value.kind {
@@ -494,8 +715,18 @@ module llvm {
 
     // ---- values
 
-    // n's value (none: a () one)
+    // n's value (none: a () one), its instructions at its place (what uses it after: at its own)
     value: func(l: Lower, n: Node) -> option<BcValue> {
+        let line = l.f.line;
+        let col = l.f.col;
+        locate(l, n);
+        let made = value-kind(l, n);
+        l.f.line = line;
+        l.f.col = col;
+        made
+    }
+
+    value-kind: func(l: Lower, n: Node) -> option<BcValue> {
         match n.kind {
             const(c) => {
                 if is-unit(n.ty) { return none; }
@@ -1435,7 +1666,7 @@ module llvm {
             named(n) => {
                 let kind = gen.named-kind(ty.g, n);
                 if kind == "record" || kind == "variant" { return pointer; }
-                if kind == "flags" && ty.g.flags[n].flags.len() > 32 { return bitcode.int-type(m, 64); }
+                if kind == "flags" && ty.g.symbols.flags[n].flags.len() > 32 { return bitcode.int-type(m, 64); }
                 bitcode.int-type(m, 32)
             }
             _ => unsupported(f, "a value of {show-type(t)}"),
@@ -1482,7 +1713,7 @@ module llvm {
             named(n) => {
                 let kind = gen.named-kind(ty.g, n);
                 if kind == "record" || kind == "variant" { return [p, p,]; }
-                if kind == "flags" && ty.g.flags[n].flags.len() > 32 { return [8, 8,]; }
+                if kind == "flags" && ty.g.symbols.flags[n].flags.len() > 32 { return [8, 8,]; }
                 [4, 4,]
             }
             // a pointer: a list, a map, a buffer, a stream, a started call
@@ -1563,12 +1794,12 @@ module llvm {
                 union();
             }
             named(n) => {
-                if g.records.has(n) {
-                    let r = g.records[n];
+                if g.symbols.records.has(n) {
+                    let r = g.symbols.records[n];
                     let types = gen.wit-field-types(g, n);
                     for i in 0..r.fields.len() { member("f_" + gen.mangle(r.fields[i]), gen.abi-of(g, types[i])); }
                 } else {
-                    let v = g.variants[n];
+                    let v = g.symbols.variants[n];
                     member("tag", gen.tag-num(v.cases.len()));
                     for k in v.cases {
                         if k.has-payload { case("c_" + gen.mangle(k.name), gen.wit-payload(g, n, k.name)); }
@@ -1650,13 +1881,13 @@ module llvm {
 
     // a record's object (R_x): its fields' struct ({ i8 } for none)
     record-object: func(ty: Types, f: IrFunc, name: Name) -> s64 {
-        let r = ty.g.records[name];
+        let r = ty.g.symbols.records[name];
         if r.fields.len() == 0 { return bitcode.struct-type(ty.m, [bitcode.int-type(ty.m, 8),]); }
         bitcode.struct-type(ty.m, r.field-types.map({ x -> field-type(ty, f, x) }))
     }
 
     record-layout: func(ty: Types, f: IrFunc, name: Name) -> list<s64> {
-        let r = ty.g.records[name];
+        let r = ty.g.symbols.records[name];
         if r.fields.len() == 0 { return [1, 1,]; }
         struct-layout(r.field-types.map({ x -> size-align(ty, f, x) }))
     }
@@ -1673,7 +1904,7 @@ module llvm {
     union-layout: func(ty: Types, f: IrFunc, name: Name) -> list<s64> {
         let size = 1;
         let align = 1;
-        for k in ty.g.variants[name].cases {
+        for k in ty.g.symbols.variants[name].cases {
             if !k.has-payload { continue; }
             let part = size-align(ty, f, k.payload);
             if part[0] > size { size = part[0]; }
@@ -1688,11 +1919,11 @@ module llvm {
 
     // a named type's object (a record's or a variant's)
     object-type: func(ty: Types, f: IrFunc, name: string) -> s64 {
-        if ty.g.records.has(intern(name)) { record-object(ty, f, intern(name)) } else { variant-object(ty, f, name) }
+        if ty.g.symbols.records.has(intern(name)) { record-object(ty, f, intern(name)) } else { variant-object(ty, f, name) }
     }
 
     object-layout: func(ty: Types, f: IrFunc, name: Name) -> list<s64> {
-        if ty.g.records.has(name) { record-layout(ty, f, name) } else { variant-layout(ty, f, name) }
+        if ty.g.symbols.records.has(name) { record-layout(ty, f, name) } else { variant-layout(ty, f, name) }
     }
 
     // the name a type is declared by (a record's or a variant's, behind a pointer), or ""
@@ -1726,7 +1957,7 @@ module llvm {
             }
             if union-of != "" {
                 // a case of a variant's union: its payload, at the union's address
-                let v = ty.g.variants[intern(union-of)];
+                let v = ty.g.symbols.variants[intern(union-of)];
                 let found = false;
                 for k in v.cases {
                     if k.has-payload && "c_{gen.mangle(k.name)}" == part {
@@ -1750,8 +1981,8 @@ module llvm {
                     continue;
                 }
                 let container = object-type(ty, l.ir, name);
-                if ty.g.records.has(intern(name)) {
-                    let r = ty.g.records[intern(name)];
+                if ty.g.symbols.records.has(intern(name)) {
+                    let r = ty.g.symbols.records[intern(name)];
                     let index = -1;
                     for i in 0..r.fields.len() {
                         if "f_{gen.mangle(r.fields[i])}" == part { index = i; }
@@ -2100,7 +2331,7 @@ module llvm {
     singleton-value: func(l: Lower, x: CaseConstant) -> BcValue {
         let name = gen.singleton(x.owner, x.name);
         if l.made.singletons.has(name) { return BcValue.global(l.made.singletons[name]); }
-        let v = l.types.g.variants[intern(x.owner)];
+        let v = l.types.g.symbols.variants[intern(x.owner)];
         let tag = -1;
         for i in 0..v.cases.len() {
             if v.cases[i].name == x.name { tag = i; }
@@ -2315,16 +2546,21 @@ module llvm {
     // 0, or is done, 1)
 
     // a task's header (y_async: its step, the state it waits in, done, spawned, queued, when it was
-    // done, its owner, its release)
+    // done, its owner, its release, its async context's values, its number and its name)
     async-type: func(m: BcModule) -> s64 {
         let i32 = bitcode.int-type(m, 32);
         let pointer = bitcode.pointer-type(m);
-        bitcode.struct-type(m, [pointer, i32, i32, i32, i32, bitcode.int-type(m, 64), pointer, pointer,])
+        bitcode.struct-type(m, [pointer, i32, i32, i32, i32, bitcode.int-type(m, 64), pointer, pointer, pointer, bitcode.int-type(m, 64), pointer,])
     }
 
     async-layout: func(abi: string) -> list<s64> {
         let p = calling.pointer-bytes(abi);
-        struct-layout([[p, p,], [4, 4,], [4, 4,], [4, 4,], [4, 4,], [8, 8,], [p, p,], [p, p,],])
+        struct-layout([[p, p,], [4, 4,], [4, 4,], [4, 4,], [4, 4,], [8, 8,], [p, p,], [p, p,], [p, p,], [8, 8,], [p, p,],])
+    }
+
+    // an async func's name, as YEL_ASYNC_TRACE tells its tasks (std's without its package)
+    task-name: func(ir: IrFunc) -> string {
+        if ir.key.starts-with("yel:std/") { ir.key.substring(8, ir.key.len()) } else { ir.key }
     }
 
     // an async func's start: s_<name>, as the C backend names it
@@ -2409,6 +2645,7 @@ module llvm {
         let frame = must(runtime-call(l, y-new, [bitcode.integer(l.f, size-type, size as u64), BcValue.function(task-trace(l)),], true));
         l.task = frame;
         store-as(l, header-field(l, 0), BcValue.function(index[ir.c-name]), align-code(calling.pointer-bytes(types.abi)));
+        store-as(l, header-field(l, 10), BcValue.global(c-string-global(m, task-name(ir))), align-code(calling.pointer-bytes(types.abi)));
         // its release: stepped in Y_RELEASE_STATE (it lets its host's end go)
         if ir.release {
             let release = bitcode.declared(m, "y_async_release_by_step", bitcode.func-type(m, bitcode.void-type(m), [pointer,]), 1);
@@ -2669,8 +2906,10 @@ module llvm {
                 let length = load-as(l, field-address(l, items, ylist-type(m), 0), i64, word);
                 return some(compare(l, 40, length, load-as(l, stream-field(1), i64, word)));
             }
+            // (the runtime's: the task the stream wakes, and what it waits for told by YEL_ASYNC_TRACE)
             if name == "streams.park-reader" || name == "streams.park-writer" {
-                store-as(l, stream-field(if name == "streams.park-reader" { 3 } else { 4 }), now(), word);
+                let parked = if name == "streams.park-reader" { "yel_stream_park_reader" } else { "yel_stream_park_writer" };
+                let _ = c-function(l, parked, bitcode.void-type(m), [pointer,], [args[0],]);
                 return none;
             }
             if name == "streams.wake-writer" || name == "streams.wake-reader" {
@@ -2970,7 +3209,7 @@ module llvm {
         let kinds = [
             "UNIT", "BOOL", "CHAR", "SIGNED", "UNSIGNED", "F32", "F64", "STRING", "BUFFER", "MAP", "LIST", "FIXED", "OPTION",
             "RESULT", "TUPLE", "ANON_RECORD", "RECORD", "VARIANT", "ENUM", "FLAGS", "HANDLE", "UNION", "FUNC", "FUTURE", "SEQ",
-            "STREAM",
+            "STREAM", "VALUE_RECORD",
         ];
         let kind = "UNIT";
         let count = 0;
@@ -3015,7 +3254,7 @@ module llvm {
                 offsets = struct-offsets(layout(members));
             }
             anon-record(fields) => {
-                kind = "ANON_RECORD";
+                kind = if fields.name != "" { "VALUE_RECORD" } else { "ANON_RECORD" };
                 count = fields.fields.len();
                 for x in fields.types { parts.push(some(x)); }
                 offsets = struct-offsets(layout(fields.types));
@@ -3033,20 +3272,21 @@ module llvm {
                 let declared = gen.named-kind(g, type-name);
                 if declared == "record" {
                     kind = "RECORD";
-                    let decl = g.records[type-name];
-                    count = decl.fields.len();
-                    for x in decl.field-types { parts.push(some(x)); }
-                    offsets = struct-offsets(layout(decl.field-types));
-                    names = decl.fields;
+                    let decl = g.symbols.records[type-name];
+                    // (an observable resource's registrar, its last field, not shown)
+                    count = gen.observed-count(decl);
+                    for i in 0..count { parts.push(some(decl.field-types[i])); }
+                    offsets = struct-offsets(layout(decl.field-types)).slice(0, count);
+                    names = decl.fields.slice(0, count);
                 } else if declared == "flags" {
                     kind = "FLAGS";
-                    count = g.flags[type-name].flags.len();
-                    names = g.flags[type-name].flags;
+                    count = g.symbols.flags[type-name].flags.len();
+                    names = g.symbols.flags[type-name].flags;
                 } else if declared == "handle" {
                     kind = "HANDLE";
                     names = [base-name(name-text(type-name)),];
                 } else {
-                    let decl = g.variants[type-name];
+                    let decl = g.symbols.variants[type-name];
                     kind = if declared == "enum" { "ENUM" } else { "VARIANT" };
                     count = decl.cases.len();
                     let payload-at = struct-offsets([[4, 4,], union-layout(l.types, l.ir, type-name),])[1];
@@ -3154,7 +3394,7 @@ record Layout { aggregate: bool, scalars: list<Scalar>, size: s64, align: s64, }
 // one IR param (or result) a value crosses as: count of one scalar kind, as one scalar, an array
 // of them (arm64's [2 x i64], [n x double]) or a vector (x86-64's <2 x float>), loaded from offset
 // bytes into it, as clang writes it
-record Part { kind: ScalarKind, bits: s64, count: s64, offset: s64, form: PartForm, }
+resource Part { kind: ScalarKind, bits: s64, count: s64, offset: s64, form: PartForm, }
 
 variant PartForm {
     scalar,

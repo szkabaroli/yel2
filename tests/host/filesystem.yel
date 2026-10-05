@@ -1,0 +1,105 @@
+// wasi:filesystem used directly: natively std's host, in a component the host's own (the working
+// directory preopened). Each test in a directory of its own under build/
+
+from "std:testing" include expect;
+from "wasi:filesystem" include types, preopens;
+
+module filesystem-tests {
+    // the working directory (the first preopen)
+    root: func() -> types.descriptor {
+        let dirs = preopens.get-directories();
+        dirs[0].0
+    }
+
+    // no flags (a set with none: one flag and itself)
+    no-path-flags: func() -> types.path-flags { types.path-flags.symlink-follow & types.path-flags.symlink-follow }
+
+    no-open-flags: func() -> types.open-flags { types.open-flags.create & types.open-flags.directory }
+
+    // text written to path (made, or emptied)
+    write-file: async func(dir: types.descriptor, path: string, text: string) {
+        let file = expect.ok(wait dir.open-at(types.path-flags.symlink-follow, path, types.open-flags.create | types.open-flags.truncate, types.descriptor-flags.write));
+        let (bytes, out): tuple<stream<u8>, writer<u8>> = streams.stream-pair(64);
+        let written = file.write-via-stream(bytes, 0);
+        for byte in text.bytes() { wait streams.write(out, byte); }
+        streams.close(out);
+        expect.ok(wait written);
+        file.drop();
+    }
+
+    // path's text, from offset on
+    read-file: async func(dir: types.descriptor, path: string, offset: u64) -> string {
+        let file = expect.ok(wait dir.open-at(types.path-flags.symlink-follow, path, no-open-flags(), types.descriptor-flags.read));
+        let (bytes, reading) = file.read-via-stream(offset);
+        let text = buffer.buffer(16);
+        loop {
+            match wait streams.read(bytes) {
+                some(byte) => text.push-byte(byte as s64),
+                none => { break; }
+            }
+        }
+        expect.ok(wait reading);
+        file.drop();
+        text.to-string()
+    }
+
+    // a handle's method on any target: a call's result, a tuple's field (wait waits for the
+    // method, not for what gives the handle)
+    @(test) calls-a-handle-anywhere: async func() {
+        expect.equal(expect.ok(wait root().stat()).type, types.descriptor-type.directory);
+        let dirs = preopens.get-directories();
+        expect.equal(expect.ok(wait dirs[0].0.stat()).type, types.descriptor-type.directory);
+    }
+
+    @(test) makes-directories: async func() {
+        let dir = root();
+        expect.ok(wait dir.create-directory-at("build/fs-test-dirs"));
+        expect.equal(wait dir.create-directory-at("build/fs-test-dirs"), err(types.error-code.exist));
+        expect.ok(wait dir.remove-directory-at("build/fs-test-dirs"));
+    }
+
+    @(test) writes-and-reads-a-file: async func() {
+        let dir = root();
+        let _ = wait dir.create-directory-at("build/fs-test-file");
+        wait write-file(dir, "build/fs-test-file/a.txt", "hello");
+        let found = expect.ok(wait dir.stat-at(types.path-flags.symlink-follow, "build/fs-test-file/a.txt"));
+        expect.equal("{found.type} {found.size}", "regular-file 5");
+        expect.equal(wait read-file(dir, "build/fs-test-file/a.txt", 1), "ello");
+        expect.ok(wait dir.unlink-file-at("build/fs-test-file/a.txt"));
+        expect.ok(wait dir.remove-directory-at("build/fs-test-file"));
+    }
+
+    @(test) tells-a-missing-file: async func() {
+        let opened = wait root().open-at(types.path-flags.symlink-follow, "build/fs-test-none.txt", no-open-flags(), types.descriptor-flags.read);
+        match opened {
+            ok(file) => {
+                file.drop();
+                expect.fail("a missing file opened");
+            }
+            err(error) => expect.equal(error, types.error-code.no-entry),
+        }
+    }
+
+    @(test) lists-renames-and-removes: async func() {
+        let dir = root();
+        let _ = wait dir.create-directory-at("build/fs-test-list");
+        wait write-file(dir, "build/fs-test-list/a.txt", "x");
+        let listed = expect.ok(wait dir.open-at(no-path-flags(), "build/fs-test-list", types.open-flags.directory, types.descriptor-flags.read));
+        let (entries, reading) = listed.read-directory();
+        let names: list<string> = [];
+        loop {
+            match wait streams.read(entries) {
+                some(entry) => names.push("{entry.name} {entry.type}"),
+                none => { break; }
+            }
+        }
+        expect.ok(wait reading);
+        listed.drop();
+        expect.equal(names, ["a.txt regular-file",]);
+        expect.ok(wait dir.rename-at("build/fs-test-list/a.txt", dir, "build/fs-test-list/b.txt"));
+        expect.equal(wait dir.remove-directory-at("build/fs-test-list"), err(types.error-code.not-empty));
+        expect.ok(wait dir.unlink-file-at("build/fs-test-list/b.txt"));
+        expect.equal(wait dir.unlink-file-at("build/fs-test-list/b.txt"), err(types.error-code.no-entry));
+        expect.ok(wait dir.remove-directory-at("build/fs-test-list"));
+    }
+}

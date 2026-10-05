@@ -1,0 +1,303 @@
+//+build native
+
+// wasi:sockets natively, as host-filesystem.yel is wasi:filesystem: a tcp-socket over the system's
+// socket calls, and ip-name-lookup over its resolver (getaddrinfo, on libuv's thread pool). A socket's handle is its fd + 1; what it is (its family, bound, listening) the
+// system is asked, not kept. A socket address crosses as numbers (runtime/wasi-native.h's
+// yn_socket_*): its family (0 ipv4, 1 ipv6), port, flow info and scope id, then the address's 4
+// bytes or 8 segments. A socket never blocks: where a call would (EAGAIN, a connect's
+// EINPROGRESS), the task waits on the descriptor's watch, the reactor waking it once the socket can
+// be read or written (runtime/yel.c's yel_async_ready), so other tasks go on meanwhile. A
+// program's calls of wasi:sockets bind to these natively and to the host itself in a component.
+
+from "wasi:sockets" include types, ip-name-lookup;
+
+module wasi-sockets-ip-name-lookup {
+    // a name's addresses (an IP address's text: itself), as the system's resolver gives them
+    // (getaddrinfo, on libuv's thread pool: other tasks go on while it looks), in its order, each
+    // once; an error where there are none
+    resolve-addresses: async func(name: string) -> result<list<types.ip-address>, ip-name-lookup.error-code> {
+        if name == "" || name.contains("\u{0}") { return err(ip-name-lookup.error-code.invalid-argument); }
+        // (out, the frame's, holds what it writes: 9 numbers an address, up to 32)
+        let out: list<s64> = [];
+        for index in 0..32 * 9 { out.push(0); }
+        let c-name = memory.c-path(name);
+        let (count, errno) = wait system.pooled(network.pool-lookup(c-name, memory.items-address(out), 32));
+        memory.free(c-name);
+        let _ = errno;
+        if count == -1 { return err(ip-name-lookup.error-code.name-unresolvable); }
+        if count == -2 { return err(ip-name-lookup.error-code.temporary-resolver-failure); }
+        if count == -3 { return err(ip-name-lookup.error-code.permanent-resolver-failure); }
+        if count < 0 { return err(ip-name-lookup.error-code.other(some("the resolver failed"))); }
+        let addresses: list<types.ip-address> = [];
+        for index in 0..count {
+            let at = index * 9;
+            if out[at] == 4 {
+                addresses.push(types.ip-address.ipv4((out[at + 1] as u8, out[at + 2] as u8, out[at + 3] as u8, out[at + 4] as u8)));
+            } else {
+                addresses.push(types.ip-address.ipv6((
+                    out[at + 1] as u16,
+                    out[at + 2] as u16,
+                    out[at + 3] as u16,
+                    out[at + 4] as u16,
+                    out[at + 5] as u16,
+                    out[at + 6] as u16,
+                    out[at + 7] as u16,
+                    out[at + 8] as u16,
+                )));
+            }
+        }
+        ok(addresses)
+    }
+}
+
+module wasi-sockets-types {
+    // ---- a socket and its fd
+
+    socket-of: func(fd: s64) -> types.tcp-socket { memory.handle(fd + 1) }
+
+    fd: func(socket: types.tcp-socket & readonly) -> s64 { memory.handle-number(socket) - 1 }
+
+    // (its watch ended first: who waits on it is woken, and its call then fails)
+    tcp-socket-drop: func(self: types.tcp-socket) {
+        stdio.forget(fd(self));
+        system.close(fd(self));
+    }
+
+    tcp-socket-create: func(address-family: types.ip-address-family) -> result<types.tcp-socket, types.error-code> {
+        let domain = match address-family {
+            ipv4 => network.inet(),
+            ipv6 => network.inet6(),
+        };
+        let opened = network.socket(domain);
+        if opened < 0 { return err(failure(system.errno())); }
+        let made = network.nonblocking(opened);
+        if made < 0 {
+            system.close(opened);
+            return err(failure(-made));
+        }
+        ok(socket-of(opened))
+    }
+
+    // ---- what a socket is
+
+    tcp-socket-get-address-family: func(self: types.tcp-socket) -> types.ip-address-family {
+        if local-parts(self)[0] == 0 { types.ip-address-family.ipv4 } else { types.ip-address-family.ipv6 }
+    }
+
+    tcp-socket-get-is-listening: func(self: types.tcp-socket) -> bool { network.is-listening(fd(self)) }
+
+    // ---- its local address
+
+    // bound to local-address, which must be of the socket's family
+    tcp-socket-bind: func(self: types.tcp-socket, local-address: types.ip-socket-address) -> result<(), types.error-code> {
+        let parts = address-parts(local-address);
+        if parts[0] != local-parts(self)[0] { return err(types.error-code.invalid-argument); }
+        let result = network.bind(fd(self), memory.items-address(parts));
+        if result < 0 { err(failure(-result)) } else { ok(()) }
+    }
+
+    // where the socket is bound (invalid-state before it is: its port still 0)
+    tcp-socket-get-local-address: func(self: types.tcp-socket) -> result<types.ip-socket-address, types.error-code> {
+        let parts = local-parts(self);
+        if parts[1] == 0 { return err(types.error-code.invalid-state); }
+        ok(socket-address(parts))
+    }
+
+    // ---- a connection: made, or listened for
+
+    // connected to remote-address (of the socket's family), waiting while the connection is made
+    tcp-socket-connect: async func(self: types.tcp-socket, remote-address: types.ip-socket-address) -> result<(), types.error-code> {
+        let parts = address-parts(remote-address);
+        if parts[0] != local-parts(self)[0] { return err(types.error-code.invalid-argument); }
+        let begun = network.connect(fd(self), memory.items-address(parts));
+        if begun == 0 { return ok(()); }
+        if -begun != network.e-in-progress() { return err(failure(-begun)); }
+        // writable once the connection is made, or failed (SO_ERROR says which)
+        if stdio.ready(fd(self), 2) { wait async.park(); }
+        let error = network.socket-error(fd(self));
+        if error != 0 { err(failure(error)) } else { ok(()) }
+    }
+
+    // listening: each connection made to it, as a socket, on the stream (a task accepts them)
+    tcp-socket-listen: func(self: types.tcp-socket) -> result<stream<types.tcp-socket>, types.error-code> {
+        let listened = network.listen(fd(self), 128);
+        if listened < 0 { return err(failure(-listened)); }
+        let ends: tuple<stream<types.tcp-socket>, writer<types.tcp-socket>> = streams.stream-pair(16);
+        let (connections, out) = ends;
+        let _ = start accepted(fd(self), out);
+        ok(connections)
+    }
+
+    // each connection fd has queued, until accepting fails (the socket closed, its watch woken)
+    accepted: async func(listening: s64, out: writer<types.tcp-socket>) {
+        loop {
+            let made = network.accept(listening);
+            if made >= 0 {
+                wait streams.write(out, socket-of(made));
+                continue;
+            }
+            if -made != network.e-again() { break; }
+            if stdio.ready(listening, 1) { wait async.park(); }
+        }
+        streams.close(out);
+    }
+
+    // what the peer sends, as it comes, and a future for how the receiving ended
+    tcp-socket-receive: func(self: types.tcp-socket) -> tuple<stream<u8>, future<result<(), types.error-code>>> {
+        let ends: tuple<stream<u8>, writer<u8>> = streams.stream-pair(65536);
+        let (bytes, out) = ends;
+        (bytes, start received(fd(self), out))
+    }
+
+    received: async func(socket: s64, out: writer<u8>) -> result<(), types.error-code> {
+        loop {
+            let chunk = buffer.buffer(65536);
+            let got = network.receive(socket, memory.buffer-data(chunk), 65536);
+            if got == 0 { break; }
+            if got < 0 {
+                if -got == network.e-again() {
+                    if stdio.ready(socket, 1) { wait async.park(); }
+                    continue;
+                }
+                streams.close(out);
+                return err(failure(-got));
+            }
+            memory.set-buffer-length(chunk, got);
+            wait streams.write-all(out, chunk.to-bytes());
+        }
+        streams.close(out);
+        ok(())
+    }
+
+    // data sent as it comes (a task reads it to its end), then the socket's writing ended (the peer
+    // reads its end); a future for how the sending ended
+    tcp-socket-send: func(self: types.tcp-socket, data: stream<u8>) -> future<result<(), types.error-code>> {
+        start sent(fd(self), data)
+    }
+
+    sent: async func(socket: s64, data: stream<u8>) -> result<(), types.error-code> {
+        loop {
+            let bytes = wait streams.read-some(data, 65536);
+            if bytes.len() == 0 { break; }
+            let chunk = buffer.buffer(bytes.len());
+            chunk.push-bytes(bytes);
+            let written = 0;
+            loop {
+                if written >= chunk.len() { break; }
+                let wrote = network.send(socket, memory.buffer-data(chunk) + written, chunk.len() - written);
+                if wrote < 0 {
+                    if -wrote != network.e-again() { return err(failure(-wrote)); }
+                    if stdio.ready(socket, 2) { wait async.park(); }
+                    continue;
+                }
+                written += wrote;
+            }
+        }
+        let ended = network.shutdown-write(socket);
+        if ended < 0 { err(failure(-ended)) } else { ok(()) }
+    }
+
+    // the address the socket is connected to (invalid-state where it is not)
+    tcp-socket-get-remote-address: func(self: types.tcp-socket) -> result<types.ip-socket-address, types.error-code> {
+        let parts: list<s64> = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,];
+        let result = network.peer(fd(self), memory.items-address(parts));
+        if result < 0 { return err(types.error-code.invalid-state); }
+        ok(socket-address(parts))
+    }
+
+    // the socket's local address as numbers (its family alone before it is bound)
+    local-parts: func(self: types.tcp-socket & readonly) -> list<s64> {
+        let parts: list<s64> = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,];
+        network.local-name(fd(self), memory.items-address(parts));
+        parts
+    }
+
+    address-parts: func(address: types.ip-socket-address) -> list<s64> {
+        match address {
+            ipv4(v4) => [0, v4.port as s64, 0, 0, v4.address.0 as s64, v4.address.1 as s64, v4.address.2 as s64, v4.address.3 as s64, 0, 0, 0, 0,],
+            ipv6(v6) => {
+                let segments = v6.address;
+                [1, v6.port as s64, v6.flow-info as s64, v6.scope-id as s64,
+                    segments.0 as s64, segments.1 as s64, segments.2 as s64, segments.3 as s64,
+                    segments.4 as s64, segments.5 as s64, segments.6 as s64, segments.7 as s64,]
+            }
+        }
+    }
+
+    socket-address: func(parts: list<s64>) -> types.ip-socket-address {
+        if parts[0] == 0 {
+            return types.ip-socket-address.ipv4({
+                port: parts[1] as u16,
+                address: (parts[4] as u8, parts[5] as u8, parts[6] as u8, parts[7] as u8),
+            });
+        }
+        types.ip-socket-address.ipv6({
+            port: parts[1] as u16,
+            flow-info: parts[2] as u32,
+            address: (parts[4] as u16, parts[5] as u16, parts[6] as u16, parts[7] as u16,
+                parts[8] as u16, parts[9] as u16, parts[10] as u16, parts[11] as u16),
+            scope-id: parts[3] as u32,
+        })
+    }
+
+    // ---- why a call failed: errno as WASI's error-code
+
+    failure: func(errno: s64) -> types.error-code {
+        if errno == system.e-access() || errno == system.e-permission() { return types.error-code.access-denied; }
+        if errno == network.e-not-supported() || errno == network.e-family-not-supported() || errno == network.e-protocol-not-supported() { return types.error-code.not-supported; }
+        if errno == system.e-invalid() { return types.error-code.invalid-argument; }
+        if errno == network.e-no-memory() || errno == network.e-no-buffers() { return types.error-code.out-of-memory; }
+        if errno == network.e-timed-out() { return types.error-code.timeout; }
+        if errno == network.e-connected() || errno == network.e-already() { return types.error-code.invalid-state; }
+        if errno == network.e-address-not-available() { return types.error-code.address-not-bindable; }
+        if errno == network.e-address-in-use() { return types.error-code.address-in-use; }
+        if errno == network.e-host-unreachable() || errno == network.e-network-unreachable() { return types.error-code.remote-unreachable; }
+        if errno == network.e-connection-refused() { return types.error-code.connection-refused; }
+        if errno == network.e-pipe() { return types.error-code.connection-broken; }
+        if errno == network.e-connection-reset() { return types.error-code.connection-reset; }
+        if errno == network.e-connection-aborted() { return types.error-code.connection-aborted; }
+        if errno == network.e-message-size() { return types.error-code.datagram-too-large; }
+        types.error-code.other(none)
+    }
+}
+
+module network {
+    // a name's addresses looked up on the thread pool (the runtime's: yel.c's y_lookup_into)
+    @c(name = "yel_pool_lookup") pool-lookup: extern func(name: s64, out: s64, capacity: s64) -> s64;
+
+    @c(name = "yel_host_sockets_inet") inet: extern func() -> s64;
+    @c(name = "yel_host_sockets_inet6") inet6: extern func() -> s64;
+    @c(name = "yel_host_sockets_socket") socket: extern func(domain: s64) -> s64;
+    @c(name = "yel_host_socket_is_listening") is-listening: extern func(fd: s64) -> bool;
+    @c(name = "yn_socket_bind") bind: extern func(fd: s64, at: s64) -> s64;
+    @c(name = "yn_socket_name") local-name: extern func(fd: s64, at: s64) -> s64;
+    @c(name = "yn_socket_peer") peer: extern func(fd: s64, at: s64) -> s64;
+    @c(name = "yn_socket_connect") connect: extern func(fd: s64, at: s64) -> s64;
+    @c(name = "yel_host_nonblocking") nonblocking: extern func(fd: s64) -> s64;
+    @c(name = "yel_host_socket_listen") listen: extern func(fd: s64, backlog: s64) -> s64;
+    @c(name = "yel_host_socket_accept") accept: extern func(fd: s64) -> s64;
+    @c(name = "yel_host_socket_send") send: extern func(fd: s64, at: s64, count: s64) -> s64;
+    @c(name = "yel_host_socket_receive") receive: extern func(fd: s64, at: s64, count: s64) -> s64;
+    @c(name = "yel_host_socket_shutdown_write") shutdown-write: extern func(fd: s64) -> s64;
+    @c(name = "yel_host_socket_error") socket-error: extern func(fd: s64) -> s64;
+    @c(name = "yel_host_e_again") e-again: extern func() -> s64;
+    @c(name = "yel_host_e_in_progress") e-in-progress: extern func() -> s64;
+
+    @c(name = "yel_host_sockets_e_not_supported") e-not-supported: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_family_not_supported") e-family-not-supported: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_protocol_not_supported") e-protocol-not-supported: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_no_memory") e-no-memory: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_no_buffers") e-no-buffers: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_timed_out") e-timed-out: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_connected") e-connected: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_already") e-already: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_address_not_available") e-address-not-available: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_address_in_use") e-address-in-use: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_host_unreachable") e-host-unreachable: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_network_unreachable") e-network-unreachable: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_connection_refused") e-connection-refused: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_pipe") e-pipe: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_connection_reset") e-connection-reset: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_connection_aborted") e-connection-aborted: extern func() -> s64;
+    @c(name = "yel_host_sockets_e_message_size") e-message-size: extern func() -> s64;
+}

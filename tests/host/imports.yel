@@ -1,0 +1,29 @@
+// WASI 0.3 imports: the environment, random bytes, the clocks; the same lifting and lowering
+// natively and in a component
+
+from "std:testing" include expect;
+from "wasi:cli" include environment;
+from "wasi:random" include random, insecure-seed;
+from "wasi:clocks" include system-clock, monotonic-clock;
+
+module import-tests {
+    @(test) reads-the-environment: func() {
+        expect.holds(environment.get-arguments().len() >= 1);
+        // each variable named
+        expect.holds(environment.get-environment().all({ pair -> pair.0.len() > 0 }));
+    }
+
+    @(test) makes-random-bytes: func() {
+        expect.length(random.get-random-bytes(16), 16);
+        let seed = insecure-seed.get-insecure-seed();
+        expect.not-equal(seed.0, seed.1);
+    }
+
+    @(test) reads-the-clocks: func() {
+        let now = system-clock.now();
+        expect.holds(now.seconds > 1577836800);
+        expect.holds(now.nanoseconds < 1000000000);
+        let a = monotonic-clock.now();
+        expect.holds(monotonic-clock.now() >= a);
+    }
+}

@@ -20,6 +20,46 @@ tasks those wake are woken. False when nothing will wake any task (every one wai
 for nothing). */
 bool yel_async_await(void);
 
+/** The task being stepped, to be woken once fd can be read (events 1) or written (2) without
+blocking; true when it waits so (it parks next), false for one that never waits (a regular file). */
+bool yel_async_ready(int64_t fd, int64_t events);
+
+/** fd about to be closed: its watch ended first, its waiters woken. */
+yunit yel_async_forget(int64_t fd);
+
+/** A blocking call begun on libuv's thread pool, its task woken when it is done: the request. */
+int64_t yel_pool_pread(int64_t fd, int64_t at, int64_t count, int64_t offset);
+int64_t yel_pool_pwrite(int64_t fd, int64_t at, int64_t count, int64_t offset);
+int64_t yel_pool_openat(int64_t dir, int64_t path, int64_t options);
+int64_t yel_pool_mkdirat(int64_t dir, int64_t path);
+int64_t yel_pool_unlinkat(int64_t dir, int64_t path, int64_t flags);
+int64_t yel_pool_renameat(int64_t from_dir, int64_t from, int64_t to_dir, int64_t to);
+int64_t yel_pool_stat(int64_t fd, int64_t path, int64_t follow, int64_t out);
+/** A name's addresses looked up (getaddrinfo) on the thread pool: each 9 numbers into out, at most capacity. */
+int64_t yel_pool_lookup(int64_t name, int64_t out, int64_t capacity);
+bool yel_request_done(int64_t request);
+int64_t yel_request_result(int64_t request);
+int64_t yel_request_error(int64_t request);
+yunit yel_request_free(int64_t request);
+
+/** Sockets that never block (EAGAIN where a call would). */
+int64_t yel_host_nonblocking(int64_t fd);
+int64_t yel_host_socket_send(int64_t fd, int64_t at, int64_t count);
+int64_t yel_host_socket_receive(int64_t fd, int64_t at, int64_t count);
+int64_t yel_host_socket_listen(int64_t fd, int64_t backlog);
+bool yel_host_socket_is_listening(int64_t fd);
+int64_t yel_host_socket_accept(int64_t fd);
+int64_t yel_host_socket_shutdown_write(int64_t fd);
+int64_t yel_host_socket_error(int64_t fd);
+int64_t yel_host_e_again(void);
+int64_t yel_host_e_in_progress(void);
+
+/** Up to count bytes of fd at at (read(2)): how many, 0 at its end, -1 for an error. */
+int64_t yel_host_read(int64_t fd, int64_t at, int64_t count);
+
+/** count bytes at at written to stdout or stderr (2 for stderr), after what print wrote, and flushed. */
+int64_t yel_host_write_out(int64_t fd, int64_t at, int64_t count);
+
 typedef struct { y_async *root; uint32_t set; void (*finish)(y_async *root); int32_t returned; } y_hostroot;
 
 Y_NORETURN void y_no_host(void);

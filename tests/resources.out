@@ -1,6 +1,0 @@
-family: ipv4
-listening: false
-bound
-local: (127, 0, 0, 1), a port chosen: true
-preopen: .
-stdout: not a terminal

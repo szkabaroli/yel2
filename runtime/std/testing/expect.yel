@@ -1,0 +1,127 @@
+// Expectations: assertions that tell what they found, as Go's testing and Odin's core:testing do.
+// Each stops the program (a panic) where its expectation fails, telling the call's place
+// (#caller-location) and what it got against what it wanted. core's assert is the one that takes
+// a bool alone; this package is for what a test checks of values.
+//
+// One of std's packages: from "std:testing" include expect; then expect.equal(got, want),
+// expect.some(found), expect.ok(parsed), expect.snapshot("{value}").
+
+package std:testing@0.1.0;
+
+module expect {
+    // got, which must equal want, as Jest's toEqual: by == (a number's value, a record's fields),
+    // else by what each shows ({x:?}: a list's items, a map's entries, in their order, where == is
+    // a list's or a resource's identity)
+    equal: func<T>(got: T, want: T, location: source-location = #caller-location) {
+        if !alike(got, want) { failed(location, "expect.equal", "got {got:?}, want {want:?}"); }
+    }
+
+    // got, which must not equal unwanted (as equal says)
+    not-equal: func<T>(got: T, unwanted: T, location: source-location = #caller-location) {
+        if alike(got, unwanted) { failed(location, "expect.not-equal", "got {got:?}, which it must not be"); }
+    }
+
+    // got, which must be want itself, as Jest's toBe: by == alone (a list, a resource: the same one)
+    same: func<T>(got: T, want: T, location: source-location = #caller-location) {
+        if got != want { failed(location, "expect.same", "got {got:?}, not the same as {want:?}"); }
+    }
+
+    // whether two values are equal as equal says
+    @(private) alike: func<T>(a: T, b: T) -> bool { a == b || "{a:?}" == "{b:?}" }
+
+    // condition, which must hold (what the call writes it as told where it does not)
+    holds: func(
+        condition: bool,
+        message: string = #caller-expression(condition),
+        location: source-location = #caller-location,
+    ) {
+        if !condition { failed(location, "expect.holds", message); }
+    }
+
+    // a value there must be: the one there is
+    some: func<T>(value: option<T>, location: source-location = #caller-location) -> T {
+        match value {
+            some(inner) => inner,
+            none => failed(location, "expect.some", "got none"),
+        }
+    }
+
+    // no value there must be
+    none: func<T>(value: option<T>, location: source-location = #caller-location) {
+        match value {
+            some(inner) => failed(location, "expect.none", "got some({inner})"),
+            none => {}
+        }
+    }
+
+    // a result that must be ok: its value
+    ok: func<T, E>(value: result<T, E>, location: source-location = #caller-location) -> T {
+        match value {
+            ok(inner) => inner,
+            err(error) => failed(location, "expect.ok", "got err({error})"),
+        }
+    }
+
+    // a result that must be an error: its error
+    err: func<T, E>(value: result<T, E>, location: source-location = #caller-location) -> E {
+        match value {
+            ok(inner) => failed(location, "expect.err", "got ok({inner})"),
+            err(error) => error,
+        }
+    }
+
+    // items, which must hold item
+    contains: func<T>(items: list<T>, item: T, location: source-location = #caller-location) {
+        // (list's: this module's contains is this one)
+        if !list.contains(items, item) {
+            failed(location, "expect.contains", "{item} is not one of {items.len()} items");
+        }
+    }
+
+    // items, of which there must be count
+    length: func<T>(items: list<T>, count: s64, location: source-location = #caller-location) {
+        if items.len() != count {
+            failed(location, "expect.length", "got {items.len()} items, want {count}");
+        }
+    }
+
+    // whole, which must hold part
+    contains-text: func(whole: string, part: string, location: source-location = #caller-location) {
+        if !text.contains(whole, part) {
+            failed(location, "expect.contains-text", "\"{part}\" is not in \"{whole}\"");
+        }
+    }
+
+    // got, which must be want, within tolerance (a float's: computed, not exact)
+    near: func(
+        got: f64,
+        want: f64,
+        tolerance: f64 = 0.000001,
+        location: source-location = #caller-location,
+    ) {
+        let off = if got > want { got - want } else { want - got };
+        if off > tolerance {
+            failed(location, "expect.near", "got {got}, want {want} (within {tolerance})");
+        }
+    }
+
+    // got, which must be as the test's snapshot of it (its next one, as Jest's toMatchSnapshot):
+    // one there is none of yet is written (once the test passes); one that differs fails, telling
+    // how (YEL_SNAPSHOTS=update writes it instead). The runner yelc test makes keeps them
+    snapshot: func(got: string, location: source-location = #caller-location) {
+        match runner.snapshot(got) {
+            ok(_) => {}
+            err(problem) => failed(location, "expect.snapshot", problem),
+        }
+    }
+
+    // a test failed here, for the reason given
+    fail: func(reason: string, location: source-location = #caller-location) -> never {
+        failed(location, "expect.fail", reason)
+    }
+
+    // what failed, where, and what it found: the program stopped
+    @(private) failed: func(location: source-location, what: string, found: string) -> never {
+        panic("{location}: {what}: {found}")
+    }
+}

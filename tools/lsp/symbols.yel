@@ -1,0 +1,244 @@
+// What names name, from the compiler's check (analysis.Checked: its targets, the declarations and
+// locals a name may name, and its references, each name's use and the target it names): the
+// name at a position, its declaration (definition), every use of it (references, highlights),
+// and a line telling it (hover: a func's signature, a type's fields or cases, a value's type).
+// What may be written at a position (completion): analysis.completions'. A file's outline, the
+// signature of the call being written, and a rename (its edits, each file's), from the files'
+// syntax trees: analysis.outline's, signature-help's and rename's.
+
+from "../../compiler" include analysis;
+from "std:encoding/json" include json;
+
+module symbols {
+    // where the name at the position is declared (null: no name there, or one not resolved)
+    definition: async func(state: Server, id: json.value, params: json.value) {
+        let (checked, target) = wait at-position(state, params);
+        // (none where nothing declares it: a structural type's field, a built-in type with no module)
+        if target < 0 || checked.targets[target].place.path == "" {
+            wait rpc.reply(state.connection, id, json.value.null);
+            return;
+        }
+        wait rpc.reply(state.connection, id, location(state, checked, checked.targets[target].place));
+    }
+
+    // every use of the name at the position, its declaration too where the request asks for it
+    references: async func(state: Server, id: json.value, params: json.value) {
+        let (checked, target) = wait at-position(state, params);
+        let found: list<json.value> = [];
+        if target >= 0 {
+            let with-declaration = json.path(params, ["context", "includeDeclaration"]) == some(json.value.boolean(true));
+            let declared = checked.targets[target].place;
+            if with-declaration && declared.path != "" { found.push(location(state, checked, declared)); }
+            for reference in checked.references {
+                if reference.target == target { found.push(location(state, checked, reference.place)); }
+            }
+        }
+        wait rpc.reply(state.connection, id, json.value.array(found));
+    }
+
+    // the uses of the name at the position in its own document (and its declaration, if there)
+    highlights: async func(state: Server, id: json.value, params: json.value) {
+        let (checked, target) = wait at-position(state, params);
+        let found: list<json.value> = [];
+        if target >= 0 {
+            let file = check.path(json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or(""));
+            let declared = checked.targets[target].place;
+            if declared.path == file { found.push(json.object([("range", check.range(state, checked.texts, declared)),])); }
+            for reference in checked.references {
+                if reference.target == target && reference.place.path == file {
+                    found.push(json.object([("range", check.range(state, checked.texts, reference.place)),]));
+                }
+            }
+        }
+        wait rpc.reply(state.connection, id, json.value.array(found));
+    }
+
+    // the name at the position told: its declaration's line, as yel
+    hover: async func(state: Server, id: json.value, params: json.value) {
+        let (checked, target) = wait at-position(state, params);
+        if target < 0 {
+            wait rpc.reply(state.connection, id, json.value.null);
+            return;
+        }
+        // as compilers' language servers tell it: what holds it, its declaration, then its docs
+        let told = checked.targets[target];
+        let parts: list<string> = [];
+        if told.container != "" { parts.push("```yel\n{told.container}\n```"); }
+        parts.push("```yel\n{told.signature}\n```");
+        if told.docs != "" { parts.push("---\n\n{told.docs}"); }
+        let contents = json.object([("kind", json.value.text("markdown")), ("value", json.value.text(parts.join("\n\n"))),]);
+        wait rpc.reply(state.connection, id, json.object([("contents", contents),]));
+    }
+
+    // what may be written at the position (analysis.completions'), each as LSP's completion item:
+    // its label, its kind, its declaration (detail) and its docs
+    completion: async func(state: Server, id: json.value, params: json.value) {
+        let uri = json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or("");
+        let row = json.integer(json.path(params, ["position", "line"])).unwrap-or(-1);
+        let character = json.integer(json.path(params, ["position", "character"])).unwrap-or(-1);
+        let checked = wait check.checked(state, uri);
+        let file = check.path(uri);
+        let lines = checked.texts.get(file).unwrap-or("").split("\n");
+        let items: list<json.value> = [];
+        if row >= 0 && row < lines.len() {
+            let column = server.byte-column(state, lines[row], character) + 1;
+            // (in the order offered: sortText its index, as the client would sort by label)
+            let offered = analysis.completions(checked, file, row + 1, column);
+            for index in 0..offered.len() {
+                let item = offered[index];
+                let fields: list<tuple<string, json.value>> = [
+                    ("label", json.value.text(item.label)),
+                    ("kind", json.value.number("{item.kind}")),
+                    ("sortText", json.value.text(zero-pad("{index}", 4))),
+                ];
+                if item.detail != "" { fields.push(("detail", json.value.text(item.detail))); }
+                if item.docs != "" {
+                    fields.push(("documentation", json.object([("kind", json.value.text("markdown")), ("value", json.value.text(item.docs)),])));
+                }
+                items.push(json.object(fields));
+            }
+        }
+        wait rpc.reply(state.connection, id, json.object([("isIncomplete", json.value.boolean(false)), ("items", json.value.array(items)),]));
+    }
+
+    // the document's outline: its declarations as LSP's DocumentSymbols (each its name, what it
+    // is, its kind, all it covers and where its name is, and the declarations in it)
+    outline: async func(state: Server, id: json.value, params: json.value) {
+        let uri = json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or("");
+        let checked = wait check.checked(state, uri);
+        let found = analysis.outline(checked, check.path(uri)).map({ s -> document-symbol(state, checked, s) });
+        wait rpc.reply(state.connection, id, json.value.array(found));
+    }
+
+    @(private) document-symbol: func(state: Server, checked: analysis.Checked, s: analysis.Symbol) -> json.value {
+        json.object([
+            ("name", json.value.text(s.name)),
+            ("detail", json.value.text(s.detail)),
+            ("kind", json.value.number("{s.kind}")),
+            ("range", check.range(state, checked.texts, s.range)),
+            ("selectionRange", check.range(state, checked.texts, s.selection)),
+            ("children", json.value.array(s.children.map({ c -> document-symbol(state, checked, c) }))),
+        ])
+    }
+
+    // the signature of the call being written at the position: its callee's declaration as
+    // written, each parameter's place in it (in the client's units), the one the cursor is at
+    // (null: no call there)
+    signature-help: async func(state: Server, id: json.value, params: json.value) {
+        let (checked, file, line, column) = wait position(state, params);
+        match analysis.signature-help(checked, file, line, column) {
+            some(help) => {
+                let parameters = help.params.map({ p ->
+                    let (from, to) = p;
+                    json.object([("label", json.value.array([
+                        json.value.number("{server.client-column(state, help.label, from)}"),
+                        json.value.number("{server.client-column(state, help.label, to)}"),
+                    ])),])
+                });
+                let signature = json.object([("label", json.value.text(help.label)), ("parameters", json.value.array(parameters)),]);
+                wait rpc.reply(state.connection, id, json.object([
+                    ("signatures", json.value.array([signature,])),
+                    ("activeSignature", json.value.number("0")),
+                    ("activeParameter", json.value.number("{help.active}")),
+                ]));
+            }
+            none => wait rpc.reply(state.connection, id, json.value.null),
+        }
+    }
+
+    // where the name at the position may be renamed (its range, and its name to start from), or
+    // why not
+    prepare-rename: async func(state: Server, id: json.value, params: json.value) {
+        let (checked, file, line, column) = wait position(state, params);
+        match analysis.rename-place(checked, file, line, column) {
+            ok(place) => {
+                let lines = checked.texts.get(place.path).unwrap-or("").split("\n");
+                let written = if place.line - 1 < lines.len() { lines[place.line - 1].substring(place.col - 1, place.end-col - 1) } else { "" };
+                wait rpc.reply(state.connection, id, json.object([
+                    ("range", check.range(state, checked.texts, place)),
+                    ("placeholder", json.value.text(if written.starts-with("%") { written.substring(1, written.len()) } else { written })),
+                ]));
+            }
+            err(why) => wait rpc.reply-error(state.connection, id, REQUEST-FAILED, why),
+        }
+    }
+
+    // the name at the position renamed: its declaration and each use, each file's edits (LSP's
+    // WorkspaceEdit), or why not
+    rename: async func(state: Server, id: json.value, params: json.value) {
+        let (checked, file, line, column) = wait position(state, params);
+        let name = json.string-value(json.member(params, "newName")).unwrap-or("");
+        match wait analysis.rename(checked, file, line, column, name) {
+            ok(edits) => {
+                let by-file: map<string, list<json.value>> = map.new();
+                for e in edits {
+                    let uri = check.file-uri(e.place.path);
+                    if !by-file.has(uri) { by-file.set(uri, []); }
+                    by-file[uri].push(json.object([("range", check.range(state, checked.texts, e.place)), ("newText", json.value.text(e.text)),]));
+                }
+                let changes: list<tuple<string, json.value>> = [];
+                for uri in by-file.keys() { changes.push((uri, json.value.array(by-file[uri]))); }
+                wait rpc.reply(state.connection, id, json.object([("changes", json.object(changes)),]));
+            }
+            err(why) => wait rpc.reply-error(state.connection, id, REQUEST-FAILED, why),
+        }
+    }
+
+    // a request's document checked, its path, and its position as yel's line and column (from 1;
+    // the column in bytes)
+    @(private) position: async func(state: Server, params: json.value) -> tuple<analysis.Checked, string, s64, s64> {
+        let uri = json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or("");
+        let row = json.integer(json.path(params, ["position", "line"])).unwrap-or(-1);
+        let character = json.integer(json.path(params, ["position", "character"])).unwrap-or(-1);
+        let checked = wait check.checked(state, uri);
+        let file = check.path(uri);
+        let lines = checked.texts.get(file).unwrap-or("").split("\n");
+        if row < 0 || row >= lines.len() { return (checked, file, 0, 0); }
+        (checked, file, row + 1, server.byte-column(state, lines[row], character) + 1)
+    }
+
+    // the check of the position's document, and the target of the name there (-1: none): a
+    // reference there, else a declaration there
+    @(private) at-position: async func(state: Server, params: json.value) -> tuple<analysis.Checked, s64> {
+        let uri = json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or("");
+        let row = json.integer(json.path(params, ["position", "line"])).unwrap-or(-1);
+        let character = json.integer(json.path(params, ["position", "character"])).unwrap-or(-1);
+        let checked = wait check.checked(state, uri);
+        let file = check.path(uri);
+        let lines = checked.texts.get(file).unwrap-or("").split("\n");
+        if row < 0 || row >= lines.len() { return (checked, -1); }
+        // (yel's columns: bytes from 1)
+        let column = server.byte-column(state, lines[row], character) + 1;
+        let line = row + 1;
+        // (the narrowest reference there: a name inside a string's interpolation, not the string)
+        let best = -1;
+        let best-width = 0;
+        for reference in checked.references {
+            if covers(reference.place, file, line, column) {
+                let width = reference.place.end-col - reference.place.col;
+                if best < 0 || width < best-width {
+                    best = reference.target;
+                    best-width = width;
+                }
+            }
+        }
+        if best >= 0 { return (checked, best); }
+        for index in 0..checked.targets.len() {
+            if covers(checked.targets[index].place, file, line, column) { return (checked, index); }
+        }
+        (checked, -1)
+    }
+
+    // whether a place (on one line) covers line and column of file
+    @(private) covers: func(place: analysis.Place, file: string, line: s64, column: s64) -> bool {
+        place.path == file && place.line == line && column >= place.col && column < place.end-col
+    }
+
+    // a place as LSP's location: its file's URI and its range
+    @(private) location: func(state: Server, checked: analysis.Checked, place: analysis.Place) -> json.value {
+        json.object([
+            ("uri", json.value.text(check.file-uri(place.path))),
+            ("range", check.range(state, checked.texts, place)),
+        ])
+    }
+}

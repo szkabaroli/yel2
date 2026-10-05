@@ -1,0 +1,66 @@
+//+build native
+
+// wasi:cli natively, as host-filesystem.yel is wasi:filesystem: the process's arguments, environment,
+// working directory and exit, given here from C's (argv, environ, getcwd, exit). A program's calls of
+// wasi:cli bind to these natively and to the host itself in a component.
+
+module wasi-cli-environment {
+    // the program's name and its arguments, as argv has them
+    get-arguments: func() -> list<string> {
+        let arguments: list<string> = [];
+        for index in 0..cli-host.argument-count() {
+            arguments.push(cli-host.c-string(cli-host.argument(index)));
+        }
+        arguments
+    }
+
+    // the environment's variables, each as its name and its value (split at the first =)
+    get-environment: func() -> list<tuple<string, string>> {
+        let variables: list<tuple<string, string>> = [];
+        let index = 0;
+        loop {
+            if cli-host.variable(index) == 0 { break; }
+            let entry = cli-host.c-string(cli-host.variable(index));
+            match entry.find-byte(61) {
+                some(equals) => variables.push((entry.substring(0, equals), entry.substring(equals + 1, entry.len()))),
+                none => variables.push((entry, "")),
+            }
+            index += 1;
+        }
+        variables
+    }
+
+    // the directory the program started in
+    get-initial-cwd: func() -> option<string> {
+        let path = cli-host.working-directory();
+        if path == 0 { return none; }
+        let cwd = cli-host.c-string(path);
+        memory.free(path);
+        some(cwd)
+    }
+}
+
+module wasi-cli-exit {
+    // 0 for ok, 1 for err (what it printed flushed first)
+    exit: func(status: result) {
+        cli-host.exit(match status {
+            ok(_) => 0,
+            err(_) => 1,
+        });
+    }
+
+    exit-with-code: func(status-code: u8) { cli-host.exit(status-code as s64); }
+}
+
+// the C behind them (the runtime's)
+module cli-host {
+    @c(name = "yel_host_cli_argument_count") argument-count: extern func() -> s64;
+    @c(name = "yel_host_cli_argument") argument: extern func(index: s64) -> s64;
+    // the environment's index-th entry, 0 past its last
+    @c(name = "yel_host_cli_variable") variable: extern func(index: s64) -> s64;
+    // the working directory in the system's memory (freed with free), 0 for none
+    @c(name = "yel_host_cli_working_directory") working-directory: extern func() -> s64;
+    // a copy of the C string at
+    @c(name = "yel_host_cli_c_string") c-string: extern func(at: s64) -> string;
+    @c(name = "yel_host_cli_exit") exit: extern func(code: s64);
+}

@@ -1,0 +1,28 @@
+// Closures laid out by yelc --fmt: one too long for a line keeps its params and -> on the line it
+// opens on and breaks its body (never as a list, its params one a line and a comma after); a
+// param's func type's -> is no closure's; a short one stays on its line; a record still gets a
+// comma after its last field
+
+resource Point { x: s64, y: s64, label: string, }
+
+apply: func(run: func(s64) -> s64, value: s64) -> s64 { run(value) }
+
+main: func() -> s32 {
+    let combine = { first-value: s64, second-value: s64, third-value: s64 ->
+        first-value * second-value + third-value * first-value - second-value
+    };
+    let twice = { run: func(s64) -> s64, value: s64 -> run(run(value)) };
+    let block = { value: s64 ->
+        let doubled = value * 2;
+        doubled + 1
+    };
+    let short = { x: s64 -> x + 1 };
+    let point: Point = {
+        x: 100000000000,
+        y: 200000000000,
+        label: "a label long enough to need a line of its own",
+    };
+    let shape: { name: string, area: func() -> s64 } = { name: "square", area: { -> 4 } };
+    print("{combine(1, 2, 3)} {twice(short, 1)} {block(3)} {point.x} {apply(short, 5)}\n");
+    0
+}

@@ -1,0 +1,90 @@
+https://example.com/ | https: |  |  | example.com |  | / |  | 
+https://User:pa%20ss@example.com/a/c%20d?x=1%202#frag | https: | User | pa%20ss | example.com |  | /a/c%20d | ?x=1%202 | #frag
+http://example.com:8080/path?q=1#h | http: |  |  | example.com | 8080 | /path | ?q=1 | #h
+http://example.com/ | http: |  |  | example.com |  | / |  | 
+ws://h/s | ws: |  |  | h |  | /s |  | 
+wss://h/ | wss: |  |  | h |  | / |  | 
+ftp://h/f | ftp: |  |  | h |  | /f |  | 
+http://h/c | http: |  |  | h |  | /c |  | 
+http://h/a/c | http: |  |  | h |  | /a/c |  | 
+http://h/a/ | http: |  |  | h |  | /a/ |  | 
+http://h/ | http: |  |  | h |  | / |  | 
+https://h/%C3%A4?%C3%A4#%C3%A4 | https: |  |  | h |  | /%C3%A4 | ?%C3%A4 | #%C3%A4
+https://h/a%20b?c%20d#e%20f | https: |  |  | h |  | /a%20b | ?c%20d | #e%20f
+https://h/%7Bx%7D%5E%60| | https: |  |  | h |  | /%7Bx%7D%5E%60| |  | 
+https://h/?%27%22%3C%3E | https: |  |  | h |  | / | ?%27%22%3C%3E | 
+foo://h/?' | foo: |  |  | h |  | / | ?' | 
+http://h//a/b | http: |  |  | h |  | //a/b |  | 
+mailto:ada@example.com | mailto: |  |  |  |  | ada@example.com |  | 
+data:text/plain,hi there | data: |  |  |  |  | text/plain,hi there |  | 
+foo:/a/b | foo: |  |  |  |  | /a/b |  | 
+foo://h/b | foo: |  |  | h |  | /b |  | 
+foo://h | foo: |  |  | h |  |  |  | 
+file:///etc/hosts | file: |  |  |  |  | /etc/hosts |  | 
+file:///a | file: |  |  |  |  | /a |  | 
+file://server/share/x | file: |  |  | server |  | /share/x |  | 
+http://[::1]:8080/x | http: |  |  | [::1] | 8080 | /x |  | 
+http://u@h/ | http: | u |  | h |  | / |  | 
+http://u@h/ | http: | u |  | h |  | / |  | 
+http://:p@h/ | http: |  | p | h |  | / |  | 
+https://h:65535/ | https: |  |  | h | 65535 | / |  | 
+invalid
+invalid
+invalid
+invalid
+invalid
+http://h/ab | http: |  |  | h |  | /ab |  | 
+https://h/? | https: |  |  | h |  | / |  | 
+https://h/# | https: |  |  | h |  | / |  | 
+https://h/?# | https: |  |  | h |  | / |  | 
+http://example.com/ | http: |  |  | example.com |  | / |  | 
+javascript:alert(1) | javascript: |  |  |  |  | alert(1) |  | 
+https://h/a;b=c | https: |  |  | h |  | /a;b=c |  | 
+http://h/%zz | http: |  |  | h |  | /%zz |  | 
+http://h/P | http: |  |  | h |  | /P |  | 
+https://h/a?b=c&d=e+f | https: |  |  | h |  | /a | ?b=c&d=e+f | 
+sc+-.://h/x | sc+-.: |  |  | h |  | /x |  | 
+g:h | g: |  |  |  |  | h |  | 
+http://a/b/c/g | http: |  |  | a |  | /b/c/g |  | 
+http://a/b/c/g | http: |  |  | a |  | /b/c/g |  | 
+http://a/b/c/g/ | http: |  |  | a |  | /b/c/g/ |  | 
+http://a/g | http: |  |  | a |  | /g |  | 
+http://g/ | http: |  |  | g |  | / |  | 
+http://a/b/c/d;p?y | http: |  |  | a |  | /b/c/d;p | ?y | 
+http://a/b/c/g?y | http: |  |  | a |  | /b/c/g | ?y | 
+http://a/b/c/d;p?q#s | http: |  |  | a |  | /b/c/d;p | ?q | #s
+http://a/b/c/g#s | http: |  |  | a |  | /b/c/g |  | #s
+http://a/b/c/g?y#s | http: |  |  | a |  | /b/c/g | ?y | #s
+http://a/b/c/;x | http: |  |  | a |  | /b/c/;x |  | 
+http://a/b/c/g;x | http: |  |  | a |  | /b/c/g;x |  | 
+http://a/b/c/g;x?y#s | http: |  |  | a |  | /b/c/g;x | ?y | #s
+http://a/b/c/d;p?q | http: |  |  | a |  | /b/c/d;p | ?q | 
+http://a/b/c/ | http: |  |  | a |  | /b/c/ |  | 
+http://a/b/c/ | http: |  |  | a |  | /b/c/ |  | 
+http://a/b/ | http: |  |  | a |  | /b/ |  | 
+http://a/b/ | http: |  |  | a |  | /b/ |  | 
+http://a/b/g | http: |  |  | a |  | /b/g |  | 
+http://a/ | http: |  |  | a |  | / |  | 
+http://a/ | http: |  |  | a |  | / |  | 
+http://a/g | http: |  |  | a |  | /g |  | 
+http://a/g | http: |  |  | a |  | /g |  | 
+http://a/g | http: |  |  | a |  | /g |  | 
+http://a/g | http: |  |  | a |  | /g |  | 
+http://a/g | http: |  |  | a |  | /g |  | 
+http://a/b/c/g. | http: |  |  | a |  | /b/c/g. |  | 
+http://a/b/c/.g | http: |  |  | a |  | /b/c/.g |  | 
+http://a/b/c/g.. | http: |  |  | a |  | /b/c/g.. |  | 
+http://a/b/c/..g | http: |  |  | a |  | /b/c/..g |  | 
+http://a/b/g | http: |  |  | a |  | /b/g |  | 
+http://a/b/c/g/ | http: |  |  | a |  | /b/c/g/ |  | 
+http://a/b/c/g/h | http: |  |  | a |  | /b/c/g/h |  | 
+http://a/b/c/h | http: |  |  | a |  | /b/c/h |  | 
+http://a/b/c/g;x=1/y | http: |  |  | a |  | /b/c/g;x=1/y |  | 
+http://a/b/c/y | http: |  |  | a |  | /b/c/y |  | 
+http://a/b/c/g?y/./x | http: |  |  | a |  | /b/c/g | ?y/./x | 
+http://a/b/c/g?y/../x | http: |  |  | a |  | /b/c/g | ?y/../x | 
+http://a/b/c/g#s/./x | http: |  |  | a |  | /b/c/g |  | #s/./x
+http://a/b/c/g#s/../x | http: |  |  | a |  | /b/c/g |  | #s/../x
+http://a/b/c/g | http: |  |  | a |  | /b/c/g |  | 
+http://a/g | http: |  |  | a |  | /g |  | 
+http://h:99/x | http: |  |  | h | 99 | /x |  | 

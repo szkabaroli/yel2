@@ -1,0 +1,57 @@
+// std:url, tested (yelc test runtime/std/url): what node's URL is not checked against for (tests/url.yel
+// is): a query's parameters, a component encoded and decoded, an origin, a URL's parts made and written
+
+package std:url@0.1.0;
+
+from "std:testing" include expect;
+
+module url-tests {
+    @(test) reads-parameters: func() {
+        expect.equal(url.params("a=1&b=two+words&a=3&flag&e=%C3%A9"), [("a", "1"), ("b", "two words"), ("a", "3"), ("flag", ""), ("e", "é"),]);
+        let u = expect.ok(url.parse("https://h/search?q=yel+lang&page=2"));
+        expect.equal(url.param(u, "q"), some("yel lang"));
+        expect.equal(url.param(u, "page"), some("2"));
+        expect.none(url.param(u, "missing"));
+    }
+
+    @(test) writes-parameters: func() {
+        expect.equal(url.query([("q", "a b&c"), ("é", "1"),]), "q=a+b%26c&%C3%A9=1");
+        expect.equal(url.params(url.query([("x", "=?&+"),])), [("x", "=?&+"),]);
+    }
+
+    @(test) encodes-components: func() {
+        expect.equal(url.encode("a b/c?d=é"), "a%20b%2Fc%3Fd%3D%C3%A9");
+        expect.equal(url.encode("-_.!~*'()"), "-_.!~*'()");
+        expect.equal(url.decode("a%20b%2Fc%3Fd%3D%C3%A9"), ok("a b/c?d=é"));
+        expect.equal(url.decode("50%"), err("a % at 2 without two hex digits"));
+        expect.equal(url.decode("%FF"), err("not UTF-8 at byte 0"));
+    }
+
+    @(test) knows-an-origin: func() {
+        expect.equal(url.origin(expect.ok(url.parse("https://h:8443/a?b"))), "https://h:8443");
+        expect.equal(url.origin(expect.ok(url.parse("http://h:80/"))), "http://h");
+        expect.equal(url.origin(expect.ok(url.parse("mailto:a@b"))), "null");
+    }
+
+    @(test) writes-what-it-is-given: func() {
+        let made: url.parts = {
+            scheme: "https",
+            username: "",
+            password: "",
+            host: some("example.com"),
+            port: some(8080),
+            path: "/a",
+            query: some(url.query([("q", "1"),])),
+            fragment: none,
+        };
+        expect.equal(url.write(made), "https://example.com:8080/a?q=1");
+        expect.equal("{made}", "https://example.com:8080/a?q=1");
+    }
+
+    @(test) refuses-what-is-no-url: func() {
+        expect.err(url.parse("no scheme here"));
+        expect.err(url.parse("https://h:99999/"));
+        expect.err(url.parse("https://bad host/"));
+        expect.err(url.parse("https://müller.de/"));
+    }
+}

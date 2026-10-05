@@ -1,0 +1,355 @@
+// JSON: a value as RFC 8259 has it, read from text and written back. A number keeps its text as
+// written (an id or a position read and written again is the same bytes; integer reads it as an
+// s64). An object is a map from its members' names, in the order they were first read (a name read
+// twice keeps its last value, as most parsers do: RFC 8259 leaves it open).
+//
+// One of std's packages: a program includes it (from "std:encoding/json" include json) and names
+// json.value, json.parse, json.write.
+
+package std:encoding@0.1.0;
+
+module json {
+    variant value {
+        null,
+        boolean(bool),
+        number(string),
+        text(string),
+        array(list<value>),
+        object(map<string, value>),
+    }
+
+    // the value text holds (whitespace around it allowed), or the error it stops at
+    parse: func(text: string) -> result<value, string> {
+        let reader: reading.state = { text: text, at: 0, error: "", };
+        let parsed = reading.read-value(reader);
+        reading.skip-space(reader);
+        if reader.error.len() == 0
+            && reader.at < text.len() { reading.fail(reader, "text after the value"); }
+        if reader.error.len() > 0 { return err("{reader.error} at byte {reader.at}"); }
+        ok(parsed)
+    }
+
+    // the value as JSON text, on one line
+    write: func(item: value) -> string {
+        let out = buffer.buffer(256);
+        reading.write-into(out, item);
+        out.to-string()
+    }
+
+    // an object of the given members, in their order (a reply written in place)
+    object: func(members: list<tuple<string, value>>) -> value {
+        let named: map<string, value> = map.new();
+        for entry in members {
+            let (name, item) = entry;
+            named.set(name, item);
+        }
+        value.object(named)
+    }
+
+    // the member named name of an object, none for any other value
+    member: func(item: value, name: string) -> option<value> {
+        match item {
+            object(members) => members.get(name),
+            _ => none,
+        }
+    }
+
+    // a member's member, along path (none where one is missing)
+    path: func(item: value, names: list<string>) -> option<value> {
+        let current = item;
+        for name in names {
+            match member(current, name) {
+                some(item) => { current = item; }
+                none => { return none; }
+            }
+        }
+        some(current)
+    }
+
+    // a text's string, none for any other value
+    string-value: func(item: option<value>) -> option<string> {
+        match item {
+            some(text(s)) => some(s),
+            _ => none,
+        }
+    }
+
+    // a number's value as an s64 (none for a fraction, an exponent or another value)
+    integer: func(item: option<value>) -> option<s64> {
+        match item {
+            some(number(digits)) => parse-int(digits),
+            _ => none,
+        }
+    }
+
+    // an array's items, none for any other value
+    items: func(item: option<value>) -> option<list<value>> {
+        match item {
+            some(array(xs)) => some(xs),
+            _ => none,
+        }
+    }
+}
+
+// a reading and a writing, json's own
+
+@(private) module reading {
+    // a parse: the text, where it is, and the first error (empty for none: the parse stops there)
+    resource state { text: string, at: s64, error: string, }
+
+    fail: func(reader: state, message: string) {
+        if reader.error.len() == 0 { reader.error = message; }
+    }
+
+    peek: func(reader: state) -> s64 { reader.text.byte-at(reader.at) }
+
+    skip-space: func(reader: state) {
+        loop {
+            let byte = peek(reader);
+            if byte != 32 && byte != 9 && byte != 10 && byte != 13 { return; }
+            reader.at += 1;
+        }
+    }
+
+    // word read where it is (true, false, null), else an error
+    expect-word: func(reader: state, word: string) {
+        if reader.text.starts-at(reader.at, word) {
+            reader.at += word.len();
+        } else {
+            fail(reader, "expected {word}");
+        }
+    }
+
+    read-value: func(reader: state) -> json.value {
+        skip-space(reader);
+        if reader.error.len() > 0 { return json.value.null; }
+        let byte = peek(reader);
+        if byte == 123 { return read-object(reader); }
+        if byte == 91 { return read-array(reader); }
+        if byte == 34 { return json.value.text(read-string(reader)); }
+        if byte == 116 {
+            expect-word(reader, "true");
+            return json.value.boolean(true);
+        }
+        if byte == 102 {
+            expect-word(reader, "false");
+            return json.value.boolean(false);
+        }
+        if byte == 110 {
+            expect-word(reader, "null");
+            return json.value.null;
+        }
+        if byte == 45 || (byte >= 48 && byte <= 57) { return read-number(reader); }
+        if byte < 0 {
+            fail(reader, "the text ends where a value is wanted");
+        } else {
+            fail(reader, "unexpected '{from-byte(byte)}'");
+        }
+        json.value.null
+    }
+
+    read-object: func(reader: state) -> json.value {
+        reader.at += 1;
+        let members: map<string, json.value> = map.new();
+        skip-space(reader);
+        if peek(reader) == 125 {
+            reader.at += 1;
+            return json.value.object(members);
+        }
+        loop {
+            skip-space(reader);
+            if peek(reader) != 34 {
+                fail(reader, "expected a member's name");
+                return json.value.null;
+            }
+            let name = read-string(reader);
+            skip-space(reader);
+            if peek(reader) != 58 {
+                fail(reader, "expected ':'");
+                return json.value.null;
+            }
+            reader.at += 1;
+            members.set(name, read-value(reader));
+            if reader.error.len() > 0 { return json.value.null; }
+            skip-space(reader);
+            let byte = peek(reader);
+            reader.at += 1;
+            if byte == 125 { return json.value.object(members); }
+            if byte != 44 {
+                reader.at -= 1;
+                fail(reader, "expected ',' or '{from-byte(125)}'");
+                return json.value.null;
+            }
+        }
+        json.value.null
+    }
+
+    read-array: func(reader: state) -> json.value {
+        reader.at += 1;
+        let values: list<json.value> = [];
+        skip-space(reader);
+        if peek(reader) == 93 {
+            reader.at += 1;
+            return json.value.array(values);
+        }
+        loop {
+            values.push(read-value(reader));
+            if reader.error.len() > 0 { return json.value.null; }
+            skip-space(reader);
+            let byte = peek(reader);
+            reader.at += 1;
+            if byte == 93 { return json.value.array(values); }
+            if byte != 44 {
+                reader.at -= 1;
+                fail(reader, "expected ',' or ']'");
+                return json.value.null;
+            }
+        }
+        json.value.null
+    }
+
+    // the number's text as written (its shape checked loosely: what parse-int reads is checked
+    // there)
+    read-number: func(reader: state) -> json.value {
+        let start = reader.at;
+        loop {
+            let byte = peek(reader);
+            let part = (byte >= 48 && byte <= 57) || byte == 45 || byte == 43 || byte == 46
+                || byte == 101 || byte == 69;
+            if !part { break; }
+            reader.at += 1;
+        }
+        json.value.number(reader.text.substring(start, reader.at))
+    }
+
+    // a string's value, its escapes undone (\u as UTF-8, a surrogate pair as its one code point)
+    read-string: func(reader: state) -> string {
+        reader.at += 1;
+        let out = buffer.buffer(32);
+        loop {
+            let byte = peek(reader);
+            if byte < 0 {
+                fail(reader, "the text ends inside a string");
+                return "";
+            }
+            reader.at += 1;
+            if byte == 34 { return out.to-string(); }
+            if byte != 92 {
+                out.push-byte(byte);
+                continue;
+            }
+            let escape = peek(reader);
+            reader.at += 1;
+            if escape == 34 || escape == 92 || escape == 47 { out.push-byte(escape); }
+            else if escape == 98 { out.push-byte(8); }
+            else if escape == 102 { out.push-byte(12); }
+            else if escape == 110 { out.push-byte(10); }
+            else if escape == 114 { out.push-byte(13); }
+            else if escape == 116 { out.push-byte(9); }
+            else if escape == 117 {
+                let code = read-hex(reader);
+                if code >= 0xD800 && code <= 0xDBFF && reader.text.starts-at(reader.at, "\\u") {
+                    reader.at += 2;
+                    let low = read-hex(reader);
+                    code = 0x10000 + (code - 0xD800) * 1024 + (low - 0xDC00);
+                }
+                push-utf8(out, code);
+            } else {
+                fail(reader, "unknown escape");
+                return "";
+            }
+        }
+        ""
+    }
+
+    // four hex digits' value
+    read-hex: func(reader: state) -> s64 {
+        let value = 0;
+        for index in 0..4 {
+            let byte = peek(reader);
+            let digit = if byte >= 48 && byte <= 57 { byte - 48 } else if byte >= 97
+                && byte <= 102 { byte - 87 } else if byte >= 65
+                && byte <= 70 { byte - 55 } else { -1 };
+            if digit < 0 {
+                fail(reader, "expected four hex digits");
+                return 0;
+            }
+            value = value * 16 + digit;
+            reader.at += 1;
+        }
+        value
+    }
+
+    push-utf8: func(out: buffer, code: s64) {
+        if code < 0x80 { out.push-byte(code); }
+        else if code < 0x800 {
+            out.push-byte(0xC0 + code / 64);
+            out.push-byte(0x80 + code % 64);
+        } else if code < 0x10000 {
+            out.push-byte(0xE0 + code / 4096);
+            out.push-byte(0x80 + code / 64 % 64);
+            out.push-byte(0x80 + code % 64);
+        } else {
+            out.push-byte(0xF0 + code / 262144);
+            out.push-byte(0x80 + code / 4096 % 64);
+            out.push-byte(0x80 + code / 64 % 64);
+            out.push-byte(0x80 + code % 64);
+        }
+    }
+
+    // a writing
+
+    write-into: func(out: buffer, value: json.value) {
+        match value {
+            null => out.push("null"),
+            boolean(b) => out.push(if b { "true" } else { "false" }),
+            number(digits) => out.push(digits),
+            text(s) => write-string(out, s),
+            array(values) => {
+                out.push-byte(91);
+                for index in 0..values.len() {
+                    if index > 0 { out.push-byte(44); }
+                    write-into(out, values[index]);
+                }
+                out.push-byte(93);
+            }
+            object(members) => {
+                out.push-byte(123);
+                let names = members.keys();
+                for index in 0..names.len() {
+                    if index > 0 { out.push-byte(44); }
+                    write-string(out, names[index]);
+                    out.push-byte(58);
+                    write-into(out, members[names[index]]);
+                }
+                out.push-byte(125);
+            }
+        }
+    }
+
+    // s quoted, its quotes, backslashes and control bytes escaped (other bytes as they are: UTF-8)
+    write-string: func(out: buffer, s: string) {
+        out.push-byte(34);
+        for index in 0..s.len() {
+            let byte = s.byte-at(index);
+            if byte == 34 || byte == 92 {
+                out.push-byte(92);
+                out.push-byte(byte);
+            } else if byte == 10 {
+                out.push("\\n");
+            }
+            else if byte == 13 { out.push("\\r"); }
+            else if byte == 9 { out.push("\\t"); }
+            else if byte < 32 {
+                out.push("\\u00");
+                out.push-byte(hex-digit(byte / 16));
+                out.push-byte(hex-digit(byte % 16));
+            } else {
+                out.push-byte(byte);
+            }
+        }
+        out.push-byte(34);
+    }
+
+    hex-digit: func(value: s64) -> s64 { if value < 10 { 48 + value } else { 87 + value } }
+}

@@ -1,0 +1,86 @@
+// std's text and lists, tested (yelc test runtime/std/core): trimming, splitting, finding, replacing,
+// cases, padding, lines; a list's contains, index-of, slice, reverse, sort, map, filter, any, all;
+// and one name for text and lists, the first argument's type choosing
+
+from "std:testing" include expect;
+
+module text-tests {
+    resource person { name: string, age: s32, }
+
+    @(test) trims: func() {
+        let padded = "  the quick brown fox  ";
+        expect.equal(padded.trim(), "the quick brown fox");
+        expect.equal(padded.trim-start(), "the quick brown fox  ");
+        expect.equal(padded.trim-end(), "  the quick brown fox");
+    }
+
+    @(test) splits: func() {
+        let words = "the quick brown fox".split(" ");
+        expect.equal(words, ["the", "quick", "brown", "fox",]);
+        expect.equal("a,,b".split(","), ["a", "", "b",]);
+        expect.equal("".split(","), ["",]);
+        expect.equal("one\r\ntwo\nthree".lines(), ["one", "two", "three",]);
+    }
+
+    @(test) finds: func() {
+        expect.holds("hello".starts-with("he"));
+        expect.holds("hello".ends-with("lo"));
+        expect.holds("hello".contains("ell"));
+        expect.equal("banana".find("an"), some(1));
+        expect.equal("banana".find-last("an"), some(3));
+        expect.none("banana".find("x"));
+    }
+
+    @(test) rewrites: func() {
+        expect.equal("a-b-c".replace("-", " + "), "a + b + c");
+        expect.equal("Mixed Case".to-lower(), "mixed case");
+        expect.equal("tea".to-upper(), "TEA");
+        expect.equal("7".pad-start(3, "0"), "007");
+        expect.equal("ab".repeat(3), "ababab");
+        expect.equal("stressed".reverse(), "desserts");
+        expect.equal("hello".slice(1, 3), "el");
+    }
+
+    @(test) reads-lists: func() {
+        let numbers = [5, 3, 9, 1, 4,];
+        expect.holds(numbers.contains(9));
+        expect.equal(numbers.index-of(4), 4);
+        expect.equal(numbers.index-of(7), -1);
+        expect.equal(numbers.slice(1, 3), [3, 9,]);
+        expect.equal(numbers.reverse(), [4, 1, 9, 3, 5,]);
+    }
+
+    @(test) sorts-and-maps: func() {
+        let people: list<person> = [
+            { name: "ada", age: 36, },
+            { name: "grace", age: 85, },
+            { name: "alan", age: 41, },
+            { name: "joan", age: 36, },
+        ];
+        // (stable: ada before joan, as given)
+        people.sort({ a, b -> a.age > b.age });
+        expect.equal(people.map({ who -> "{who.name} {who.age}" }), ["grace 85", "alan 41", "ada 36", "joan 36",]);
+        let words = ["the", "quick", "brown", "fox",];
+        expect.equal(words.filter({ word -> word.len() > 3 }), ["quick", "brown",]);
+        expect.equal(words.map({ word -> word.to-upper() + "!" }), ["THE!", "QUICK!", "BROWN!", "FOX!",]);
+        expect.holds(words.any({ word -> word.len() > 3 }));
+        expect.holds(!words.all({ word -> word.len() > 3 }));
+    }
+
+    @(test) reads-digits: func() {
+        expect.holds(is-digit(55));
+        expect.equal(to-digit(102, 16), some(15));
+        expect.equal(7 as s64 * 3000000000, 21000000000);
+    }
+
+    // one name for text and lists: the first argument's type chooses
+    @(test) chooses-by-the-first-argument: func() {
+        let letters = ["a", "b", "c",];
+        expect.holds("abc".contains("b"));
+        expect.holds(letters.contains("b"));
+        expect.holds(!contains("abc", "z"));
+        expect.holds(!contains(letters, "z"));
+        expect.equal(letters.slice(1, 3), ["b", "c",]);
+        expect.equal(letters.reverse(), ["c", "b", "a",]);
+    }
+}

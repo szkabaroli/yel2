@@ -1,0 +1,28 @@
+// std:process: a child that runs on from the fork (its memory a copy of its parent's: what it
+// changes is its own), the code it ends with, and how a parent waits for it
+
+from "std:process" include process;
+
+main: func() -> s32 {
+    let count = 1;
+    match process.fork() {
+        ok(none) => {
+            count = 100;
+            print("child: count {count}\n");
+            process.end(3);
+        }
+        ok(some(child)) => {
+            match process.wait(child) {
+                ok(code(code)) => print("parent: the child ended with {code}, count still {count}\n"),
+                ok(signal(number)) => print("parent: a signal ended the child: {number}\n"),
+                err(error) => print("parent: {error}\n"),
+            }
+        }
+        err(error) => print("no child: {error}\n"),
+    }
+    match process.wait(999999) {
+        ok(_) => print("a child that is none ended\n"),
+        err(error) => print("{error}\n"),
+    }
+    0
+}

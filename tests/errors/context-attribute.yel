@@ -1,0 +1,6 @@
+// error: 4:12: @(context) goes on a global (let name: T;): each task's own value of it
+// @(context) on what is no global: told
+
+@(context) record point { x: s32, }
+
+main: func() -> s32 { 0 }

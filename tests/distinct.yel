@@ -6,7 +6,7 @@ type binding = distinct u32;
 type local = distinct u32;
 type name = distinct string;
 
-record Use { at: binding, name: name, }
+resource Use { at: binding, name: name, }
 
 next: func(b: binding) -> binding { ((b as u32) + 1) as binding }
 

@@ -1,0 +1,52 @@
+// Hex: bytes as two hex digits each (RFC 4648's base16), and back. Written lowercase (or upper);
+// read in either case, an odd count of digits or a byte that is none an error.
+//
+// One of std's packages: from "std:encoding/hex" include hex; then hex.encode(bytes),
+// hex.decode(text).
+
+package std:encoding@0.1.0;
+
+module hex {
+    // the bytes as lowercase hex
+    encode: func(bytes: list<u8> & readonly) -> string { written(bytes, "0123456789abcdef") }
+
+    // the bytes as uppercase hex
+    encode-upper: func(bytes: list<u8> & readonly) -> string { written(bytes, "0123456789ABCDEF") }
+
+    // the bytes text spells, or where it does not
+    decode: func(text: string) -> result<list<u8>, string> {
+        if text.len() % 2 != 0 { return err("an odd count of hex digits ({text.len()})"); }
+        let bytes: list<u8> = [];
+        let index = 0;
+        loop {
+            if index >= text.len() { break; }
+            let high = digit(text.byte-at(index));
+            let low = digit(text.byte-at(index + 1));
+            if high < 0 || low < 0 {
+                let at = if high < 0 { index } else { index + 1 };
+                return err("not a hex digit at byte {at}");
+            }
+            bytes.push((high * 16 + low) as u8);
+            index += 2;
+        }
+        ok(bytes)
+    }
+
+    // a hex digit's value, -1 for a byte that is none
+    digit: func(byte: s64) -> s64 {
+        if byte >= 48 && byte <= 57 { return byte - 48; }
+        if byte >= 97 && byte <= 102 { return byte - 87; }
+        if byte >= 65 && byte <= 70 { return byte - 55; }
+        -1
+    }
+
+    @(private) written: func(bytes: list<u8> & readonly, digits: string) -> string {
+        let out = buffer.buffer(bytes.len() * 2);
+        for byte in bytes {
+            let value = byte as s64;
+            out.push-byte(digits.byte-at(value / 16));
+            out.push-byte(digits.byte-at(value % 16));
+        }
+        out.to-string()
+    }
+}

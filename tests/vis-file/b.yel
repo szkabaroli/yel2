@@ -1,0 +1,15 @@
+package test:vis-file;
+
+// a.yel's file-private declarations, each kind, named in the package's other file
+module b {
+    uses: func() -> s32 {
+        let c: Cell = { n: 1, };
+        let bit = Bit.one;
+        let i: Inches = 2;
+        let z = zero;
+        mine += 1;
+        let t = twice(1);
+        let m = MINE;
+        local.one()
+    }
+}

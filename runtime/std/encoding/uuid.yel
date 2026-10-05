@@ -1,0 +1,140 @@
+// UUIDs (RFC 9562): 128 bits, as two u64 halves (high: the first eight bytes, as the text reads),
+// written 8-4-4-4-12 in lowercase hex. Made at random (version 4) or ordered by time (version 7:
+// its first 48 bits the Unix time in milliseconds, then a counter, so the ids one program makes
+// sort as they were made, within a millisecond too: RFC 9562's method 1). Read in either case,
+// with or without urn:uuid: before it.
+//
+// One of std's packages: from "std:encoding/uuid" include uuid; then uuid.random(),
+// uuid.time-ordered(), uuid.parse(text), uuid.to-string(id).
+
+package std:encoding@0.1.0;
+
+from "std:random" include random;
+from "std:clocks" include system-clock;
+
+module uuid {
+    // a UUID: its first eight bytes and its last, each read big-endian
+    record id { high: u64, low: u64, }
+
+    // version 7's last time (in milliseconds, never going back) and its counter (rand_a's 12 bits)
+    let last-milliseconds: u64;
+    let counter: u64;
+
+    // the nil UUID: all zero
+    nil: func() -> id { { high: 0, low: 0, } }
+
+    // a version 4 UUID: 122 random bits
+    random: func() -> id {
+        let bits = random-halves();
+        stamped(bits[0], bits[1], 4)
+    }
+
+    // a version 7 UUID: the time in milliseconds, a 12-bit counter, then 62 random bits. Each
+    // new millisecond starts the counter at random below 2048 (room to count); within one it
+    // counts up, and where it runs out, or the clock goes back, the time taken is the last one's
+    // next, so each id is past the one before
+    time-ordered: func() -> id {
+        let now = system-clock.now();
+        let milliseconds = (now.seconds as u64) * 1000 + (now.nanoseconds as u64) / 1000000;
+        let bits = random-halves();
+        if milliseconds > last-milliseconds {
+            last-milliseconds = milliseconds;
+            counter = bits[0] & 0x7FF;
+        } else {
+            counter += 1;
+            if counter > 0xFFF {
+                last-milliseconds += 1;
+                counter = bits[0] & 0x7FF;
+            }
+        }
+        stamped((last-milliseconds << 16) | counter, bits[1], 7)
+    }
+
+    // its version (4, 7, …: the 4 bits after its sixth byte)
+    version: func(value: id) -> s64 { ((value.high >> 12) & 15) as s64 }
+
+    // its text: 8-4-4-4-12 lowercase hex digits
+    to-string: func(value: id) -> string {
+        let out = buffer.buffer(36);
+        let digits = "0123456789abcdef";
+        for index in 0..32 {
+            if index == 8 || index == 12 || index == 16 || index == 20 { out.push-byte(45); }
+            let half = if index < 16 { value.high } else { value.low };
+            let shift = (15 - index % 16) * 4;
+            out.push-byte(digits.byte-at(((half >> (shift as u64)) & 15) as s64));
+        }
+        out.to-string()
+    }
+
+    // the UUID text spells (8-4-4-4-12 hex digits, either case, urn:uuid: before them or not), or
+    // where it does not
+    parse: func(text: string) -> result<id, string> {
+        let start = if text.to-lower().starts-with("urn:uuid:") { 9 } else { 0 };
+        if text.len() - start != 36 {
+            return err("a UUID is 36 characters, not {text.len() - start}");
+        }
+        let high: u64 = 0;
+        let low: u64 = 0;
+        let count = 0;
+        for index in start..text.len() {
+            let byte = text.byte-at(index);
+            let place = index - start;
+            if place == 8 || place == 13 || place == 18 || place == 23 {
+                if byte != 45 { return err("expected '-' at byte {index}"); }
+                continue;
+            }
+            let digit = hex-digit(byte);
+            if digit < 0 { return err("not a hex digit at byte {index}"); }
+            if count < 16 {
+                high = (high << 4) | (digit as u64);
+            } else {
+                low = (low << 4) | (digit as u64);
+            }
+            count += 1;
+        }
+        ok({ high: high, low: low, })
+    }
+
+    // its 16 bytes, in order
+    bytes: func(value: id) -> list<u8> {
+        let out: list<u8> = [];
+        for index in 0..16 {
+            let half = if index < 8 { value.high } else { value.low };
+            out.push(((half >> (((7 - index % 8) * 8) as u64)) & 255) as u8);
+        }
+        out
+    }
+
+    // the UUID 16 bytes are, or why they are none
+    from-bytes: func(bytes: list<u8> & readonly) -> result<id, string> {
+        if bytes.len() != 16 { return err("a UUID is 16 bytes, not {bytes.len()}"); }
+        ok({ high: big-endian(bytes, 0), low: big-endian(bytes, 8), })
+    }
+
+    // the version set in high, and RFC 9562's variant (10) in low's top bits
+    @(private) stamped: func(high: u64, low: u64, version: u64) -> id {
+        {
+            high: (high & 0xFFFFFFFFFFFF0FFF) | (version << 12),
+            low: (low & 0x3FFFFFFFFFFFFFFF) | 0x8000000000000000,
+        }
+    }
+
+    // 128 random bits, as two halves
+    @(private) random-halves: func() -> list<u64> {
+        let bytes = random.get-random-bytes(16);
+        [big-endian(bytes, 0), big-endian(bytes, 8),]
+    }
+
+    @(private) big-endian: func(bytes: list<u8> & readonly, at: s64) -> u64 {
+        let value: u64 = 0;
+        for index in 0..8 { value = (value << 8) | (bytes[at + index] as u64); }
+        value
+    }
+
+    @(private) hex-digit: func(byte: s64) -> s64 {
+        if byte >= 48 && byte <= 57 { return byte - 48; }
+        if byte >= 97 && byte <= 102 { return byte - 87; }
+        if byte >= 65 && byte <= 70 { return byte - 55; }
+        -1
+    }
+}

@@ -1,0 +1,21 @@
+// Assertions: a condition that must hold, else the program stops, telling where and what (as
+// Odin's assert, in its base:runtime). Where is the call's place (#caller-location), what is the
+// condition as the call writes it (#caller-expression), or the message given in its place. The
+// std:testing package has more, each telling what it found (expect.equal: what it got, and what it
+// wanted)
+
+// a place in the source: what #location gives (where it is written) and #caller-location (as a
+// parameter's default: where the call is)
+record source-location { file: string, line: s32, column: s32, func: string, }
+
+// a place as a diagnostic names it: file:line:column
+display: func(place: source-location) -> string { "{place.file}:{place.line}:{place.column}" }
+
+// condition, which must hold: else the program stops (a panic), telling where and what
+assert: func(
+    condition: bool,
+    message: string = #caller-expression(condition),
+    location: source-location = #caller-location,
+) {
+    if !condition { panic("{location}: assertion failed: {message}"); }
+}

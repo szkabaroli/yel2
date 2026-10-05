@@ -1,0 +1,34 @@
+// wasi:sockets' ip-name-lookup: natively the system's resolver (getaddrinfo, on libuv's thread pool),
+// in a component the host's. An IP address's text is itself; localhost has 127.0.0.1 (in the order
+// the system gives, which differs); two lookups go on at once, each a task of its own
+
+from "std:testing" include expect;
+from "wasi:sockets" include types, ip-name-lookup;
+
+module dns-tests {
+    // whether addresses hold 127.0.0.1
+    has-loopback: func(addresses: list<types.ip-address>) -> bool {
+        addresses.any({ a -> match a {
+            ipv4(octets) => octets == (127, 0, 0, 1),
+            ipv6(_) => false,
+        } })
+    }
+
+    @(test) gives-an-address-back: async func() {
+        expect.equal(expect.ok(wait ip-name-lookup.resolve-addresses("127.0.0.1")), [types.ip-address.ipv4((127, 0, 0, 1)),]);
+        expect.equal(expect.ok(wait ip-name-lookup.resolve-addresses("::1")), [types.ip-address.ipv6((0, 0, 0, 0, 0, 0, 0, 1)),]);
+        let v6 = expect.ok(wait ip-name-lookup.resolve-addresses("2001:db8::ff00:42:8329"));
+        expect.equal(v6, [types.ip-address.ipv6((8193, 3512, 0, 0, 0, 65280, 66, 33577)),]);
+    }
+
+    @(test) resolves-localhost: async func() {
+        let first = start ip-name-lookup.resolve-addresses("localhost");
+        let second = start ip-name-lookup.resolve-addresses("10.0.0.7");
+        expect.holds(has-loopback(expect.ok(wait first)));
+        expect.equal(expect.ok(wait second), [types.ip-address.ipv4((10, 0, 0, 7)),]);
+    }
+
+    @(test) refuses-an-empty-name: async func() {
+        expect.equal(expect.err(wait ip-name-lookup.resolve-addresses("")), ip-name-lookup.error-code.invalid-argument);
+    }
+}

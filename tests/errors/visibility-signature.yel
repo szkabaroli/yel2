@@ -1,0 +1,21 @@
+// error: 11:5: func leak may be named by whoever reaches it, but names type Secret, which is private to its package (@(private))
+// error: 12:16: func half may be named by its package's files, but names type Mine, which is private to its file (@(private="file"))
+// error: 13:5: record Holder may be named by whoever reaches it, but names type Secret, which is private to its package (@(private))
+// error: 14:5: variant Box may be named by whoever reaches it, but names type Secret, which is private to its package (@(private))
+// error: 15:5: global kept may be named by whoever reaches it, but names type Secret, which is private to its package (@(private))
+// error: 16:5: type Secrets may be named by whoever reaches it, but names type Secret, which is private to its package (@(private))
+@(private) resource Secret { n: s32, }
+@(private="file") resource Mine { n: s32, }
+
+module api {
+    leak: func() -> Secret { { n: 1, } }
+    @(private) half: func(m: Mine) -> s32 { m.n }
+    resource Holder { secret: Secret, }
+    variant Box { full(Secret), empty, }
+    let kept: option<Secret>;
+    type Secrets = list<Secret>;
+    // as private as what it names: no error
+    @(private) keep: func(s: Secret) -> s32 { s.n }
+}
+
+main: func() -> s32 { 0 }

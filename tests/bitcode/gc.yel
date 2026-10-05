@@ -3,12 +3,12 @@
 // a tree, strings made in a loop
 
 variant Cells { cons(Cell), end, }
-record Cell { value: s64, rest: Cells, }
+resource Cell { value: s64, rest: Cells, }
 
-record Person { name: string, tags: list<string>, best: option<Person>, }
+resource Person { name: string, tags: list<string>, best: option<Person>, }
 
 variant Tree { leaf(s64), node(Branch), }
-record Branch { left: Tree, right: Tree, }
+resource Branch { left: Tree, right: Tree, }
 
 build: func(count: s64) -> Cells {
     let cells = Cells.end;
