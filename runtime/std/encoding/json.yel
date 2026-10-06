@@ -20,12 +20,12 @@ module json {
 
     // the value text holds (whitespace around it allowed), or the error it stops at
     parse: func(text: string) -> result<value, string> {
-        let reader: reading.state = { text: text, at: 0, error: "", };
+        let reader: reading.state = { text: text, at: 0, error: "", failed-at: 0, };
         let parsed = reading.read-value(reader);
         reading.skip-space(reader);
         if reader.error.len() == 0
             && reader.at < text.len() { reading.fail(reader, "text after the value"); }
-        if reader.error.len() > 0 { return err("{reader.error} at byte {reader.at}"); }
+        if reader.error.len() > 0 { return err("{reader.error} at byte {reader.failed-at}"); }
         ok(parsed)
     }
 
@@ -95,10 +95,14 @@ module json {
 
 @(private) module reading {
     // a parse: the text, where it is, and the first error (empty for none: the parse stops there)
-    resource state { text: string, at: s64, error: string, }
+    // (failed-at: where the first error is, the reading gone on past it to its end)
+    resource state { text: string, at: s64, error: string, failed-at: s64, }
 
     fail: func(reader: state, message: string) {
-        if reader.error.len() == 0 { reader.error = message; }
+        if reader.error.len() == 0 {
+            reader.error = message;
+            reader.failed-at = reader.at;
+        }
     }
 
     peek: func(reader: state) -> s64 { reader.text.byte-at(reader.at) }

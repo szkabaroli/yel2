@@ -59,6 +59,26 @@ module format {
         out
     }
 
+    // an unsigned integer in base (2 to 16), its letters upper case where upper (u64's past s64's
+    // greatest too)
+    to-radix-unsigned: func(value: u64, base: s32, upper: bool) -> string {
+        if value == 0 { return "0"; }
+        let letters = if upper { "0123456789ABCDEF" } else { "0123456789abcdef" };
+        let wide = base as u64;
+        let digits: list<string> = [];
+        let rest = value;
+        for step in 0..64 {
+            if rest != 0 {
+                let at = (rest % wide) as s64;
+                digits.push(letters.substring(at, at + 1));
+                rest = rest / wide;
+            }
+        }
+        let out = "";
+        for index in 0..digits.len() { out = out + digits[digits.len() - 1 - index]; }
+        out
+    }
+
     // a float with digits after the point, rounded
     to-fixed: func(value: f64, digits: s32) -> string { fixed-text(value, digits) }
 

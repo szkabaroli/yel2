@@ -256,14 +256,16 @@ ystr yel_buffer_string(ybuffer *b);
 
 // a type as the program holds its values (one static table for each type the compiler shows): what
 // one walker reads to show any value. A record's or variant's value is a pointer to its object (its
-// offsets are into the object); an option's, result's, tuple's, union's and anonymous record's is a
-// struct held by value
+// offsets are into the object); an option's, result's, tuple's, union's and anonymous record's, and
+// a variant's held by value, is a struct held by value
 enum {
 	Y_K_UNIT, Y_K_BOOL, Y_K_CHAR, Y_K_SIGNED, Y_K_UNSIGNED, Y_K_F32, Y_K_F64, Y_K_STRING, Y_K_BUFFER,
 	Y_K_MAP, Y_K_LIST, Y_K_FIXED, Y_K_OPTION, Y_K_RESULT, Y_K_TUPLE, Y_K_ANON_RECORD, Y_K_RECORD,
 	Y_K_VARIANT, Y_K_ENUM, Y_K_FLAGS, Y_K_HANDLE, Y_K_UNION, Y_K_FUNC, Y_K_FUTURE, Y_K_SEQ, Y_K_STREAM,
 	// a record (a value): held in place as an anonymous record is, shown as a declared one is
 	Y_K_VALUE_RECORD,
+	// a variant held by value: its tag and its cases' union in place (its offsets are into it)
+	Y_K_VALUE_VARIANT,
 };
 
 typedef struct ytype {
@@ -556,6 +558,10 @@ __attribute__((export_name("cabi_realloc"))) void *cabi_realloc(void *old, size_
 extern bool y_started;
 /** The program's arguments (argv after the program), for main. */
 ylist *y_start(int argc, char **argv);
+/** main's body (program) run where deep recursion has room: natively on a thread of its own, its
+ * stack 1 GiB (reserved, its pages taken as it grows; YEL_STACK_MB another size); as wasm on the
+ * component's own stack. program's value is main's. */
+int y_main(int argc, char **argv, int (*program)(int argc, char **argv));
 void y_ready(void);
 extern bool y_turns;
 void y_ready_turns(void);

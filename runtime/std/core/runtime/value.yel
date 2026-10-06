@@ -13,6 +13,8 @@ module value {
         handle-value, union-value, func-value, future-value, seq-value, stream-value,
         // a record (a value): in place, as an anonymous record; shown as a declared record (WAVE)
         value-record-value,
+        // a variant held by value: its tag and its case's payload in place
+        value-variant-value,
     }
 
     // a descriptor's kind; its count (of fields, cases, kinds or flags; a fixed-length list's
@@ -122,8 +124,8 @@ module value {
                 write-value(out, type-part(desc, tag), at + part-offset(desc, tag + 1), display);
             }
             enum-value => out.push(wave-label(part-name(desc, load-integer(at, 4, true) as s32))),
-            variant-value => {
-                let object: s64 = load-at(at);
+            variant-value | value-variant-value => {
+                let object = parts-at(desc, at);
                 let tag = load-integer(object + part-offset(desc, 0), 4, true) as s32;
                 out.push(wave-label(part-name(desc, tag)));
                 let payload = type-part(desc, tag);
@@ -268,7 +270,7 @@ module value {
                 }
                 true
             }
-            union-value | variant-value => {
+            union-value | variant-value | value-variant-value => {
                 let one = parts-at(desc, left);
                 let other = parts-at(desc, right);
                 let tag = load-integer(one + part-offset(desc, 0), 4, true) as s32;
@@ -317,7 +319,7 @@ module value {
                 for index in 0..type-count(desc) { out = hash-mix(out, value-hash(item, at + (index as s64) * type-size(item))); }
                 out
             }
-            union-value | variant-value => {
+            union-value | variant-value | value-variant-value => {
                 let parts = parts-at(desc, at);
                 let tag = load-integer(parts + part-offset(desc, 0), 4, true) as s32;
                 let payload = type-part(desc, tag);

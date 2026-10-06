@@ -808,7 +808,8 @@ static int y_g_text(char *out, bool negative, const char *d, int keep, int x, in
 	return len;
 }
 
-// a float's text, the shortest %.*g that reads back as it (single: as a float), up to most digits
+// a float's text, the shortest digits that read back as it (single: as a float), up to most, laid
+// out as %.*g lays out most digits (10, not 1e+01: exponents from most places on, or below 10^-4)
 static ystr y_shortest_text(double v, bool single, int most) {
 	char out[48];
 	const bool negative = signbit(v);
@@ -822,7 +823,7 @@ static ystr y_shortest_text(double v, bool single, int most) {
 	for (int precision = 1; precision <= most; precision++) {
 		int rx = x;
 		y_round_digits(digits, n, precision, rounded, &rx);
-		len = y_g_text(out, negative, rounded, precision, rx, precision);
+		len = y_g_text(out, negative, rounded, precision, rx, most);
 		if (y_reads_back(size, single, rounded, precision, rx)) break;
 	}
 	return y_str_of(out, len);
@@ -1336,9 +1337,60 @@ long y_env_count(const char *s) {
 	return n < 0 ? 0 : n;
 }
 
+#if defined(__wasi__)
+int y_main(int argc, char **argv, int (*program)(int argc, char **argv)) { return program(argc, argv); }
+#else
+#include <pthread.h>
+
+typedef struct {
+	int argc;
+	char **argv;
+	int (*program)(int argc, char **argv);
+	int code;
+} y_main_call;
+
+static void *y_main_thread(void *given) {
+	y_main_call *call = given;
+	call->code = call->program(call->argc, call->argv);
+	return NULL;
+}
+
+int y_main(int argc, char **argv, int (*program)(int argc, char **argv)) {
+	const char *wanted = getenv("YEL_STACK_MB");
+	long mb = wanted ? atol(wanted) : 1024;
+	if (mb < 1) mb = 1024;
+	y_main_call call = { argc, argv, program, 0 };
+	pthread_attr_t attributes;
+	pthread_t thread;
+	// (where no thread of that stack can be made: main's own)
+	if (pthread_attr_init(&attributes) != 0) return program(argc, argv);
+	bool made = pthread_attr_setstacksize(&attributes, (size_t)mb << 20) == 0 && pthread_create(&thread, &attributes, y_main_thread, &call) == 0;
+	pthread_attr_destroy(&attributes);
+	if (!made) return program(argc, argv);
+	pthread_join(thread, NULL);
+	return call.code;
+}
+#endif
+
 /** The program's arguments (argv after the program), for main. */
+#if !defined(__wasi__)
+#include <sys/resource.h>
+#endif
+
 ylist *y_start(int argc, char **argv) {
 	y_started = true;
+#if !defined(__wasi__)
+	// as many files open at once as the system lets this process have (Linux gives 1024 unless
+	// asked: a program with many tasks each holding one runs out)
+	struct rlimit files;
+	if (getrlimit(RLIMIT_NOFILE, &files) == 0 && files.rlim_cur < files.rlim_max) {
+		files.rlim_cur = files.rlim_max;
+#if defined(__APPLE__)
+		if (files.rlim_cur > OPEN_MAX) files.rlim_cur = OPEN_MAX;
+#endif
+		setrlimit(RLIMIT_NOFILE, &files);
+	}
+#endif
 	y_argc = argc;
 	y_argv = argv;
 	const char *stress = y_getenv("YEL_GC_STRESS");
@@ -3047,12 +3099,12 @@ int64_t yel_process_fork(void) {
 	}
 	return (int64_t)child;
 }
-/** How a child ended: its exit status, 128 + the signal that ended it, or -1 (no such child). */
+/** How a child ended: its exit status (0 to 255), 256 + the signal that ended it, or -1 (no such child). */
 int64_t yel_process_wait(int64_t child) {
 	int status = 0;
 	if (waitpid((pid_t)child, &status, 0) < 0) return -1;
 	if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
-	if (WIFSIGNALED(status)) return 128 + (int64_t)WTERMSIG(status);
+	if (WIFSIGNALED(status)) return 256 + (int64_t)WTERMSIG(status);
 	return -1;
 }
 /** The process ends with code, its output flushed, and nothing more of it runs (_exit: no exit handlers). */
@@ -3173,7 +3225,7 @@ static void y_trace_children(void) {
 
 static void y_child_exited(uv_process_t *process, int64_t status, int signal) {
 	y_child *c = process->data;
-	c->status = signal ? 128 + signal : status;
+	c->status = signal ? 256 + signal : status;
 	c->done = true;
 	y_uv_pending--;
 	y_wake(c->task);

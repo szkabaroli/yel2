@@ -23,7 +23,7 @@ module process {
     wait: func(child: s64) -> result<ended, string> {
         let status = c-wait(child);
         if status < 0 { return err("no such child: {child}"); }
-        ok(if status > 128 { ended.signal(status - 128) } else { ended.code(status) })
+        ok(status-ended(status))
     }
 
     // command run (looked for on PATH where it has no /) with arguments, in dir ("": this
@@ -80,7 +80,8 @@ module process {
         out.to-string()
     }
 
-    @(private) status-ended: func(status: s64) -> ended { if status > 128 { ended.signal(status - 128) } else { ended.code(status) } }
+    // (the runtime's: an exit status 0 to 255, a signal 256 + its number)
+    @(private) status-ended: func(status: s64) -> ended { if status >= 256 { ended.signal(status - 256) } else { ended.code(status) } }
 
     // the process ends with code: its output flushed, and nothing more of it run (no exit
     // handlers: a child's end, once its work is done)
