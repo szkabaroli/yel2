@@ -1,0 +1,3411 @@
+// yelc run: a checked program interpreted, no C made. It runs on the checked tree (what the checker
+// leaves: each name's binding, each call's func by its key, each expression's type), its values
+// yel's own (a list a list, a string a string), so this compiler's collector keeps them and its own
+// interpolation shows numbers exactly as a compiled program does. What the prelude and std do over
+// raw memory (a list's items, a map's slots, a buffer's bytes) is done here natively, by the func's
+// key; the rest of std, yel over those, is interpreted. What it cannot run yet stops it, saying
+// what: async, generators, views, a format spec.
+
+from "std:cli" include environment, exit;
+from "std:clocks" include monotonic-clock, system-clock;
+from "std:random" include insecure, insecure-seed, random;
+from "std:process" include process;
+
+// a value: what a program holds
+variant Value {
+    unit,
+    bool(bool),
+    int(IntValue),
+    float(FloatValue),
+    char(char),
+    text(string),
+    bytes(Bytes),
+    list(Items),
+    map(Entries),
+    tuple(list<Value>),
+    // a declared record's or resource's (shared), an anonymous record's, a value record's (copied)
+    object(Object),
+    // an option's, a result's, a variant's or enum's case (none, some(x), ok(x), a case)
+    case(CaseValue),
+    // a flags type's value: its bits, and its flags' names (what shows it)
+    flags(FlagsValue),
+    func(Callable),
+    seq(Generator),
+    // an async call begun (start f(x)), a stream's reading end and its writer: the runtime's own
+    future(FutureBox),
+    stream(StreamBox),
+    writer(WriterBox),
+}
+
+resource FutureBox { f: future<Value>, }
+resource FlagsValue { bits: u64, names: list<string>, }
+resource StreamBox { s: stream<Value>, }
+resource WriterBox { w: writer<Value>, }
+
+// a generator called: its frames (where its body is, innermost last; none left: done), its own
+// cells, and the bindings and func it runs in
+resource Generator {
+    frames: list<GenFrame>,
+    cells: Frame,
+    bindings: Bindings,
+    running: string,
+    done: bool,
+}
+
+// where a generator's body is: a block at its next statement; a loop; a for over a range (its next
+// value, its last), a list (its next index) or another generator
+variant GenFrame {
+    block(BlockAt),
+    loop(Loop),
+    range(RangeAt),
+    items(ItemsAt),
+    values(ValuesAt),
+}
+
+resource BlockAt { block: Block, next: s64, }
+resource RangeAt { node: For, at: u64, to: u64, kind: number-kind, inclusive: bool, }
+resource ItemsAt { node: For, items: Items, next: s64, }
+resource ValuesAt { node: For, from: Generator, }
+
+// an integer: its bits (sign-extended where signed) and its type's name (s32, u8, ...)
+record IntValue { bits: u64, kind: number-kind, }
+
+// a number's type, in a byte (an integer's, a char's code point, a float's): what keeps a number
+// value 16 bytes, held in place
+enum number-kind { s8, s16, s32, s64, u8, u16, u32, u64, char, f32, f64, }
+
+// a float, held as an f64 (an f32's rounded to it after each step), and its type's name
+record FloatValue { value: f64, kind: number-kind, }
+
+// version: one more for each change made in place (what tells an observable field it changed)
+resource Bytes { data: buffer, version: s64, }
+
+// fixed: a fixed-length list's (a value: copied wherever it is put)
+resource Items { items: list<Value>, fixed: bool, version: s64, }
+
+// a map's entries in the order they were set, and each key's place by its fingerprint
+resource Entries { keys: list<Value>, values: list<Value>, places: map<string, s64>, version: s64, }
+
+// type: the record's name ("" for an anonymous one); copied: a value record (copied wherever it is
+// put), else shared; observers: an @(observable) resource's registrar (std's observe.Registrar,
+// unit for none), and its fields it is not told of (@(ignored))
+resource Object {
+    type: string,
+    fields: list<string>,
+    values: list<Value>,
+    copied: bool,
+    anon: bool,
+    observers: Value,
+    ignored: list<string>,
+}
+
+// kind: "option", "result" or "variant" (enum: a variant whose cases hold nothing); index: its
+// place among its type's cases (what < orders an enum's by; -1 where none is known); payload: none
+// for a case that holds nothing
+// (a resource: shared, never changed once made; a copy is made anew)
+resource CaseValue { kind: string, type: string, name: string, index: s64, payload: option<Value>, }
+
+variant Callable {
+    // a declared func, by its key
+    named(FuncName),
+    closure(ClosureValue),
+}
+
+// a closure: its literal, the cells it reaches (its maker's, as they were when it was made), and
+// the bindings of the func it is written in
+resource ClosureValue { node: Closure, cells: Frame, bindings: Bindings, }
+
+// a declared func's key, held by pointer (a func value 16 bytes, in place)
+resource FuncName { key: string, }
+
+// (order: when it was bound, the frame's latest binding of a name its greatest)
+resource Cell { value: Value, order: s64, }
+
+// a call's bindings, each in its slot (a Mark's; an empty one the unbound cell); the slots are
+// those of family, the func whose body (and closures) they are numbered in
+resource Frame { cells: list<Cell>, family: string, }
+
+// a func's body compiled once, for the interpreter: each hot node in a direct form (a local by its
+// binding's slot, a literal its value, an operator its bytes, a call of a func its func), every
+// other node the tree's own, evaluated as eval evaluates it
+variant Code {
+    local(Mark),
+    constant(Value),
+    binary(BinaryCode),
+    call(CallCode),
+    native(NativeCode),
+    field(FieldCode),
+    record(RecordCode),
+    branch(BranchCode),
+    block(list<StatementCode>),
+    tree(Expr),
+}
+
+resource BinaryCode { first: s64, second: s64, left: Code, right: Code, }
+
+// (body: the callee's code, kept here once it is compiled: no lookup each call)
+resource CallCode { function: Func, args: list<Code>, body: option<list<StatementCode>>, }
+
+resource NativeCode { key: string, args: list<Code>, }
+
+resource FieldCode { target: Code, field: Field, }
+
+// a record literal laid out once: its values in the order written, then each field's from the
+// value at sources[k] (-1: its type's zero, zeros[k])
+resource RecordCode {
+    type: string,
+    fields: list<string>,
+    values: list<Code>,
+    sources: list<s64>,
+    zeros: list<Type>,
+    copied: bool,
+    anon: bool,
+    ignored: list<string>,
+}
+
+resource BranchCode { condition: Code, then: list<StatementCode>, otherwise: option<list<StatementCode>>, }
+
+// a statement compiled: a let of a binding, a local assigned (op: its operator's first byte, 0 for
+// =), an expression (kept as the block's value), a return, a for over a range, a loop, else the
+// tree's own (exec's)
+variant StatementCode {
+    bind(BindCode),
+    assign(AssignCode),
+    evaluate(EvaluateCode),
+    returns(Code),
+    range(RangeCode),
+    repeat(list<StatementCode>),
+    tree(Stmt),
+}
+
+resource BindCode { mark: Mark, value: Code, }
+
+resource AssignCode { mark: Mark, op: s64, value: Code, }
+
+resource EvaluateCode { value: Code, kept: bool, }
+
+resource RangeCode { mark: Mark, start: Code, stop: Code, inclusive: bool, body: list<StatementCode>, }
+
+// what a call by name calls: a func of the program, a native (or a host's func, or an extern), or
+// a case made (a variant's, written as a call)
+variant Callee {
+    function(Func),
+    native,
+    made,
+}
+
+// what a statement left: on to the next, or a return, a break, a continue in flight
+variant Flow {
+    normal,
+    returned(Value),
+    broke,
+    continued,
+}
+
+// the program: its funcs, externs, records, variants and flags by key, its globals' and consts'
+// values; the running func's cells and bindings; the control flow in flight
+resource Interp {
+    funcs: map<string, Func>,
+    externs: map<string, Extern>,
+    records: map<string, RecordDecl>,
+    variants: map<string, VariantDecl>,
+    flags: map<string, FlagsDecl>,
+    consts: map<string, ConstDecl>,
+    globals: map<string, Cell>,
+    global-decls: map<string, GlobalDecl>,
+    cells: Frame,
+    // each func's bindings by slot, as they were first bound (a frame's numbering)
+    slots: map<string, list<Mark>>,
+    // the empty slot's cell, and how many bindings were made (each cell's order)
+    unbound: Cell,
+    bound: s64,
+    // the values made once and shared: true and false, and the s32s and s64s 0 to 255
+    yes: Value,
+    no: Value,
+    small-s32: list<Value>,
+    small-s64: list<Value>,
+    // the funcs whoever runs the program gives, by key (yelc lint's std:lint files()): each called
+    // in place of the program's own
+    hosted: map<string, func(Interp, list<Value>) -> Value>,
+    // each call's callee, found the first time it runs (an interpreted func's: no native looked
+    // for again)
+    callees: map<Expr, Callee>,
+    // each func's body compiled, the first time it is called
+    compiled: map<Func, list<StatementCode>>,
+    // each literal's value, made once (its text read the first time it is evaluated)
+    literals: map<Expr, Value>,
+    // whether each expression waits or starts, found once
+    waits: map<Expr, bool>,
+    bindings: Bindings,
+    flow: Flow,
+    // each declared type's display func (display: func(T) -> string), by the type's key; the func
+    // running (a display func's own "{x}" shows x as it is); the program's arguments
+    displays: map<string, string>,
+    running: string,
+    arguments: list<string>,
+    // the @(context) globals, each task's own (one started takes its starter's, as they are
+    // then); and the values of an expression's parts that wait, made first (eval takes them)
+    contexts: map<string, Cell>,
+    given: map<Expr, Value>,
+}
+
+module interp {
+    // runs main, given the program (its file, what WASI's get-arguments gives first) and its
+    // arguments: its exit code
+    run: async func(decls: list<Decl>, program: string, arguments: list<string>) -> s64 {
+        wait run-hosted(decls, program, arguments, map.new())
+    }
+
+    // run, with funcs given in place of the program's own of those keys (each given the run and
+    // the call's arguments)
+    run-hosted: async func(decls: list<Decl>, program: string, arguments: list<string>, hosted: map<string, func(Interp, list<Value>) -> Value>) -> s64 {
+        let run: Interp = {
+            funcs: map.new(),
+            externs: map.new(),
+            records: map.new(),
+            variants: map.new(),
+            flags: map.new(),
+            consts: map.new(),
+            globals: map.new(),
+            global-decls: map.new(),
+            cells: { cells: [], family: "", },
+            slots: map.new(),
+            unbound: { value: Value.unit, order: -1, },
+            bound: 0,
+            hosted: hosted,
+            callees: map.new(),
+            compiled: map.new(),
+            yes: Value.bool(true),
+            no: Value.bool(false),
+            small-s32: small-integers("s32"),
+            small-s64: small-integers("s64"),
+            literals: map.new(),
+            waits: map.new(),
+            bindings: { exprs: map.new(), assigns: map.new(), },
+            flow: Flow.normal,
+            displays: map.new(),
+            running: "",
+            arguments: [program,],
+            contexts: map.new(),
+            given: map.new(),
+        };
+        for one in arguments { run.arguments.push(one); }
+        for declaration in decls {
+            match declaration {
+                func-decl(function-declaration) => {
+                    run.funcs.set(function-declaration.name, function-declaration);
+                    if gen.is-display(function-declaration) { run.displays.set(type-name(function-declaration.param-types[0]), function-declaration.name); }
+                }
+                extern-decl(extern-declaration) => run.externs.set(extern-declaration.name, extern-declaration),
+                record-decl(record-declaration) => run.records.set(record-declaration.name, record-declaration),
+                variant-decl(variant-declaration) => run.variants.set(variant-declaration.name, variant-declaration),
+                flags-decl(flags-declaration) => run.flags.set(flags-declaration.name, flags-declaration),
+                const-decl(const-declaration) => run.consts.set(const-declaration.name, const-declaration),
+                global-decl(global-declaration) => run.global-decls.set(global-declaration.name, global-declaration),
+                _ => {}
+            }
+        }
+        let main = match run.funcs.get("main") {
+            some(found) => found,
+            none => stop("yelc run: the program has no main"),
+        };
+        let given: list<Value> = [];
+        if main.params.len() > 0 {
+            let items: list<Value> = [];
+            for index in 1..run.arguments.len() { items.push(Value.text(run.arguments[index])); }
+            given.push(Value.list({ items: items, fixed: false, version: 0, }));
+        }
+        let result = if main.is-async { wait call-async(run, main, given) } else { call-func(run, main, given) };
+        match result {
+            int(integer) => integer.bits as s64,
+            _ => 0,
+        }
+    }
+
+    // stops the run, saying why (as the runtime's own errors do, on stderr)
+    @(private) stop: func(why: string) -> never {
+        eprint("{why}\n");
+        process.end(70)
+    }
+
+    // ---------------------------------------------------------------- calls
+
+    @(private) call-func: func(run: Interp, function: Func, args: list<Value>) -> Value {
+        if function.is-generator { return made-generator(run, function, args); }
+        if function.is-async { stop("yelc run: {function.name} is async, which the interpreter does not run yet"); }
+        call-compiled(run, function, body-code(run, function), args)
+    }
+
+    // a func's call, its body's code given (neither a generator nor async)
+    @(private) call-compiled: func(run: Interp, function: Func, body: list<StatementCode>, args: list<Value>) -> Value {
+        let saved-cells = run.cells;
+        let saved-bindings = run.bindings;
+        let saved-running = run.running;
+        run.cells = { cells: [], family: function.name, };
+        run.bindings = function.bindings;
+        run.running = function.name;
+        for index in 0..function.marks.len() {
+            let value = if index < args.len() {
+                args[index]
+            } else {
+                match function.defaults[index] {
+                    some(given) => eval(run, given),
+                    none => Value.unit,
+                }
+            };
+            bind-mark(run, function.marks[index], copied(value));
+        }
+        let result = run-statements(run, body);
+        let value = match run.flow {
+            returned(returned-value) => returned-value,
+            _ => result,
+        };
+        run.flow = Flow.normal;
+        run.cells = saved-cells;
+        run.bindings = saved-bindings;
+        run.running = saved-running;
+        value
+    }
+
+    // a binding made: a new cell in its slot (a closure made before keeps the old one)
+    @(private) bind-mark: func(run: Interp, mark: Mark, value: Value) {
+        let at = slot(run, mark);
+        let cells = run.cells.cells;
+        loop {
+            if cells.len() > at { break; }
+            cells.push(run.unbound);
+        }
+        run.bound += 1;
+        cells[at] = { value: value, order: run.bound, };
+    }
+
+    // a binding's slot in the frame: numbered the first time it is bound, in its func's numbering
+    @(private) slot: func(run: Interp, mark: Mark) -> s64 {
+        if mark.slot >= 0 { return mark.slot; }
+        if !run.slots.has(run.cells.family) { run.slots.set(run.cells.family, []); }
+        let marks = run.slots.at(run.cells.family);
+        mark.slot = marks.len();
+        marks.push(mark);
+        mark.slot
+    }
+
+    // a binding's cell in the frame (none: not bound here)
+    @(private) cell: func(run: Interp, mark: Mark) -> option<Cell> {
+        let at = mark.slot;
+        let cells = run.cells.cells;
+        if at < 0 || at >= cells.len() { return none; }
+        let found = cells[at];
+        if found == run.unbound { none } else { some(found) }
+    }
+
+    // the frame's latest binding of a name (where the checker's record of a name's binding has
+    // not the expression: one it made anew, widening a value)
+    @(private) named-mark: func(run: Interp, name: string) -> option<Mark> {
+        let marks = run.slots.get-or(run.cells.family, []);
+        let best: option<Mark> = none;
+        let order: s64 = -1;
+        for mark in marks {
+            if mark.name != name { continue; }
+            match cell(run, mark) {
+                some(found) => {
+                    if found.order > order {
+                        order = found.order;
+                        best = some(mark);
+                    }
+                }
+                none => {}
+            }
+        }
+        best
+    }
+
+    // a call of the func or extern of that key, or of a native for it
+    @(private) call-key: func(run: Interp, key: string, args: list<Value>) -> Value {
+        match native(run, key, args) {
+            some(value) => { return value; }
+            none => {}
+        }
+        match run.funcs.get(key) {
+            some(function) => call-func(run, function, args),
+            none => {
+                if run.externs.has(key) { stop("yelc run: {key} (a runtime extern) is not supported by the interpreter yet"); }
+                stop("yelc run: no func {key}")
+            }
+        }
+    }
+
+    @(private) call-value: func(run: Interp, callee: Value, args: list<Value>) -> Value {
+        match callee {
+            func(callable) => match callable {
+                named(named) => call-key(run, named.key, args),
+                closure(closure) => {
+                    let saved-cells = run.cells;
+                    let saved-bindings = run.bindings;
+                    run.cells = copied-frame(closure.cells);
+                    run.bindings = closure.bindings;
+                    for index in 0..closure.node.marks.len() {
+                        let value = if index < args.len() { args[index] } else { Value.unit };
+                        bind-mark(run, closure.node.marks[index], copied(value));
+                    }
+                    let result = eval-block(run, closure.node.body);
+                    let value = match run.flow {
+                        returned(returned-value) => returned-value,
+                        _ => result,
+                    };
+                    run.flow = Flow.normal;
+                    run.cells = saved-cells;
+                    run.bindings = saved-bindings;
+                    value
+                }
+            },
+            _ => stop("yelc run: a call of a value that is no func"),
+        }
+    }
+
+    // ---------------------------------------------------------------- async
+
+    // an async func's call: as call-func, its body run where it may wait (the task waits; the
+    // others run meanwhile)
+    @(private) call-async: async func(run: Interp, function: Func, args: list<Value>) -> Value {
+        let saved-cells = run.cells;
+        let saved-bindings = run.bindings;
+        let saved-running = run.running;
+        run.cells = { cells: [], family: function.name, };
+        run.bindings = function.bindings;
+        run.running = function.name;
+        for index in 0..function.marks.len() {
+            let value = if index < args.len() { args[index] } else {
+                match function.defaults[index] {
+                    some(given) => eval(run, given),
+                    none => Value.unit,
+                }
+            };
+            bind-mark(run, function.marks[index], copied(value));
+        }
+        let result = wait a-block(run, function.body);
+        let value = match run.flow {
+            returned(returned-value) => returned-value,
+            _ => result,
+        };
+        run.flow = Flow.normal;
+        run.cells = saved-cells;
+        run.bindings = saved-bindings;
+        run.running = saved-running;
+        value
+    }
+
+    // the async funcs done here, by key: the runtime's waits (a turn, a timer, a stream's room or
+    // items), each the runtime's own
+    @(private) async-native-keys: func() -> list<string> {
+        [
+            "yel:std/async.yield-turn", "yel:std/async.sleep", "yel:std/streams.read", "yel:std/streams.write",
+            "yel:std/streams.write-all", "yel:std/streams.read-some", "wasi:clocks/monotonic-clock.wait-until",
+            "wasi:clocks/monotonic-clock.wait-for", "std:process/process.run-async",
+        ]
+    }
+
+    // an async call: an interpreted func's, or one of the runtime's waits
+    @(private) a-call: async func(run: Interp, key: string, args: list<Value>) -> Value {
+        if key == "yel:std/async.yield-turn" {
+            wait async.yield-turn();
+            return Value.unit;
+        }
+        if key == "yel:std/async.sleep" {
+            wait async.sleep(held-integer(args[0]));
+            return Value.unit;
+        }
+        if key == "wasi:clocks/monotonic-clock.wait-until" {
+            wait monotonic-clock.wait-until(held-integer(args[0]) as u64);
+            return Value.unit;
+        }
+        if key == "wasi:clocks/monotonic-clock.wait-for" {
+            wait monotonic-clock.wait-for(held-integer(args[0]) as u64);
+            return Value.unit;
+        }
+        if key == "std:process/process.run-async" {
+            let arguments: list<string> = [];
+            match args[1] {
+                list(xs) => { for one in xs.items { arguments.push(held-text(one)); } }
+                _ => {}
+            }
+            let environment: list<tuple<string, string>> = [];
+            match args[3] {
+                list(xs) => {
+                    for one in xs.items {
+                        match one {
+                            tuple(pair) => environment.push((held-text(pair[0]), held-text(pair[1]))),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return ended-value(wait process.run-async(held-text(args[0]), arguments, held-text(args[2]), environment, held-text(args[4])));
+        }
+        if key == "yel:std/streams.read" {
+            return match args[0] {
+                stream(boxed) => option(wait streams.read(boxed.s)),
+                _ => stop("yelc run: a read of what is no stream"),
+            };
+        }
+        if key == "yel:std/streams.write" {
+            match args[0] {
+                writer(boxed) => wait streams.write(boxed.w, copied(args[1])),
+                _ => stop("yelc run: a write to what is no writer"),
+            }
+            return Value.unit;
+        }
+        if key == "yel:std/streams.write-all" {
+            match (args[0], args[1]) {
+                (writer(boxed), list(items)) => { for one in items.items { wait streams.write(boxed.w, copied(one)); } }
+                _ => stop("yelc run: a write to what is no writer"),
+            }
+            return Value.unit;
+        }
+        if key == "yel:std/streams.read-some" {
+            return match args[0] {
+                stream(boxed) => Value.list({ items: wait streams.read-some(boxed.s, held-integer(args[1])), fixed: false, version: 0, }),
+                _ => stop("yelc run: a read of what is no stream"),
+            };
+        }
+        match run.funcs.get(key) {
+            some(function) => wait call-async(run, function, args),
+            none => stop("yelc run: no async func {key}"),
+        }
+    }
+
+    // a call started, as a task of its own: done, the writers it was given that it only wrote to
+    // closed, as releases.yel closes those of a func only ever started (its parameters its own)
+    @(private) a-started: async func(run: Interp, key: string, args: list<Value>) -> Value {
+        let value = wait a-call(run, key, args);
+        match run.funcs.get(key) {
+            some(function) => {
+                let saved = run.bindings;
+                run.bindings = function.bindings;
+                for index in 0..function.marks.len() {
+                    if index >= args.len() { break; }
+                    match args[index] {
+                        writer(boxed) => { if only-written(run, function.body, function.marks[index]) { streams.close(boxed.w); } }
+                        _ => {}
+                    }
+                }
+                run.bindings = saved;
+            }
+            none => {}
+        }
+        value
+    }
+
+    // whether body uses mark only to write to (w.write, w.write-all: not closed, given, kept, nor
+    // captured)
+    @(private) only-written: func(run: Interp, body: Block, mark: Mark) -> bool {
+        let mentioned = 0;
+        let written = 0;
+        for expression in walk.exprs(body, true) { if refers(run, expression, mark) { mentioned += 1; } }
+        for expression in walk.exprs(body, false) {
+            match expression.kind {
+                method(method) => {
+                    if refers(run, method.target, mark) && (method.name.ends-with(".write") || method.name.ends-with(".write-all")) { written += 1; }
+                }
+                _ => {}
+            }
+        }
+        mentioned == written
+    }
+
+    // a task of its own for a call started: the program's tables shared, its frame and flow its
+    // own, its @(context) globals its starter's as they are now
+    @(private) forked: func(run: Interp) -> Interp {
+        let contexts: map<string, Cell> = map.new();
+        for key in run.contexts.keys() { contexts.set(key, { value: run.contexts.at(key).value, order: 0, }); }
+        {
+            funcs: run.funcs, externs: run.externs, records: run.records, variants: run.variants, flags: run.flags,
+            consts: run.consts, globals: run.globals, global-decls: run.global-decls,
+            cells: { cells: [], family: run.cells.family, }, slots: run.slots, unbound: run.unbound, bound: 0, hosted: run.hosted, callees: run.callees, compiled: run.compiled,
+            yes: run.yes, no: run.no, small-s32: run.small-s32, small-s64: run.small-s64,
+            literals: run.literals, waits: run.waits, bindings: run.bindings, flow: Flow.normal,
+            displays: run.displays, running: run.running, arguments: run.arguments,
+            contexts: contexts, given: map.new(),
+        }
+    }
+
+    // an expression that names an async call (f(x), x.f(y)): its key and arguments' expressions
+    @(private) async-call: func(run: Interp, expression: Expr) -> option<tuple<string, list<Expr>>> {
+        let (name, args) = match expression.kind {
+            call(call) => (call.name, call.args),
+            method(method) => {
+                let all = [method.target,];
+                for argument in method.args { all.push(argument); }
+                (method.name, all)
+            }
+            _ => { return none; }
+        };
+        let is-async = match run.funcs.get(name) {
+            some(function) => function.is-async,
+            none => async-native-keys().contains(name),
+        };
+        if is-async { some((name, args)) } else { none }
+    }
+
+    @(private) a-args: async func(run: Interp, exprs: list<Expr>) -> list<Value> {
+        let out: list<Value> = [];
+        for one in exprs { out.push(wait a-eval(run, one)); }
+        out
+    }
+
+    // what a wait or a start is given, begun: an async call started as a task of its own, or a
+    // future already
+    @(private) begun: async func(run: Interp, expression: Expr) -> future<Value> {
+        match async-call(run, expression) {
+            some(call) => {
+                let (key, exprs) = call;
+                let args = wait a-args(run, exprs);
+                start a-started(forked(run), key, args)
+            }
+            none => match wait a-eval(run, expression) {
+                future(boxed) => boxed.f,
+                _ => stop("yelc run: a wait for what is no future"),
+            },
+        }
+    }
+
+    // a wait: for one (an async call, waited for in this task; a future), the first of several
+    // done (a | b), or all of them (an anonymous record of their values)
+    @(private) a-wait: async func(run: Interp, waiting: Wait) -> Value {
+        if waiting.mode == "one" {
+            return match async-call(run, waiting.values[0]) {
+                some(call) => {
+                    let (key, exprs) = call;
+                    let args = wait a-args(run, exprs);
+                    wait a-call(run, key, args)
+                }
+                none => match wait a-eval(run, waiting.values[0]) {
+                    future(boxed) => wait boxed.f,
+                    _ => stop("yelc run: a wait for what is no future"),
+                },
+            };
+        }
+        let futures: list<future<Value>> = [];
+        for one in waiting.values { futures.push(wait begun(run, one)); }
+        if waiting.mode == "all" {
+            let values: list<Value> = [];
+            for pending in futures { values.push(wait pending); }
+            return Value.object({ type: "", fields: waiting.fields, values: values, copied: true, anon: true, observers: Value.unit, ignored: [], });
+        }
+        // the first done: each told to one stream as it is, the first item read
+        let pair: tuple<stream<Value>, writer<Value>> = streams.stream-pair(futures.len());
+        let (first, out) = pair;
+        for pending in futures { start forward(pending, out); }
+        match wait streams.read(first) {
+            some(value) => value,
+            none => Value.unit,
+        }
+    }
+
+    @(private) forward: async func(pending: future<Value>, out: writer<Value>) {
+        let value = wait pending;
+        wait streams.write(out, value);
+    }
+
+    // whether an expression waits or starts (not inside a closure: that is its own)
+    @(private) awaits: func(run: Interp, expression: Expr) -> bool {
+        match run.waits.get(expression) {
+            some(found) => { return found; }
+            none => {}
+        }
+        let found = waits-uncached(run, expression);
+        run.waits.set(expression, found);
+        found
+    }
+
+    @(private) waits-uncached: func(run: Interp, expression: Expr) -> bool {
+        match expression.kind {
+            wait-expr(_) => true,
+            start-expr(_) => true,
+            closure(_) => false,
+            block(block) => block-awaits(run, block),
+            if-else(if-else) => awaits(run, if-else.cond) || block-awaits(run, if-else.then) || match if-else.otherwise {
+                some(block) => block-awaits(run, block),
+                none => false,
+            },
+            match-expr(match-expression) => awaits(run, match-expression.value) || match-expression.arms.any({ arm -> awaits(run, arm.body) || match arm.guard {
+                some(guard) => awaits(run, guard),
+                none => false,
+            } }),
+            _ => strict-parts(expression).any({ part -> awaits(run, part) }),
+        }
+    }
+
+    @(private) block-awaits: func(run: Interp, block: Block) -> bool { block.stmts.any({ statement -> stmt-awaits(run, statement) }) }
+
+    @(private) stmt-awaits: func(run: Interp, statement: Stmt) -> bool {
+        match statement {
+            let-stmt(let-statement) => awaits(run, let-statement.value),
+            let-pattern(let-pattern) => awaits(run, let-pattern.value),
+            return-stmt(value) => awaits(run, value),
+            expr-stmt(expression-statement) => awaits(run, expression-statement.value),
+            for-stmt(for-statement) => awaits(run, for-statement.start) || match for-statement.stop {
+                some(value) => awaits(run, value),
+                none => false,
+            } || block-awaits(run, for-statement.body),
+            loop-stmt(loop-statement) => block-awaits(run, loop-statement.body),
+            assign(assignment) => awaits(run, assignment.value),
+            assign-field(field-assignment) => awaits(run, field-assignment.target) || awaits(run, field-assignment.value),
+            break-stmt => false,
+            continue-stmt => false,
+        }
+    }
+
+    // an expression's parts that are each evaluated, always and in order (what a wait in one of
+    // them is made first for)
+    @(private) strict-parts: func(expression: Expr) -> list<Expr> {
+        match expression.kind {
+            call(call) => call.args,
+            method(method) => {
+                let all = [method.target,];
+                for argument in method.args { all.push(argument); }
+                all
+            }
+            apply(apply) => {
+                let all = [apply.callee,];
+                for argument in apply.args { all.push(argument); }
+                all
+            }
+            field(field) => [field.target,],
+            binary(operation) => [operation.left, operation.right,],
+            unary(unary) => [unary.value,],
+            interp(parts) => parts,
+            list-lit(items) => items,
+            tuple-lit(items) => items,
+            record-lit(fields) => fields.map({ field -> field.value }),
+            cast(casting) => [casting.value,],
+            is-test(is-test) => [is-test.value,],
+            try-as(try-as) => [try-as.value,],
+            widen(widen) => [widen.value,],
+            _ => [],
+        }
+    }
+
+    // an expression where it may wait: one that does not, as eval does it; else a wait, a start,
+    // a branch, or its waiting parts first, then the rest of it
+    @(private) a-eval: async func(run: Interp, expression: Expr) -> Value {
+        if stopped(run) { return Value.unit; }
+        if !awaits(run, expression) { return eval(run, expression); }
+        match expression.kind {
+            wait-expr(waited) => wait a-wait(run, waited),
+            start-expr(inner) => {
+                let future = wait begun(run, inner);
+                Value.future({ f: future, })
+            }
+            block(block) => wait a-block(run, block),
+            if-else(if-else) => {
+                let cond = wait a-eval(run, if-else.cond);
+                if stopped(run) { return Value.unit; }
+                if truthy(cond) {
+                    wait a-block(run, if-else.then)
+                } else {
+                    match if-else.otherwise {
+                        some(block) => wait a-block(run, block),
+                        none => Value.unit,
+                    }
+                }
+            }
+            match-expr(match-expression) => {
+                let value = wait a-eval(run, match-expression.value);
+                if stopped(run) { return Value.unit; }
+                for arm in match-expression.arms {
+                    if bind(run, arm.pattern, value) {
+                        let guarded = match arm.guard {
+                            some(guard) => truthy(wait a-eval(run, guard)),
+                            none => true,
+                        };
+                        if guarded { return wait a-eval(run, arm.body); }
+                    }
+                }
+                panic("no match arm fits {shown(value, false)}")
+            }
+            binary(block) => {
+                if block.op == "&&" || block.op == "||" {
+                    let left = wait a-eval(run, block.left);
+                    let decided = if block.op == "&&" { !truthy(left) } else { truthy(left) };
+                    return if decided { left } else { wait a-eval(run, block.right) };
+                }
+                wait a-strict(run, expression)
+            }
+            _ => wait a-strict(run, expression),
+        }
+    }
+
+    // its waiting parts first (each a value eval then takes), then the expression itself
+    @(private) a-strict: async func(run: Interp, expression: Expr) -> Value {
+        for part in strict-parts(expression) {
+            if awaits(run, part) {
+                let value = wait a-eval(run, part);
+                if stopped(run) { return Value.unit; }
+                run.given.set(part, value);
+            }
+        }
+        eval(run, expression)
+    }
+
+    @(private) a-block: async func(run: Interp, block: Block) -> Value {
+        let value = Value.unit;
+        let owned = owned-writers(run, block);
+        for at in 0..block.stmts.len() {
+            let statement = block.stmts[at];
+            value = Value.unit;
+            match statement {
+                expr-stmt(expression-statement) => {
+                    let evaluated = wait a-eval(run, expression-statement.value);
+                    if expression-statement.is-value { value = evaluated; }
+                }
+                _ => { if stmt-awaits(run, statement) { wait a-exec(run, statement); } else { exec(run, statement); } }
+            }
+            // its own writers last used here closed (on a way out: each not closed yet)
+            for one in owned {
+                let (mark, bound, last) = one;
+                if bound <= at && (last == at || stopped(run) && last > at) { close-writer(run, mark); }
+            }
+            if stopped(run) { return Value.unit; }
+        }
+        value
+    }
+
+    // a block's own writers, as releases.yel closes them: each bound here from a stream-pair, only
+    // ever written to (not closed, given, kept, nor captured), with the statements that bind it and
+    // last use it
+    @(private) owned-writers: func(run: Interp, block: Block) -> list<tuple<Mark, s64, s64>> {
+        let out: list<tuple<Mark, s64, s64>> = [];
+        for at in 0..block.stmts.len() {
+            let (pattern, value) = match block.stmts[at] {
+                let-pattern(let-pattern) => (let-pattern.pattern, let-pattern.value),
+                _ => { continue; }
+            };
+            let made = match value.kind {
+                call(call) => call.name == "yel:std/streams.stream-pair",
+                _ => false,
+            };
+            if !made { continue; }
+            for mark in walk.pattern-marks(pattern) {
+                let last = at;
+                let mentioned = 0;
+                let written = 0;
+                for later in (at + 1)..block.stmts.len() {
+                    let here = false;
+                    for expression in walk.stmt-exprs(block.stmts[later], true) {
+                        if refers(run, expression, mark) {
+                            mentioned += 1;
+                            here = true;
+                        }
+                    }
+                    for expression in walk.stmt-exprs(block.stmts[later], false) {
+                        match expression.kind {
+                            method(method) => {
+                                if refers(run, method.target, mark) && (method.name.ends-with(".write") || method.name.ends-with(".write-all")) { written += 1; }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if here { last = later; }
+                }
+                if mentioned == written { out.push((mark, at, last)); }
+            }
+        }
+        out
+    }
+
+    @(private) refers: func(run: Interp, expression: Expr, mark: Mark) -> bool {
+        match expression.kind {
+            name(_) => match run.bindings.exprs.get(expression) {
+                some(found) => found == mark,
+                none => false,
+            },
+            _ => false,
+        }
+    }
+
+    @(private) close-writer: func(run: Interp, mark: Mark) {
+        match cell(run, mark) {
+            some(cell) => match cell.value {
+                writer(boxed) => streams.close(boxed.w),
+                _ => {}
+            },
+            none => {}
+        }
+    }
+
+    @(private) a-exec: async func(run: Interp, statement: Stmt) {
+        match statement {
+            let-stmt(let-statement) => {
+                let value = wait a-eval(run, let-statement.value);
+                if !stopped(run) { bind-mark(run, let-statement.mark, copied(value)); }
+            }
+            let-pattern(let-pattern) => {
+                let value = wait a-eval(run, let-pattern.value);
+                if !stopped(run) { let _ = bind(run, let-pattern.pattern, value); }
+            }
+            return-stmt(return-statement) => {
+                let value = wait a-eval(run, return-statement);
+                if !stopped(run) { run.flow = Flow.returned(value); }
+            }
+            expr-stmt(expression-statement) => { let _ = wait a-eval(run, expression-statement.value); }
+            assign(assignment) => {
+                let value = wait a-eval(run, assignment.value);
+                if stopped(run) { return; }
+                run.given.set(assignment.value, value);
+                assign(run, assignment);
+            }
+            assign-field(field-assignment) => {
+                if awaits(run, field-assignment.target) { run.given.set(field-assignment.target, wait a-eval(run, field-assignment.target)); }
+                if awaits(run, field-assignment.value) { run.given.set(field-assignment.value, wait a-eval(run, field-assignment.value)); }
+                if stopped(run) { return; }
+                assign-field(run, field-assignment);
+            }
+            loop-stmt(loop-statement) => {
+                loop {
+                    let _ = wait a-block(run, loop-statement.body);
+                    match run.flow {
+                        broke => {
+                            run.flow = Flow.normal;
+                            break;
+                        }
+                        continued => { run.flow = Flow.normal; }
+                        returned(_) => { break; }
+                        normal => {}
+                    }
+                }
+            }
+            for-stmt(for-statement) => wait a-for(run, for-statement),
+            _ => exec(run, statement),
+        }
+    }
+
+    // a for whose body may wait: as exec-for, each turn's body waited through
+    @(private) a-for: async func(run: Interp, for-statement: For) {
+        let start = wait a-eval(run, for-statement.start);
+        if stopped(run) { return; }
+        let items: list<Value> = [];
+        match for-statement.stop {
+            some(stop-expr) => {
+                let limit = wait a-eval(run, stop-expr);
+                let (from, kind) = match start {
+                    int(integer) => (integer.bits, integer.kind),
+                    _ => stop("yelc run: a range of what is no integer"),
+                };
+                let to = match limit {
+                    int(integer) => integer.bits,
+                    _ => from,
+                };
+                let signed = kind-signed(kind);
+                let before = { one: u64, other: u64 -> if signed { (one as s64) < (other as s64) } else { one < other } };
+                if if for-statement.inclusive { before(to, from) } else { !before(from, to) } { return; }
+                let at = from;
+                loop {
+                    bind-mark(run, for-statement.mark, Value.int({ bits: at, kind: kind, }));
+                    if !(wait a-turn(run, for-statement.body)) { break; }
+                    if for-statement.inclusive && at == to { break; }
+                    at = at + 1;
+                    if !for-statement.inclusive && !before(at, to) { break; }
+                }
+                return;
+            }
+            none => match start {
+                list(xs) => { items = xs.items; }
+                seq(generator) => {
+                    loop {
+                        match step(run, generator) {
+                            some(value) => {
+                                bind-mark(run, for-statement.mark, copied(value));
+                                if !(wait a-turn(run, for-statement.body)) { break; }
+                            }
+                            none => { break; }
+                        }
+                    }
+                    return;
+                }
+                _ => stop("yelc run: a for over what is no list"),
+            },
+        }
+        let at = 0;
+        loop {
+            if at >= items.len() { break; }
+            bind-mark(run, for-statement.mark, copied(items[at]));
+            if !(wait a-turn(run, for-statement.body)) { break; }
+            at += 1;
+        }
+    }
+
+    @(private) a-turn: async func(run: Interp, body: Block) -> bool {
+        let _ = wait a-block(run, body);
+        match run.flow {
+            broke => {
+                run.flow = Flow.normal;
+                false
+            }
+            continued => {
+                run.flow = Flow.normal;
+                true
+            }
+            returned(_) => false,
+            normal => true,
+        }
+    }
+
+    // ---------------------------------------------------------------- compiled bodies
+
+    // a func's body as code, compiled the first time it is called
+    @(private) body-code: func(run: Interp, function: Func) -> list<StatementCode> {
+        match run.compiled.get(function) {
+            some(found) => found,
+            none => {
+                let saved = run.bindings;
+                run.bindings = function.bindings;
+                let made = statements-code(run, function.body);
+                run.bindings = saved;
+                run.compiled.set(function, made);
+                made
+            }
+        }
+    }
+
+    @(private) statements-code: func(run: Interp, block: Block) -> list<StatementCode> {
+        block.stmts.map({ statement -> statement-code(run, statement) })
+    }
+
+    @(private) statement-code: func(run: Interp, statement: Stmt) -> StatementCode {
+        match statement {
+            let-stmt(let-statement) => StatementCode.bind({ mark: let-statement.mark, value: code(run, let-statement.value), }),
+            // (a local's: one the checker bound; another, a global's, the tree's)
+            assign(assignment) => match run.bindings.assigns.get(assignment) {
+                some(mark) => StatementCode.assign({
+                    mark: mark,
+                    op: if assignment.op == "=" { 0 } else { assignment.op.byte-at(0) },
+                    value: code(run, assignment.value),
+                }),
+                none => StatementCode.tree(statement),
+            },
+            expr-stmt(expression-statement) => StatementCode.evaluate({ value: code(run, expression-statement.value), kept: expression-statement.is-value, }),
+            return-stmt(returned) => StatementCode.returns(code(run, returned)),
+            for-stmt(for-statement) => match for-statement.stop {
+                some(stop-expression) => StatementCode.range({
+                    mark: for-statement.mark,
+                    start: code(run, for-statement.start),
+                    stop: code(run, stop-expression),
+                    inclusive: for-statement.inclusive,
+                    body: statements-code(run, for-statement.body),
+                }),
+                none => StatementCode.tree(statement),
+            },
+            loop-stmt(loop-statement) => StatementCode.repeat(statements-code(run, loop-statement.body)),
+            _ => StatementCode.tree(statement),
+        }
+    }
+
+    // an expression as code: a direct form where eval would do just that, else the tree's
+    @(private) code: func(run: Interp, expression: Expr) -> Code {
+        match expression.kind {
+            name(_) => match run.bindings.exprs.get(expression) {
+                some(mark) => Code.local(mark),
+                none => Code.tree(expression),
+            },
+            int-lit(_) => Code.constant(eval(run, expression)),
+            float-lit(_) => Code.constant(eval(run, expression)),
+            bool-lit(_) => Code.constant(eval(run, expression)),
+            char-lit(_) => Code.constant(eval(run, expression)),
+            str-lit(_) => Code.constant(eval(run, expression)),
+            binary(operation) => Code.binary({
+                first: operation.op.byte-at(0),
+                second: if operation.op.len() > 1 { operation.op.byte-at(1) } else { 0 },
+                left: code(run, operation.left),
+                right: code(run, operation.right),
+            }),
+            // (a call by name: not of a local holding a func, nor of what the checker named with ~)
+            call(called) => {
+                if called.name.starts-with("~") || run.bindings.exprs.has(expression) { return Code.tree(expression); }
+                call-code(run, expression, called.name, called.args)
+            }
+            // (x.f(y): f(x, y), but where x names a type: a case made)
+            method(method) => {
+                if is-type-name(run, method.target) { return Code.tree(expression); }
+                let args = [method.target,];
+                for argument in method.args { args.push(argument); }
+                call-code(run, expression, method.name, args)
+            }
+            field(field) => if is-type-name(run, field.target) { Code.tree(expression) } else { Code.field({ target: code(run, field.target), field: field, }) },
+            record-lit(fields) => record-code(run, expression, fields),
+            if-else(branching) => Code.branch({
+                condition: code(run, branching.cond),
+                then: statements-code(run, branching.then),
+                otherwise: match branching.otherwise {
+                    some(block) => some(statements-code(run, block)),
+                    none => none,
+                },
+            }),
+            block(block) => Code.block(statements-code(run, block)),
+            widen(widened) => code(run, widened.value),
+            _ => Code.tree(expression),
+        }
+    }
+
+    // a record literal's code: an anonymous record's, or a declared record's or resource's (not an
+    // observable one: its registrar is made with it, as record-value makes it)
+    @(private) record-code: func(run: Interp, expression: Expr, fields: list<FieldInit>) -> Code {
+        let written = fields.map({ one -> one.name });
+        let values = fields.map({ one -> code(run, one.value) });
+        match settled-type(expression.ty) {
+            anon-record(anonymous) => Code.record({
+                type: "",
+                fields: anonymous.fields,
+                values: values,
+                sources: anonymous.fields.map({ name -> written.index-of(name) }),
+                zeros: anonymous.fields.map({ _ -> Type.unit-type }),
+                copied: true,
+                anon: true,
+                ignored: [],
+            }),
+            _ => match run.records.get(type-name(expression.ty)) {
+                some(declaration) => {
+                    if declaration.observable { return Code.tree(expression); }
+                    Code.record({
+                        type: type-name(expression.ty),
+                        fields: declaration.fields,
+                        values: values,
+                        sources: declaration.fields.map({ name -> written.index-of(name) }),
+                        zeros: declaration.field-types,
+                        copied: declaration.value,
+                        anon: false,
+                        ignored: declaration.ignored,
+                    })
+                }
+                none => Code.tree(expression),
+            },
+        }
+    }
+
+    // a call's code: a func of the program's or a native, by its callee; the tree's where an
+    // argument is a field (one an observable resource may change, which the call tells) or a case
+    // is made
+    @(private) call-code: func(run: Interp, expression: Expr, name: string, args: list<Expr>) -> Code {
+        if args.any({ one -> match one.kind { field(_) => true, _ => false, } }) { return Code.tree(expression); }
+        match callee(run, name) {
+            function(function) => {
+                if function.is-generator || function.is-async { return Code.tree(expression); }
+                Code.call({ function: function, args: args.map({ one -> code(run, one) }), body: none, })
+            }
+            native => Code.native({ key: name, args: args.map({ one -> code(run, one) }), }),
+            made => Code.tree(expression),
+        }
+    }
+
+    // code run: what eval gives of the expression it was compiled from
+    // (each case's work a func of its own: a func's frame holds every local it has, and this one is
+    // entered for each node run)
+    @(private) run-code: func(run: Interp, compiled: Code) -> Value {
+        match compiled {
+            local(mark) => cell-value(run, mark),
+            constant(value) => value,
+            binary(operation) => run-binary(run, operation),
+            call(called) => run-call(run, called),
+            native(called) => run-native(run, called),
+            field(reading) => run-field(run, reading),
+            record(making) => run-record(run, making),
+            branch(branching) => run-branch(run, branching),
+            block(statements) => run-statements(run, statements),
+            tree(expression) => eval(run, expression),
+        }
+    }
+
+    @(private) run-call: func(run: Interp, called: CallCode) -> Value {
+        let values: list<Value> = [];
+        for one in called.args { values.push(run-code(run, one)); }
+        if stopped(run) { return Value.unit; }
+        let body = match called.body {
+            some(found) => found,
+            none => {
+                let found = body-code(run, called.function);
+                called.body = some(found);
+                found
+            }
+        };
+        call-compiled(run, called.function, body, values)
+    }
+
+    @(private) run-native: func(run: Interp, called: NativeCode) -> Value {
+        let values: list<Value> = [];
+        for one in called.args { values.push(run-code(run, one)); }
+        if stopped(run) { return Value.unit; }
+        call-key(run, called.key, values)
+    }
+
+    @(private) run-field: func(run: Interp, reading: FieldCode) -> Value {
+        let target = run-code(run, reading.target);
+        if stopped(run) { return Value.unit; }
+        field-read(run, target, reading.field)
+    }
+
+    @(private) run-record: func(run: Interp, making: RecordCode) -> Value {
+        let given: list<Value> = [];
+        for one in making.values { given.push(copied(run-code(run, one))); }
+        if stopped(run) { return Value.unit; }
+        let ordered: list<Value> = [];
+        for index in 0..making.fields.len() {
+            let at = making.sources[index];
+            ordered.push(if at >= 0 { given[at] } else if making.anon { Value.unit } else { zero(run, making.zeros[index]) });
+        }
+        Value.object({
+            type: making.type,
+            fields: making.fields,
+            values: ordered,
+            copied: making.copied,
+            anon: making.anon,
+            observers: Value.unit,
+            ignored: making.ignored,
+        })
+    }
+
+    @(private) run-branch: func(run: Interp, branching: BranchCode) -> Value {
+        let condition = run-code(run, branching.condition);
+        if stopped(run) { return Value.unit; }
+        if truthy(condition) {
+            run-statements(run, branching.then)
+        } else {
+            match branching.otherwise {
+                some(statements) => run-statements(run, statements),
+                none => Value.unit,
+            }
+        }
+    }
+
+    // as binary, its operator's bytes found once
+    @(private) run-binary: func(run: Interp, operation: BinaryCode) -> Value {
+        let first = operation.first;
+        let second = operation.second;
+        if first == 38 && second == 38 {
+            let left = run-code(run, operation.left);
+            return if truthy(left) { run-code(run, operation.right) } else { left };
+        }
+        if first == 124 && second == 124 {
+            let left = run-code(run, operation.left);
+            return if truthy(left) { left } else { run-code(run, operation.right) };
+        }
+        let left = run-code(run, operation.left);
+        let right = run-code(run, operation.right);
+        if stopped(run) { return Value.unit; }
+        if second == 61 {
+            if first == 61 { return boolean(run, equal(left, right)); }
+            if first == 33 { return boolean(run, !equal(left, right)); }
+            if first == 60 { return boolean(run, less(left, right) || ordered-equal(left, right)); }
+            if first == 62 { return boolean(run, less(right, left) || ordered-equal(left, right)); }
+        }
+        if second == 0 && first == 60 { return boolean(run, less(left, right)); }
+        if second == 0 && first == 62 { return boolean(run, less(right, left)); }
+        arith(run, first, left, right)
+    }
+
+    // as eval-block: each statement run, the last's value kept where it is the block's
+    @(private) run-statements: func(run: Interp, statements: list<StatementCode>) -> Value {
+        let value = Value.unit;
+        for statement in statements {
+            if stopped(run) { return Value.unit; }
+            value = Value.unit;
+            match statement {
+                evaluate(evaluated) => {
+                    let found = run-code(run, evaluated.value);
+                    if evaluated.kept { value = found; }
+                }
+                _ => run-statement(run, statement),
+            }
+        }
+        if stopped(run) { Value.unit } else { value }
+    }
+
+    // as exec
+    @(private) run-statement: func(run: Interp, statement: StatementCode) {
+        match statement {
+            bind(binding) => {
+                let value = run-code(run, binding.value);
+                if !stopped(run) { bind-mark(run, binding.mark, copied(value)); }
+            }
+            assign(assignment) => {
+                let found = match cell(run, assignment.mark) {
+                    some(found) => found,
+                    none => stop("yelc run: {assignment.mark.name} assigned before it is bound"),
+                };
+                let before = found.value;
+                let value = run-code(run, assignment.value);
+                if stopped(run) { return; }
+                found.value = if assignment.op == 0 { copied(value) } else { arith(run, assignment.op, before, value) };
+            }
+            evaluate(evaluated) => { let _ = run-code(run, evaluated.value); }
+            returns(returned) => {
+                let value = run-code(run, returned);
+                if !stopped(run) { run.flow = Flow.returned(value); }
+            }
+            range(ranging) => run-range(run, ranging),
+            repeat(body) => {
+                loop {
+                    let _ = run-statements(run, body);
+                    match run.flow {
+                        broke => {
+                            run.flow = Flow.normal;
+                            break;
+                        }
+                        continued => { run.flow = Flow.normal; }
+                        returned(_) => { break; }
+                        normal => {}
+                    }
+                }
+            }
+            tree(statement) => exec(run, statement),
+        }
+    }
+
+    // as exec-for over a range: its variable a cell of its own each turn
+    @(private) run-range: func(run: Interp, ranging: RangeCode) {
+        let start = run-code(run, ranging.start);
+        if stopped(run) { return; }
+        let limit = run-code(run, ranging.stop);
+        if stopped(run) { return; }
+        let (from, kind) = match start {
+            int(integer) => (integer.bits, integer.kind),
+            _ => stop("yelc run: a range of what is no integer"),
+        };
+        let to = match limit {
+            int(integer) => integer.bits,
+            _ => from,
+        };
+        let signed = kind-signed(kind);
+        let before = { one: u64, other: u64 -> if signed { (one as s64) < (other as s64) } else { one < other } };
+        if if ranging.inclusive { before(to, from) } else { !before(from, to) } { return; }
+        let at = from;
+        loop {
+            bind-mark(run, ranging.mark, integer(run, { bits: at, kind: kind, }));
+            let _ = run-statements(run, ranging.body);
+            let going = match run.flow {
+                broke => {
+                    run.flow = Flow.normal;
+                    false
+                }
+                continued => {
+                    run.flow = Flow.normal;
+                    true
+                }
+                returned(_) => false,
+                normal => true,
+            };
+            if !going { break; }
+            if ranging.inclusive && at == to { break; }
+            at = at + 1;
+            if !ranging.inclusive && !before(at, to) { break; }
+        }
+    }
+
+    // ---------------------------------------------------------------- generators
+
+    // a generator's call: its parameters bound, its body not begun (calling one runs nothing)
+    @(private) made-generator: func(run: Interp, function: Func, args: list<Value>) -> Value {
+        let generator: Generator = { frames: [GenFrame.block({ block: function.body, next: 0, }),], cells: { cells: [], family: function.name, }, bindings: function.bindings, running: function.name, done: false, };
+        let saved-cells = run.cells;
+        run.cells = generator.cells;
+        for index in 0..function.marks.len() {
+            let value = if index < args.len() { args[index] } else {
+                match function.defaults[index] {
+                    some(given) => eval(run, given),
+                    none => Value.unit,
+                }
+            };
+            bind-mark(run, function.marks[index], copied(value));
+        }
+        run.cells = saved-cells;
+        Value.seq(generator)
+    }
+
+    // a generator's next value: its body run on from where it was until a yield (some), or to its
+    // end or a return (none, and done)
+    @(private) step: func(run: Interp, generator: Generator) -> option<Value> {
+        if generator.done { return none; }
+        let saved-cells = run.cells;
+        let saved-bindings = run.bindings;
+        let saved-running = run.running;
+        let saved-flow = run.flow;
+        run.cells = generator.cells;
+        run.bindings = generator.bindings;
+        run.running = generator.running;
+        run.flow = Flow.normal;
+        let given = advance(run, generator);
+        run.cells = saved-cells;
+        run.bindings = saved-bindings;
+        run.running = saved-running;
+        run.flow = saved-flow;
+        if given == none { generator.done = true; }
+        given
+    }
+
+    @(private) advance: func(run: Interp, generator: Generator) -> option<Value> {
+        loop {
+            if generator.frames.len() == 0 { return none; }
+            let top = generator.frames[generator.frames.len() - 1];
+            match top {
+                block(at) => {
+                    if at.next >= at.block.stmts.len() {
+                        let _ = generator.frames.pop();
+                        continue;
+                    }
+                    let statement = at.block.stmts[at.next];
+                    at.next += 1;
+                    match gen-stmt(run, generator, statement) {
+                        some(value) => { return some(value); }
+                        none => {}
+                    }
+                }
+                loop(repeat) => generator.frames.push(GenFrame.block({ block: repeat.body, next: 0, })),
+                range(range) => {
+                    let signed = kind-signed(range.kind);
+                    let past = if range.inclusive { if signed { (range.at as s64) > (range.to as s64) } else { range.at > range.to } } else { if signed { (range.at as s64) >= (range.to as s64) } else { range.at >= range.to } };
+                    if past {
+                        let _ = generator.frames.pop();
+                        continue;
+                    }
+                    bind-mark(run, range.node.mark, Value.int({ bits: range.at, kind: range.kind, }));
+                    // (an inclusive range at its kind's greatest ends after this turn, not wrapping)
+                    if range.inclusive && range.at == range.to { range.inclusive = false; } else { range.at = range.at + 1; }
+                    generator.frames.push(GenFrame.block({ block: range.node.body, next: 0, }));
+                }
+                items(items) => {
+                    if items.next >= items.items.items.len() {
+                        let _ = generator.frames.pop();
+                        continue;
+                    }
+                    bind-mark(run, items.node.mark, copied(items.items.items[items.next]));
+                    items.next += 1;
+                    generator.frames.push(GenFrame.block({ block: items.node.body, next: 0, }));
+                }
+                values(values) => {
+                    match step(run, values.from) {
+                        some(value) => {
+                            bind-mark(run, values.node.mark, copied(value));
+                            generator.frames.push(GenFrame.block({ block: values.node.body, next: 0, }));
+                        }
+                        none => { let _ = generator.frames.pop(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // a statement of a generator's body: one with no yield in it run as any is (then a return, a
+    // break or a continue taken); one with a yield in it taken apart, its block a frame
+    @(private) gen-stmt: func(run: Interp, generator: Generator, statement: Stmt) -> option<Value> {
+        if !stmt-yields(statement) {
+            exec(run, statement);
+            settle(run, generator);
+            return none;
+        }
+        match statement {
+            expr-stmt(expression-statement) => gen-expr(run, generator, expression-statement.value),
+            for-stmt(for-statement) => {
+                let start = eval(run, for-statement.start);
+                match for-statement.stop {
+                    some(stop-expr) => {
+                        let limit = eval(run, stop-expr);
+                        let (from, kind) = match start {
+                            int(integer) => (integer.bits, integer.kind),
+                            _ => stop("yelc run: a range of what is no integer"),
+                        };
+                        let to = match limit {
+                            int(integer) => integer.bits,
+                            _ => from,
+                        };
+                        generator.frames.push(GenFrame.range({ node: for-statement, at: from, to: to, kind: kind, inclusive: for-statement.inclusive, }));
+                    }
+                    none => match start {
+                        list(xs) => generator.frames.push(GenFrame.items({ node: for-statement, items: xs, next: 0, })),
+                        seq(inner) => generator.frames.push(GenFrame.values({ node: for-statement, from: inner, })),
+                        _ => stop("yelc run: a for over what is no list"),
+                    },
+                }
+                none
+            }
+            loop-stmt(loop-statement) => {
+                generator.frames.push(GenFrame.loop(loop-statement));
+                none
+            }
+            _ => stop("yelc run: a yield where the interpreter does not take one yet"),
+        }
+    }
+
+    // an expression statement with a yield in it: the yield itself, or a block, an if or a match
+    // whose taken branch holds one
+    @(private) gen-expr: func(run: Interp, generator: Generator, expression: Expr) -> option<Value> {
+        match expression.kind {
+            yield-expr(yielded) => {
+                let value = eval(run, yielded);
+                settle(run, generator);
+                if generator.frames.len() == 0 { return none; }
+                some(value)
+            }
+            block(block) => {
+                generator.frames.push(GenFrame.block({ block: block, next: 0, }));
+                none
+            }
+            if-else(if-else) => {
+                if truthy(eval(run, if-else.cond)) {
+                    generator.frames.push(GenFrame.block({ block: if-else.then, next: 0, }));
+                } else {
+                    match if-else.otherwise {
+                        some(block) => generator.frames.push(GenFrame.block({ block: block, next: 0, })),
+                        none => {}
+                    }
+                }
+                none
+            }
+            match-expr(match-expression) => {
+                let value = eval(run, match-expression.value);
+                for arm in match-expression.arms {
+                    if bind(run, arm.pattern, value) {
+                        let guarded = match arm.guard {
+                            some(guard) => truthy(eval(run, guard)),
+                            none => true,
+                        };
+                        if guarded { return gen-expr(run, generator, arm.body); }
+                    }
+                }
+                panic("no match arm fits {shown(value, false)}")
+            }
+            _ => {
+                let _ = eval(run, expression);
+                settle(run, generator);
+                none
+            }
+        }
+    }
+
+    // a return, break or continue a statement left: a return ends the generator; a break leaves
+    // the innermost loop or for, a continue goes on to its next turn
+    @(private) settle: func(run: Interp, generator: Generator) {
+        match run.flow {
+            normal => {}
+            returned(_) => {
+                generator.frames = [];
+                run.flow = Flow.normal;
+            }
+            broke => {
+                run.flow = Flow.normal;
+                loop {
+                    if generator.frames.len() == 0 { break; }
+                    let top = generator.frames.pop();
+                    match top {
+                        block(_) => {}
+                        _ => { break; }
+                    }
+                }
+            }
+            continued => {
+                run.flow = Flow.normal;
+                loop {
+                    if generator.frames.len() == 0 { break; }
+                    match generator.frames[generator.frames.len() - 1] {
+                        block(_) => { let _ = generator.frames.pop(); }
+                        _ => { break; }
+                    }
+                }
+            }
+        }
+    }
+
+    // whether a statement, or an expression, holds a yield (not inside a closure: that is its own)
+    @(private) stmt-yields: func(statement: Stmt) -> bool {
+        match statement {
+            let-stmt(let-statement) => expr-yields(let-statement.value),
+            let-pattern(let-pattern) => expr-yields(let-pattern.value),
+            return-stmt(return-statement) => expr-yields(return-statement),
+            expr-stmt(expression-statement) => expr-yields(expression-statement.value),
+            for-stmt(for-statement) => block-yields(for-statement.body),
+            loop-stmt(loop-statement) => block-yields(loop-statement.body),
+            assign(assignment) => expr-yields(assignment.value),
+            assign-field(field-assignment) => expr-yields(field-assignment.value),
+            break-stmt => false,
+            continue-stmt => false,
+        }
+    }
+
+    @(private) block-yields: func(block: Block) -> bool { block.stmts.any({ statement -> stmt-yields(statement) }) }
+
+    @(private) expr-yields: func(expression: Expr) -> bool {
+        match expression.kind {
+            yield-expr(_) => true,
+            block(block) => block-yields(block),
+            if-else(if-else) => block-yields(if-else.then) || match if-else.otherwise {
+                some(block) => block-yields(block),
+                none => false,
+            },
+            match-expr(match-expression) => match-expression.arms.any({ arm -> expr-yields(arm.body) }),
+            _ => false,
+        }
+    }
+
+    // ---------------------------------------------------------------- statements
+
+    // whether a return, break or continue is in flight (what is left of the block is skipped)
+    @(private) stopped: func(run: Interp) -> bool {
+        match run.flow {
+            normal => false,
+            _ => true,
+        }
+    }
+
+    // a block's value: its last statement's, where that is a value written without ;
+    @(private) eval-block: func(run: Interp, block: Block) -> Value {
+        let value = Value.unit;
+        for statement in block.stmts {
+            if stopped(run) { return Value.unit; }
+            value = Value.unit;
+            match statement {
+                expr-stmt(expression-statement) => {
+                    let evaluated = eval(run, expression-statement.value);
+                    if expression-statement.is-value { value = evaluated; }
+                }
+                _ => exec(run, statement),
+            }
+        }
+        if stopped(run) { Value.unit } else { value }
+    }
+
+    @(private) exec: func(run: Interp, statement: Stmt) {
+        match statement {
+            let-stmt(let-statement) => {
+                let value = eval(run, let-statement.value);
+                if !stopped(run) { bind-mark(run, let-statement.mark, copied(value)); }
+            }
+            let-pattern(let-pattern) => {
+                let value = eval(run, let-pattern.value);
+                if !stopped(run) { let _ = bind(run, let-pattern.pattern, value); }
+            }
+            return-stmt(return-statement) => {
+                let value = eval(run, return-statement);
+                if !stopped(run) { run.flow = Flow.returned(value); }
+            }
+            break-stmt => { run.flow = Flow.broke; }
+            continue-stmt => { run.flow = Flow.continued; }
+            expr-stmt(expression-statement) => { let _ = eval(run, expression-statement.value); }
+            assign(assignment) => assign(run, assignment),
+            assign-field(field-assignment) => assign-field(run, field-assignment),
+            loop-stmt(loop-statement) => {
+                loop {
+                    let _ = eval-block(run, loop-statement.body);
+                    match run.flow {
+                        broke => {
+                            run.flow = Flow.normal;
+                            break;
+                        }
+                        continued => { run.flow = Flow.normal; }
+                        returned(_) => { break; }
+                        normal => {}
+                    }
+                }
+            }
+            for-stmt(for-statement) => exec-for(run, for-statement),
+        }
+    }
+
+    // a for over a range (start..stop, start..=stop) or a list's items: its variable a cell of its
+    // own each turn (a closure made in a turn keeps that turn's)
+    @(private) exec-for: func(run: Interp, for-statement: For) {
+        let start = eval(run, for-statement.start);
+        if stopped(run) { return; }
+        match for-statement.stop {
+            some(stop-expr) => {
+                let limit = eval(run, stop-expr);
+                if stopped(run) { return; }
+                let (from, kind) = match start {
+                    int(integer) => (integer.bits, integer.kind),
+                    _ => stop("yelc run: a range of what is no integer"),
+                };
+                let to = match limit {
+                    int(integer) => integer.bits,
+                    _ => from,
+                };
+                // (compared as the kind's values are; an inclusive range ends after its last, so one
+                // ending at the kind's greatest never wraps past it)
+                let signed = kind-signed(kind);
+                let before = { one: u64, other: u64 -> if signed { (one as s64) < (other as s64) } else { one < other } };
+                if if for-statement.inclusive { before(to, from) } else { !before(from, to) } { return; }
+                let at = from;
+                loop {
+                    bind-mark(run, for-statement.mark, Value.int({ bits: at, kind: kind, }));
+                    if !turn(run, for-statement.body) { break; }
+                    if for-statement.inclusive && at == to { break; }
+                    at = at + 1;
+                    if !for-statement.inclusive && !before(at, to) { break; }
+                }
+            }
+            none => {
+                match start {
+                    seq(generator) => {
+                        loop {
+                            match step(run, generator) {
+                                some(value) => {
+                                    bind-mark(run, for-statement.mark, copied(value));
+                                    if !turn(run, for-statement.body) { break; }
+                                }
+                                none => { break; }
+                            }
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+                let items = match start {
+                    list(xs) => xs,
+                    _ => stop("yelc run: a for over what is no list"),
+                };
+                let at = 0;
+                loop {
+                    if at >= items.items.len() { break; }
+                    bind-mark(run, for-statement.mark, copied(items.items[at]));
+                    if !turn(run, for-statement.body) { break; }
+                    at += 1;
+                }
+            }
+        }
+    }
+
+    // a loop's turn: whether the loop goes on (a break or a return ends it)
+    @(private) turn: func(run: Interp, body: Block) -> bool {
+        let _ = eval-block(run, body);
+        match run.flow {
+            broke => {
+                run.flow = Flow.normal;
+                false
+            }
+            continued => {
+                run.flow = Flow.normal;
+                true
+            }
+            returned(_) => false,
+            normal => true,
+        }
+    }
+
+    // x = v; x op= v reads x first, then v (what v does to x comes after)
+    @(private) assign: func(run: Interp, assignment: Assign) {
+        let cell = match run.bindings.assigns.get(assignment) {
+            some(mark) => match cell(run, mark) {
+                some(found) => found,
+                none => stop("yelc run: {name-text(assignment.name)} assigned before it is bound"),
+            },
+            none => match named-mark(run, name-text(assignment.name)) {
+                some(mark) => match cell(run, mark) {
+                    some(found) => found,
+                    none => global-cell(run, name-text(assignment.name)),
+                },
+                none => global-cell(run, name-text(assignment.name)),
+            },
+        };
+        let before = cell.value;
+        let value = eval(run, assignment.value);
+        if stopped(run) { return; }
+        cell.value = if assignment.op == "=" { copied(value) } else { arith(run, assignment.op.byte-at(0), before, value) };
+    }
+
+    @(private) assign-field: func(run: Interp, assignment: AssignField) {
+        let target = eval-quiet(run, assignment.target);
+        if stopped(run) { return; }
+        let object = match target {
+            object(found) => found,
+            _ => stop("yelc run: a field set on what is no record"),
+        };
+        let at = object.fields.index-of(assignment.name);
+        if at < 0 { stop("yelc run: no field {assignment.name}"); }
+        // (x op= v reads x: told as a read)
+        if assignment.op != "=" { tell(run, object, at, "access"); }
+        let before = object.values[at];
+        let value = eval(run, assignment.value);
+        if stopped(run) { return; }
+        // what changes, told first: this field of an observable one, else the observable field
+        // this value is a part of
+        match object.observers {
+            unit => told-place(run, assignment.target),
+            _ => tell(run, object, at, "will-set"),
+        }
+        object.values[at] = if assignment.op == "=" { copied(value) } else { arith(run, assignment.op.byte-at(0), before, value) };
+    }
+
+    // ---------------------------------------------------------------- expressions
+
+    @(private) eval: func(run: Interp, expression: Expr) -> Value {
+        if stopped(run) { return Value.unit; }
+        if run.given.len() > 0 {
+            match run.given.get(expression) {
+                some(value) => {
+                    let _ = run.given.remove(expression);
+                    return value;
+                }
+                none => {}
+            }
+        }
+        match expression.kind {
+            int-lit(text) => match run.literals.get(expression) {
+                some(value) => value,
+                none => {
+                    let value = Value.int(normalized({ bits: integer-text(text), kind: named-kind(int-kind(expression.ty)), }));
+                    run.literals.set(expression, value);
+                    value
+                }
+            },
+            float-lit(text) => match run.literals.get(expression) {
+                some(value) => value,
+                none => {
+                    let value = made-float(parse-f64(text.replace("_", "")), named-kind(float-kind(expression.ty)));
+                    run.literals.set(expression, value);
+                    value
+                }
+            },
+            char-lit(code) => Value.char(code as char),
+            bool-lit(bool-lit) => Value.bool(bool-lit),
+            str-lit(str-lit) => Value.text(str-lit),
+            unit => Value.unit,
+            tuple-lit(items) => {
+                let values: list<Value> = [];
+                for one in items { values.push(copied(eval(run, one))); }
+                Value.tuple(values)
+            }
+            list-lit(items) => {
+                let values: list<Value> = [];
+                for one in items { values.push(copied(eval(run, one))); }
+                let fixed = match settled-type(without-readonly(expression.ty)) {
+                    fixed-list(_) => true,
+                    _ => false,
+                };
+                Value.list({ items: values, fixed: fixed, version: 0, })
+            }
+            interp(parts) => {
+                let out = buffer(16);
+                for part in parts {
+                    let value = eval(run, part);
+                    // a value of a type with a display func: that func's text (not inside it)
+                    let display = run.displays.get-or(type-name(part.ty), "");
+                    out.push(if display != "" && display != run.running { held-text(call-key(run, display, [value,])) } else { shown(value, true) });
+                }
+                Value.text(out.to-string())
+            }
+            name(name) => name-value(run, expression, name),
+            call(call) => {
+                // a local holding a func, called through it
+                match run.bindings.exprs.get(expression) {
+                    some(mark) => {
+                        let callee = cell-value(run, mark);
+                        return call-value(run, callee, eval-all(run, call.args));
+                    }
+                    none => {}
+                }
+                call-named(run, expression, call.name, call.args)
+            }
+            method(method) => {
+                if is-type-name(run, method.target) { return made-case(run, expression, method.name, some(eval(run, method.args[0]))); }
+                let args = [method.target,];
+                for argument in method.args { args.push(argument); }
+                call-named(run, expression, method.name, args)
+            }
+            apply(apply) => {
+                let callee = eval(run, apply.callee);
+                call-value(run, callee, eval-all(run, apply.args))
+            }
+            field(field-access) => field-value(run, expression, field-access),
+            binary(operation) => binary(run, operation),
+            unary(unary) => {
+                let value = eval(run, unary.value);
+                if unary.op == "!" {
+                    return match value {
+                        bool(flag) => Value.bool(!flag),
+                        int(integer) => Value.int(normalized({ bits: integer.bits ^ 0xFFFFFFFFFFFFFFFF, kind: integer.kind, })),
+                        // (its flags' bits only)
+                        flags(flags) => Value.flags({ bits: (flags.bits ^ 0xFFFFFFFFFFFFFFFF) & ((1 << (flags.names.len() as u64)) - 1), names: flags.names, }),
+                        _ => value,
+                    };
+                }
+                match value {
+                    int(integer) => Value.int(normalized({ bits: 0 - integer.bits, kind: integer.kind, })),
+                    float(number) => made-float(number.value * -1.0, number.kind),
+                    _ => value,
+                }
+            }
+            if-else(if-else) => {
+                let cond = eval(run, if-else.cond);
+                if stopped(run) { return Value.unit; }
+                if truthy(cond) {
+                    eval-block(run, if-else.then)
+                } else {
+                    match if-else.otherwise {
+                        some(block) => eval-block(run, block),
+                        none => Value.unit,
+                    }
+                }
+            }
+            block(block) => eval-block(run, block),
+            record-lit(fields) => record-value(run, expression, fields),
+            match-expr(match-expression) => match-value(run, match-expression),
+            closure(closure) => Value.func(Callable.closure({ node: closure, cells: copied-frame(run.cells), bindings: run.bindings, })),
+            cast(casting) => cast(eval(run, casting.value), casting.ty),
+            is-test(is-test) => Value.bool(has-type(run, eval(run, is-test.value), is-test.ty)),
+            try-as(try-as) => {
+                let value = eval(run, try-as.value);
+                if has-type(run, value, try-as.ty) { option(some(value)) } else { option(none) }
+            }
+            widen(widen) => eval(run, widen.value),
+            directive(directive) => stop("yelc run: #{directive.name} not given its value"),
+            yield-expr(_) => stop("yelc run: a yield outside a generator's own statements"),
+            // a start in a func that does not wait (a closure's, say): its call a task of its own
+            start-expr(inner) => match async-call(run, inner) {
+                some(call) => {
+                    let (key, exprs) = call;
+                    let args = exprs.map({ one -> eval(run, one) });
+                    Value.future({ f: start a-started(forked(run), key, args), })
+                }
+                none => stop("yelc run: a start of what is no async call"),
+            },
+            wait-expr(_) => stop("yelc run: a wait outside an async func"),
+        }
+    }
+
+    @(private) eval-all: func(run: Interp, exprs: list<Expr>) -> list<Value> {
+        let out: list<Value> = [];
+        for one in exprs { out.push(eval(run, one)); }
+        out
+    }
+
+    @(private) cell-value: func(run: Interp, mark: Mark) -> Value {
+        let at = mark.slot;
+        let cells = run.cells.cells;
+        if at >= 0 && at < cells.len() {
+            let found = cells[at];
+            if found != run.unbound { return found.value; }
+        }
+        stop("yelc run: {mark.name} read before it is bound")
+    }
+
+    // a frame's copy (a closure's, as it is made and each time it is called): the same cells
+    @(private) copied-frame: func(frame: Frame) -> Frame {
+        let cells: list<Cell> = [];
+        for one in frame.cells { cells.push(one); }
+        { cells: cells, family: frame.family, }
+    }
+
+    // a name: a binding's value; else (the checker named it by its key) a global's, a const's, a
+    // func as a value; else a case (none, a variant's case that holds nothing)
+    @(private) name-value: func(run: Interp, expression: Expr, name: Name) -> Value {
+        match run.bindings.exprs.get(expression) {
+            some(mark) => { return cell-value(run, mark); }
+            none => {}
+        }
+        let key = name-text(name);
+        match named-mark(run, key) {
+            some(mark) => { return cell-value(run, mark); }
+            none => {}
+        }
+        if run.global-decls.has(key) { return global-cell(run, key).value; }
+        match run.consts.get(key) {
+            some(payload) => { return eval(run, payload.value); }
+            none => {}
+        }
+        if run.funcs.has(key) || run.externs.has(key) { return Value.func(Callable.named({ key: key, })); }
+        if key == "inf" { return made-float(1.0 / 0.0, named-kind(float-kind(expression.ty))); }
+        if key == "nan" { return made-float(0.0 / 0.0, named-kind(float-kind(expression.ty))); }
+        made-case(run, expression, key, none)
+    }
+
+    @(private) global-cell: func(run: Interp, key: string) -> Cell {
+        let context = match run.global-decls.get(key) {
+            some(decl) => decl.context,
+            none => false,
+        };
+        if context {
+            return match run.contexts.get(key) {
+                some(cell) => cell,
+                none => {
+                    let decl = run.global-decls.at(key);
+                    let made: Cell = { value: match decl.value {
+                        some(given) => eval(run, given),
+                        none => zero(run, decl.ty),
+                    }, order: 0, };
+                    run.contexts.set(key, made);
+                    made
+                }
+            };
+        }
+        match run.globals.get(key) {
+            some(cell) => cell,
+            none => {
+                let decl = match run.global-decls.get(key) {
+                    some(found) => found,
+                    none => stop("yelc run: no global {key}"),
+                };
+                let value = match decl.value {
+                    some(given) => eval(run, given),
+                    none => zero(run, decl.ty),
+                };
+                let made: Cell = { value: value, order: 0, };
+                run.globals.set(key, made);
+                made
+            }
+        }
+    }
+
+    // a call by name: a func's (by its key), or some(x), ok(x), err(x), a case and its payload
+    @(private) call-named: func(run: Interp, expression: Expr, name: string, args: list<Expr>) -> Value {
+        if name == "~format" { return formatted(run, args[0], args[1]); }
+        // a fixed-length list's at, set and len (the checker named them ~at, ~set, ~len)
+        if name == "~at" || name == "~set" || name == "~len" {
+            let values = eval-all(run, args);
+            if stopped(run) { return Value.unit; }
+            let rest: list<Value> = [];
+            for index in 1..values.len() { rest.push(values[index]); }
+            let short = name.substring(1, name.len());
+            let given = [values[0],];
+            for one in rest { given.push(one); }
+            return match list-native(short, given) {
+                some(value) => value,
+                none => stop("yelc run: {name} of what is no list"),
+            };
+        }
+        let callee = match run.callees.get(expression) {
+            some(found) => found,
+            none => {
+                let found = callee(run, name);
+                run.callees.set(expression, found);
+                found
+            }
+        };
+        match callee {
+            made => {
+                let payload = if args.len() > 0 { some(eval(run, args[0])) } else { none };
+                return made-case(run, expression, name, payload);
+            }
+            _ => {}
+        }
+        let watched = observed-args(run, args);
+        let values = eval-all(run, args);
+        if stopped(run) { return Value.unit; }
+        let result = match callee {
+            function(function) => call-func(run, function, values),
+            _ => call-key(run, name, values),
+        };
+        changed-args(run, watched);
+        result
+    }
+
+    // what a call of that name calls (natives first, as call-key looks: a host's, the
+    // interpreter's own, a process's)
+    @(private) callee: func(run: Interp, name: string) -> Callee {
+        if run.hosted.has(name) || native-keys().contains(name) || name.starts-with("std:process/process.") { return Callee.native; }
+        match run.funcs.get(name) {
+            some(function) => Callee.function(function),
+            none => if run.externs.has(name) { Callee.native } else { Callee.made },
+        }
+    }
+
+    // a list, map or buffer an observable field holds, given a call: the field and its version
+    // before it (a call that changed it in place, after it: told as will-set)
+    @(private) observed-args: func(run: Interp, args: list<Expr>) -> list<tuple<Object, s64, s64>> {
+        let out: list<tuple<Object, s64, s64>> = [];
+        for arg in args {
+            match arg.kind {
+                field(field-access) => match eval-quiet(run, field-access.target) {
+                    object(object) => match object.observers {
+                        unit => {}
+                        _ => {
+                            let at = object.fields.index-of(field-access.name);
+                            if at >= 0 && !object.ignored.contains(field-access.name) {
+                                let version = change-count(object.values[at]);
+                                if version >= 0 { out.push((object, at, version)); }
+                            }
+                        }
+                    },
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        out
+    }
+
+    @(private) changed-args: func(run: Interp, watched: list<tuple<Object, s64, s64>>) {
+        for one in watched {
+            let (object, at, before) = one;
+            if change-count(object.values[at]) != before { tell(run, object, at, "will-set"); }
+        }
+    }
+
+    // how many changes in place a list, map or buffer has had (-1: what changes no way)
+    @(private) change-count: func(value: Value) -> s64 {
+        match value {
+            list(xs) => xs.version,
+            map(entries) => entries.version,
+            bytes(held-bytes) => held-bytes.version,
+            _ => -1,
+        }
+    }
+
+    // an interpolated value with a spec ("{x:>8}", "{x:.2}", "{x:x}", "{x:?}"), as the compiled
+    // program writes it: the spec read as the compiler reads it, then std's format funcs
+    @(private) formatted: func(run: Interp, value: Expr, written: Expr) -> Value {
+        let spec = match written.kind {
+            str-lit(str-lit) => str-lit,
+            _ => "",
+        };
+        let format = match format-spec(spec) {
+            some(found) => found,
+            none => { return Value.text(""); }
+        };
+        let evaluated = eval(run, value);
+        if stopped(run) { return Value.unit; }
+        let number = match settled-type(erase-distinct(value.ty)) {
+            num(num) => num,
+            _ => "",
+        };
+        let format-call = { name: string, given: list<Value> -> call-key(run, "yel:std/format." + name, given) };
+        let content = if format.kind == "?" {
+            Value.text(shown(evaluated, false))
+        } else if format.kind != "" {
+            let base = if format.kind == "b" { 2 } else if format.kind == "o" { 8 } else { 16 };
+            let unsigned = number.starts-with("u");
+            format-call(if unsigned { "to-radix-unsigned" } else { "to-radix" }, [cast(evaluated, Type.num(if unsigned { "u64" } else { "s64" })), Value.int({ bits: base, kind: number-kind.s32, }), Value.bool(format.kind == "X"),])
+        } else if format.precision >= 0 {
+            format-call("to-fixed", [cast(evaluated, Type.num("f64")), Value.int({ bits: format.precision as u64, kind: number-kind.s32, }),])
+        } else {
+            let display = run.displays.get-or(type-name(value.ty), "");
+            if display != "" && display != run.running { call-key(run, display, [evaluated,]) } else { Value.text(shown(evaluated, true)) }
+        };
+        if format.width < 0 { return content; }
+        let width = Value.int({ bits: format.width as u64, kind: number-kind.s64, });
+        if format.zero && number != "" { return format-call("zero-pad", [content, width,]); }
+        // a number to the right, anything else to the left, unless told
+        let align = if format.align != "" { format.align } else if number != "" { ">" } else { "<" };
+        format-call("pad", [content, width, Value.text(format.fill), Value.text(align),])
+    }
+
+    // the case of that name of the expression's type (an option's, a result's, a variant's), with
+    // its payload
+    @(private) made-case: func(run: Interp, expression: Expr, name: string, payload: option<Value>) -> Value {
+        if name == "some" || name == "none" { return Value.case({ kind: "option", type: "", name: name, index: if name == "some" { 1 } else { 0 }, payload: payload, }); }
+        if name == "ok" || name == "err" { return Value.case({ kind: "result", type: "", name: name, index: if name == "err" { 1 } else { 0 }, payload: payload, }); }
+        let type = type-name(expression.ty);
+        let index = match run.variants.get(type) {
+            some(value) => {
+                let found = -1;
+                for index in 0..value.cases.len() { if value.cases[index].name == name { found = index; } }
+                found
+            }
+            none => -1,
+        };
+        Value.case({ kind: "variant", type: type, name: name, index: index, payload: match payload {
+            some(value) => some(copied(value)),
+            none => none,
+        }, })
+    }
+
+    @(private) option: func(optional: option<Value>) -> Value {
+        match optional {
+            some(value) => Value.case({ kind: "option", type: "", name: "some", index: 1, payload: some(value), }),
+            none => Value.case({ kind: "option", type: "", name: "none", index: 0, payload: none, }),
+        }
+    }
+
+    // whether an expression names a type (Color.red, Shape.circle(r)): a variant's or flags' key
+    @(private) is-type-name: func(run: Interp, expression: Expr) -> bool {
+        match expression.kind {
+            name(name) => {
+                let key = name-text(name);
+                !run.bindings.exprs.has(expression) && (run.variants.has(key) || run.flags.has(key))
+            }
+            _ => false,
+        }
+    }
+
+    @(private) field-value: func(run: Interp, expression: Expr, field: Field) -> Value {
+        if is-type-name(run, field.target) {
+            let key = match field.target.kind {
+                name(name) => name-text(name),
+                _ => "",
+            };
+            match run.flags.get(key) {
+                some(flags) => {
+                    let at = flags.flags.index-of(field.name);
+                    return Value.flags({ bits: 1 << (at as u64), names: flags.flags, });
+                }
+                none => {}
+            }
+            return made-case(run, expression, field.name, none);
+        }
+        field-read(run, eval(run, field.target), field)
+    }
+
+    // a value's field (a record's, a tuple's item, a flags value's flag)
+    @(private) field-read: func(run: Interp, target: Value, field: Field) -> Value {
+        match target {
+            object(object) => {
+                for index in 0..object.fields.len() {
+                    if object.fields[index] == field.name {
+                        tell(run, object, index, "access");
+                        return object.values[index];
+                    }
+                }
+                stop("yelc run: no field {field.name}")
+            }
+            tuple(items) => items[parse-int(field.name).unwrap-or(0)],
+            // a flags value's flag: whether its bit is set
+            flags(flags) => Value.bool((flags.bits >> (flags.names.index-of(field.name) as u64)) & 1 != 0),
+            _ => stop("yelc run: a field {field.name} of what is no record"),
+        }
+    }
+
+    // an @(observable) resource's field read (access) or about to change (will-set), told to std's
+    // observe as a compiled program tells it (an @(ignored) field: nothing)
+    @(private) tell: func(run: Interp, object: Object, field: s64, what: string) {
+        match object.observers {
+            unit => {}
+            _ => {
+                if object.ignored.contains(object.fields[field]) { return; }
+                let _ = call-key(run, "yel:std/observe." + what, [object.observers, Value.int({ bits: field as u64, kind: number-kind.u32, }),]);
+            }
+        }
+    }
+
+    // where a field set writes: the object and the field (p.at.y = 3 writes p's at, a part of a
+    // value in it: that is what changes, as observe hears it)
+    @(private) told-place: func(run: Interp, expression: Expr) {
+        match expression.kind {
+            field(field-access) => {
+                let base = eval-quiet(run, field-access.target);
+                match base {
+                    object(object) => {
+                        let at = object.fields.index-of(field-access.name);
+                        match object.observers {
+                            unit => told-place(run, field-access.target),
+                            _ => { if at >= 0 { tell(run, object, at, "will-set"); } }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // a place's value read without telling observe (what a write's path reads: not a read)
+    @(private) eval-quiet: func(run: Interp, expression: Expr) -> Value {
+        match expression.kind {
+            field(field-access) => match eval-quiet(run, field-access.target) {
+                object(object) => {
+                    let at = object.fields.index-of(field-access.name);
+                    if at >= 0 { object.values[at] } else { Value.unit }
+                }
+                tuple(items) => items[parse-int(field-access.name).unwrap-or(0)],
+                _ => Value.unit,
+            },
+            _ => eval(run, expression),
+        }
+    }
+
+    @(private) record-value: func(run: Interp, expression: Expr, fields: list<FieldInit>) -> Value {
+        let values: map<string, Value> = map.new();
+        for field-init in fields {
+            let value = eval(run, field-init.value);
+            values.set(field-init.name, copied(value));
+        }
+        match settled-type(expression.ty) {
+            anon-record(anonymous) => {
+                let ordered: list<Value> = [];
+                for name in anonymous.fields { ordered.push(values.get-or(name, Value.unit)); }
+                Value.object({ type: "", fields: anonymous.fields, values: ordered, copied: true, anon: true, observers: Value.unit, ignored: [], })
+            }
+            _ => {
+                let key = type-name(expression.ty);
+                match run.records.get(key) {
+                    some(declaration) => {
+                        let ordered: list<Value> = [];
+                        for index in 0..declaration.fields.len() {
+                            ordered.push(match values.get(declaration.fields[index]) {
+                                some(value) => value,
+                                none => zero(run, declaration.field-types[index]),
+                            });
+                        }
+                        // an @(observable) resource: its registrar made with it, one slot a field
+                        let observers = if declaration.observable {
+                            call-key(run, "yel:std/observe.registrar", [Value.int({ bits: declaration.fields.len() as u64, kind: number-kind.u32, }),])
+                        } else {
+                            Value.unit
+                        };
+                        Value.object({ type: key, fields: declaration.fields, values: ordered, copied: declaration.value, anon: false, observers: observers, ignored: declaration.ignored, })
+                    }
+                    none => {
+                        let names: list<string> = [];
+                        let ordered: list<Value> = [];
+                        for field-init in fields {
+                            names.push(field-init.name);
+                            ordered.push(values.at(field-init.name));
+                        }
+                        Value.object({ type: key, fields: names, values: ordered, copied: true, anon: false, observers: Value.unit, ignored: [], })
+                    }
+                }
+            }
+        }
+    }
+
+    @(private) match-value: func(run: Interp, matching: Match) -> Value {
+        let value = eval(run, matching.value);
+        if stopped(run) { return Value.unit; }
+        for arm in matching.arms {
+            if bind(run, arm.pattern, value) {
+                let guarded = match arm.guard {
+                    some(guard) => truthy(eval(run, guard)),
+                    none => true,
+                };
+                if guarded { return eval(run, arm.body); }
+            }
+        }
+        panic("no match arm fits {shown(value, false)}")
+    }
+
+    // whether a value fits a pattern, its names bound where it does
+    @(private) bind: func(run: Interp, pattern: Pattern, value: Value) -> bool {
+        match pattern {
+            wild => true,
+            literal(literal) => equal(eval(run, literal), value),
+            name(binding) => {
+                if binding.kind == "case" { return case-name(value) == binding.name; }
+                if binding.kind == "const" {
+                    return match binding.value {
+                        some(constant) => equal(eval(run, constant), value),
+                        none => false,
+                    };
+                }
+                bind-mark(run, binding.mark, copied(value));
+                true
+            }
+            case(case-pattern) => {
+                if case-name(value) != case-pattern.name { return false; }
+                match value {
+                    // (a case carrying nothing: its payload's pattern given unit, ok(inner) of a
+                    // result<(), E>)
+                    case(case-value) => match case-value.payload {
+                        some(payload) => bind(run, case-pattern.sub, payload),
+                        none => bind(run, case-pattern.sub, Value.unit),
+                    },
+                    _ => false,
+                }
+            }
+            record(record-pattern) => {
+                let object = match value {
+                    object(found) => found,
+                    _ => { return false; }
+                };
+                for index in 0..record-pattern.fields.len() {
+                    let at = object.fields.index-of(record-pattern.fields[index]);
+                    if at < 0 || !bind(run, record-pattern.patterns[index], object.values[at]) { return false; }
+                }
+                // ...rest: an anonymous record of the fields not named
+                if record-pattern.rest != "" {
+                    let names: list<string> = [];
+                    let values: list<Value> = [];
+                    for index in 0..object.fields.len() {
+                        if !record-pattern.fields.contains(object.fields[index]) {
+                            names.push(object.fields[index]);
+                            values.push(copied(object.values[index]));
+                        }
+                    }
+                    bind-mark(run, record-pattern.rest-mark, Value.object({ type: "", fields: names, values: values, copied: true, anon: true, observers: Value.unit, ignored: [], }));
+                }
+                true
+            }
+            tuple(ps) => {
+                let items = match value {
+                    tuple(found) => found,
+                    // () is the unit value's pattern
+                    unit => { return ps.len() == 0; }
+                    _ => { return false; }
+                };
+                for index in 0..ps.len() { if index >= items.len() || !bind(run, ps[index], items[index]) { return false; } }
+                true
+            }
+            alt(ps) => ps.any({ one -> bind(run, one, value) }),
+            range(range-pattern) => {
+                let lo = eval(run, range-pattern.lo);
+                let hi = eval(run, range-pattern.hi);
+                !less(value, lo) && if range-pattern.inclusive { !less(hi, value) } else { less(value, hi) }
+            }
+            typed(typed-pattern) => {
+                let fits = match typed-pattern.test {
+                    some(test) => bind(run, test, value),
+                    none => has-type(run, value, typed-pattern.ty),
+                };
+                fits && bind(run, typed-pattern.sub, value)
+            }
+            member(member-pattern) => has-type(run, value, member-pattern.ty) && bind(run, member-pattern.sub, value),
+        }
+    }
+
+    // the case a value is (bool's true and false are its cases, as the checker names them)
+    @(private) case-name: func(value: Value) -> string {
+        match value {
+            case(case-value) => case-value.name,
+            bool(flag) => if flag { "true" } else { "false" },
+            _ => "",
+        }
+    }
+
+    // ---------------------------------------------------------------- operators
+
+    // (the operator by its bytes: first and second, 0 past its end)
+    @(private) binary: func(run: Interp, operation: Binary) -> Value {
+        let first = operation.op.byte-at(0);
+        let second = if operation.op.len() > 1 { operation.op.byte-at(1) } else { 0 };
+        if first == 38 && second == 38 {
+            let left = eval(run, operation.left);
+            return if truthy(left) { eval(run, operation.right) } else { left };
+        }
+        if first == 124 && second == 124 {
+            let left = eval(run, operation.left);
+            return if truthy(left) { left } else { eval(run, operation.right) };
+        }
+        let left = eval(run, operation.left);
+        let right = eval(run, operation.right);
+        if stopped(run) { return Value.unit; }
+        // ==, !=, <, >, <=, >= (NaN is neither of the last two: no order holds of it)
+        if second == 61 {
+            if first == 61 { return boolean(run, equal(left, right)); }
+            if first == 33 { return boolean(run, !equal(left, right)); }
+            if first == 60 { return boolean(run, less(left, right) || ordered-equal(left, right)); }
+            if first == 62 { return boolean(run, less(right, left) || ordered-equal(left, right)); }
+        }
+        if second == 0 && first == 60 { return boolean(run, less(left, right)); }
+        if second == 0 && first == 62 { return boolean(run, less(right, left)); }
+        arith(run, first, left, right)
+    }
+
+    @(private) boolean: func(run: Interp, flag: bool) -> Value { if flag { run.yes } else { run.no } }
+
+    // an integer's value: a small s32's or s64's the one made for it
+    @(private) integer: func(run: Interp, integer-value: IntValue) -> Value {
+        if integer-value.bits < 256 {
+            if integer-value.kind == number-kind.s32 { return run.small-s32[integer-value.bits as s64]; }
+            if integer-value.kind == number-kind.s64 { return run.small-s64[integer-value.bits as s64]; }
+        }
+        Value.int(integer-value)
+    }
+
+    @(private) small-integers: func(kind: string) -> list<Value> {
+        let out: list<Value> = [];
+        for bits in 0..256 { out.push(Value.int({ bits: bits as u64, kind: named-kind(kind), })); }
+        out
+    }
+
+    // a op b: an integer's wrap at its width, a shift's count taken modulo it, / and % by zero
+    // stop the program (the runtime's own, which this does as it does); a float's in its width; a
+    // string's + its concatenation
+    // (op: the operator's first byte, all it takes to tell + - * / % << >> & | ^ apart)
+    @(private) arith: func(run: Interp, op: s64, left: Value, right: Value) -> Value {
+        match (left, right) {
+            (text(one), text(other)) => Value.text(one + other),
+            (int(one), int(other)) => {
+                let signed = kind-signed(one.kind);
+                let width = int-width(one.kind);
+                let bits = if op == 43 {
+                    one.bits + other.bits
+                } else if op == 45 {
+                    one.bits - other.bits
+                } else if op == 42 {
+                    one.bits * other.bits
+                } else if op == 47 {
+                    if signed { ((one.bits as s64) / (other.bits as s64)) as u64 } else { one.bits / other.bits }
+                } else if op == 37 {
+                    if signed { ((one.bits as s64) % (other.bits as s64)) as u64 } else { one.bits % other.bits }
+                } else if op == 60 {
+                    one.bits << (other.bits & ((width - 1) as u64))
+                } else if op == 62 {
+                    if signed { ((one.bits as s64) >> ((other.bits & ((width - 1) as u64)) as s64)) as u64 } else { one.bits >> (other.bits & ((width - 1) as u64)) }
+                } else if op == 38 {
+                    one.bits & other.bits
+                } else if op == 124 {
+                    one.bits | other.bits
+                } else if op == 94 {
+                    one.bits ^ other.bits
+                } else {
+                    stop("yelc run: the operator {from-byte(op)} on integers")
+                };
+                integer(run, normalized({ bits: bits, kind: one.kind, }))
+            }
+            (float(one), float(other)) => {
+                let value = if op == 43 {
+                    one.value + other.value
+                } else if op == 45 {
+                    one.value - other.value
+                } else if op == 42 {
+                    one.value * other.value
+                } else if op == 47 {
+                    one.value / other.value
+                } else if op == 37 {
+                    float-remainder(one.value, other.value)
+                } else {
+                    stop("yelc run: the operator {from-byte(op)} on floats")
+                };
+                made-float(value, one.kind)
+            }
+            (bool(one), bool(other)) => {
+                boolean(run, if op == 38 { one && other } else if op == 124 { one || other } else { one != other })
+            }
+            // a flags type's &, | and ^
+            (flags(one), flags(other)) => Value.flags({
+                bits: if op == 38 { one.bits & other.bits } else if op == 124 { one.bits | other.bits } else { one.bits ^ other.bits },
+                names: one.names,
+            }),
+            _ => stop("yelc run: the operator {from-byte(op)} on these values"),
+        }
+    }
+
+    // a float's remainder, its sign the dividend's (C's fmod)
+    @(private) float-remainder: func(dividend: f64, divisor: f64) -> f64 {
+        if divisor == 0.0 || dividend != dividend || divisor != divisor { return 0.0 / 0.0; }
+        let quotient = dividend / divisor;
+        let whole = if quotient < 0.0 { 0.0 - floor(0.0 - quotient) } else { floor(quotient) };
+        dividend - whole * divisor
+    }
+
+    @(private) floor: func(number: f64) -> f64 {
+        let whole = (number as s64) as f64;
+        if whole > number { whole - 1.0 } else { whole }
+    }
+
+    // the bits of a value of an integer type, at its width: sign-extended where signed, zero-
+    // extended where not
+    @(private) normalized: func(integer-value: IntValue) -> IntValue {
+        let width = int-width(integer-value.kind);
+        if width >= 64 { return integer-value; }
+        let mask = (1 << (width as u64)) - 1;
+        let low = integer-value.bits & mask;
+        if kind-signed(integer-value.kind) && (low >> ((width - 1) as u64)) & 1 != 0 { return { bits: low | (mask ^ 0xFFFFFFFFFFFFFFFF), kind: integer-value.kind, }; }
+        { bits: low, kind: integer-value.kind, }
+    }
+
+    @(private) int-width: func(kind: number-kind) -> s64 {
+        match kind {
+            s8 | u8 => 8,
+            s16 | u16 => 16,
+            s32 | u32 | char | f32 => 32,
+            _ => 64,
+        }
+    }
+
+    @(private) kind-signed: func(kind: number-kind) -> bool {
+        match kind {
+            s8 | s16 | s32 | s64 => true,
+            _ => false,
+        }
+    }
+
+    // a number kind's name ("s32"), as types name it
+    @(private) kind-name: func(kind: number-kind) -> string {
+        match kind {
+            s8 => "s8",
+            s16 => "s16",
+            s32 => "s32",
+            s64 => "s64",
+            u8 => "u8",
+            u16 => "u16",
+            u32 => "u32",
+            u64 => "u64",
+            char => "char",
+            f32 => "f32",
+            f64 => "f64",
+        }
+    }
+
+    // the kind a type's name names (s64 for a name that is none: an integer's own default)
+    @(private) named-kind: func(name: string) -> number-kind {
+        if name == "s8" { number-kind.s8 } else if name == "s16" { number-kind.s16 } else if name == "s32" { number-kind.s32 }
+        else if name == "u8" { number-kind.u8 } else if name == "u16" { number-kind.u16 } else if name == "u32" { number-kind.u32 }
+        else if name == "u64" { number-kind.u64 } else if name == "char" { number-kind.char } else if name == "f32" { number-kind.f32 }
+        else if name == "f64" { number-kind.f64 } else { number-kind.s64 }
+    }
+
+    @(private) made-float: func(value: f64, kind: number-kind) -> Value {
+        Value.float({ value: if kind == number-kind.f32 { (value as f32) as f64 } else { value }, kind: kind, })
+    }
+
+    @(private) truthy: func(value: Value) -> bool {
+        match value {
+            bool(flag) => flag,
+            _ => false,
+        }
+    }
+
+    // == as the runtime has it: a number, char, string or bool by its value; an option, result,
+    // tuple, variant, anonymous or value record by its parts; a list, map or shared record by which
+    // it is
+    @(private) equal: func(left: Value, right: Value) -> bool {
+        match (left, right) {
+            (unit, unit) => true,
+            (bool(one), bool(other)) => one == other,
+            (int(one), int(other)) => one.bits == other.bits,
+            (flags(one), flags(other)) => one.bits == other.bits,
+            (float(one), float(other)) => one.value == other.value,
+            (char(one), char(other)) => one == other,
+            (text(one), text(other)) => one == other,
+            (tuple(xs), tuple(ys)) => xs.len() == ys.len() && all-equal(xs, ys),
+            (case(one), case(other)) => one.name == other.name && match (one.payload, other.payload) {
+                (some(one-payload), some(other-payload)) => equal(one-payload, other-payload),
+                (none, none) => true,
+                _ => false,
+            },
+            (object(one), object(other)) => if one.copied || one.anon { same-names(one.fields, other.fields) && all-equal(one.values, other.values) } else { same-object(one, other) },
+            // a fixed-length list by its items (a value), a list by which one it is
+            (list(one), list(other)) => if one.fixed { one.items.len() == other.items.len() && all-equal(one.items, other.items) } else { same-items(one, other) },
+            (map(one), map(other)) => same-entries(one, other),
+            (bytes(one), bytes(other)) => one.data.to-string() == other.data.to-string(),
+            (future(one), future(other)) => one == other,
+            (stream(one), stream(other)) => one == other,
+            (writer(one), writer(other)) => one == other,
+            // a func by which it is: a declared one by its key, a closure by which one was made
+            (func(one), func(other)) => match (one, other) {
+                // (a declared func's: by its key, each FuncName made where it is named)
+                (named(one-name), named(other-name)) => one-name.key == other-name.key,
+                (closure(one-closure), closure(other-closure)) => one-closure == other-closure,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    // (a list's == is which list it is: names compared one by one)
+    @(private) same-names: func(xs: list<string>, ys: list<string>) -> bool {
+        if xs.len() != ys.len() { return false; }
+        for index in 0..xs.len() { if xs[index] != ys[index] { return false; } }
+        true
+    }
+
+    @(private) all-equal: func(xs: list<Value>, ys: list<Value>) -> bool {
+        for index in 0..xs.len() { if !equal(xs[index], ys[index]) { return false; } }
+        true
+    }
+
+    // (which object it is: a resource's identity)
+    @(private) same-object: func(one: Object, other: Object) -> bool { one == other }
+
+    @(private) same-items: func(one: Items, other: Items) -> bool { one == other }
+
+    @(private) same-entries: func(one: Entries, other: Entries) -> bool { one == other }
+
+    // equal as < and > order values (a float by ==, so NaN not even itself)
+    @(private) ordered-equal: func(left: Value, right: Value) -> bool {
+        match (left, right) {
+            (float(one), float(other)) => one.value == other.value,
+            _ => !less(left, right) && !less(right, left),
+        }
+    }
+
+    @(private) less: func(left: Value, right: Value) -> bool {
+        match (left, right) {
+            (int(one), int(other)) => if kind-signed(one.kind) { (one.bits as s64) < (other.bits as s64) } else { one.bits < other.bits },
+            (float(one), float(other)) => one.value < other.value,
+            (char(one), char(other)) => (one as s64) < (other as s64),
+            (text(one), text(other)) => one.compare(other) < 0,
+            (bool(one), bool(other)) => !one && other,
+            (case(one), case(other)) => one.index < other.index,
+            _ => false,
+        }
+    }
+
+    // x as T: an integer wrapped to T's width, a float to an integer saturating (NaN to 0), toward
+    // zero; an integer to a float, the nearest; a char's code point and back
+    @(private) cast: func(value: Value, wanted: Type) -> Value {
+        let target = settled-type(erase-distinct(wanted));
+        match target {
+            num(kind) => {
+                if is-int(kind) {
+                    return match value {
+                        int(integer) => Value.int(normalized({ bits: integer.bits, kind: named-kind(kind), })),
+                        float(number) => Value.int(normalized({ bits: saturated(number.value, kind), kind: named-kind(kind), })),
+                        char(letter) => Value.int(normalized({ bits: (letter as s64) as u64, kind: named-kind(kind), })),
+                        bool(flag) => Value.int({ bits: if flag { 1 } else { 0 }, kind: named-kind(kind), }),
+                        _ => value,
+                    };
+                }
+                match value {
+                    int(integer) => made-float(if kind-signed(integer.kind) { (integer.bits as s64) as f64 } else { integer.bits as f64 }, named-kind(kind)),
+                    float(number) => made-float(number.value, named-kind(kind)),
+                    _ => value,
+                }
+            }
+            char-type => match value {
+                int(integer) => Value.char((integer.bits as s64) as char),
+                _ => value,
+            },
+            _ => value,
+        }
+    }
+
+    // a float to an integer type: toward zero, saturating at the type's ends, NaN to 0
+    @(private) saturated: func(number: f64, kind: string) -> u64 {
+        if number != number { return 0; }
+        if kind == "s8" { (number as s8) as s64 as u64 }
+        else if kind == "s16" { (number as s16) as s64 as u64 }
+        else if kind == "s32" { (number as s32) as s64 as u64 }
+        else if kind == "s64" { (number as s64) as u64 }
+        else if kind == "u8" { (number as u8) as u64 }
+        else if kind == "u16" { (number as u16) as u64 }
+        else if kind == "u32" { (number as u32) as u64 }
+        else { number as u64 }
+    }
+
+    // ---------------------------------------------------------------- types and values
+
+    // a literal's number type: its own, else (a generic one's, nothing settled) the language's
+    // default, an integer's s32 and a float's f32
+    @(private) int-kind: func(given: Type) -> string {
+        match settled-type(erase-distinct(given)) {
+            num(kind) => kind,
+            range-type(range) => int-kind(range.base),
+            _ => "s32",
+        }
+    }
+
+    @(private) float-kind: func(given: Type) -> string {
+        match settled-type(erase-distinct(given)) {
+            num(kind) => kind,
+            _ => "f32",
+        }
+    }
+
+    // a flags value's kind: its flags' names, so it shows as WAVE's {read, write}
+
+    // a named type's key ("" for another)
+    @(private) type-name: func(given: Type) -> string {
+        match settled-type(without-readonly(given)) {
+            named(name) => name-text(name),
+            distinct-type(distinct) => distinct.name,
+            _ => "",
+        }
+    }
+
+    // an integer literal's value: decimal, or 0x, 0o, 0b, with _ between digits
+    @(private) integer-text: func(text: string) -> u64 {
+        let written = text.replace("_", "");
+        let base: u64 = 10;
+        let from = 0;
+        if written.starts-with("0x") {
+            base = 16;
+            from = 2;
+        } else if written.starts-with("0o") {
+            base = 8;
+            from = 2;
+        } else if written.starts-with("0b") {
+            base = 2;
+            from = 2;
+        }
+        let value: u64 = 0;
+        for at in from..written.len() {
+            let byte = written.byte-at(at);
+            let digit = if byte >= 48 && byte <= 57 { byte - 48 } else if byte >= 97 && byte <= 102 { byte - 87 } else if byte >= 65 && byte <= 70 { byte - 55 } else { 0 };
+            value = value * base + (digit as u64);
+        }
+        value
+    }
+
+    // whether a value is one of a type's (an is test, a union's member, a typed pattern)
+    @(private) has-type: func(run: Interp, value: Value, wanted: Type) -> bool {
+        match settled-type(without-readonly(erase-distinct(wanted))) {
+            num(kind) => match value {
+                int(integer) => integer.kind == named-kind(kind),
+                float(number) => number.kind == named-kind(kind),
+                _ => false,
+            },
+            bool-type => match value {
+                bool(_) => true,
+                _ => false,
+            },
+            char-type => match value {
+                char(_) => true,
+                _ => false,
+            },
+            string-type => match value {
+                text(_) => true,
+                _ => false,
+            },
+            // (by its items: a list holds no type of its own, so an empty one fits any)
+            list-type(item) => match value {
+                list(xs) => xs.items.all({ one -> has-type(run, one, item) }),
+                _ => false,
+            },
+            map-type(_) => match value {
+                map(_) => true,
+                _ => false,
+            },
+            tuple-type(xs) => match value {
+                tuple(items) => items.len() == xs.len(),
+                _ => false,
+            },
+            // none is any option's; some(x) one whose x fits (option<write>)
+            option-type(item) => match value {
+                case(case-value) => case-value.kind == "option" && match case-value.payload {
+                    some(payload) => has-type(run, payload, item),
+                    none => true,
+                },
+                _ => false,
+            },
+            result-type(result-type) => match value {
+                case(case-value) => case-value.kind == "result" && match case-value.payload {
+                    some(payload) => has-type(run, payload, if case-value.name == "ok" { result-type.ok } else { result-type.err }),
+                    none => true,
+                },
+                _ => false,
+            },
+            union-type(members) => members.any({ one -> has-type(run, value, one) }),
+            // lo..=hi of an integer or char type (its ends keys: decimal, hi the last value): a value
+            // of it from lo to hi, compared as its type's values are
+            range-type(range) => has-type(run, value, range.base) && match value {
+                int(integer) => if kind-signed(integer.kind) {
+                    (integer.bits as s64) >= range-end(range.lo) && (integer.bits as s64) <= range-end(range.hi)
+                } else {
+                    integer.bits >= integer-text(range.lo) && integer.bits <= integer-text(range.hi)
+                },
+                char(letter) => (letter as s64) >= range-end(range.lo) && (letter as s64) <= range-end(range.hi),
+                _ => false,
+            },
+            // one value's type ("get", 3, 'a'): that value, by its key (semtype.literal-key's)
+            singleton(singleton) => match value {
+                text(contents) => contents == singleton.key,
+                int(integer) => (if kind-signed(integer.kind) { "{integer.bits as s64}" } else { "{integer.bits}" }) == singleton.key,
+                char(letter) => "{letter as s64}" == singleton.key,
+                bool(flag) => (if flag { "true" } else { "false" }) == singleton.key,
+                float(number) => (if number.value == 0.0 { "0.0" } else { "{number.value}" }) == singleton.key,
+                _ => false,
+            },
+            unit-type => match value {
+                unit => true,
+                _ => false,
+            },
+            named(name) => match value {
+                object(object) => object.type == name-text(name),
+                case(case-value) => case-value.type == name-text(name),
+                flags(_) => run.flags.has(name-text(name)),
+                _ => false,
+            },
+            _ => true,
+        }
+    }
+
+    // a range type's end, a key: a decimal, maybe negative
+    @(private) range-end: func(key: string) -> s64 {
+        if key.starts-with("-") { return 0 - (integer-text(key.substring(1, key.len())) as s64); }
+        integer-text(key) as s64
+    }
+
+    // a type's zero value: what a global or a field not given starts as
+    @(private) zero: func(run: Interp, wanted: Type) -> Value {
+        match settled-type(without-readonly(erase-distinct(wanted))) {
+            num(kind) => if is-int(kind) { Value.int({ bits: 0, kind: named-kind(kind), }) } else { made-float(0.0, named-kind(kind)) },
+            bool-type => Value.bool(false),
+            char-type => Value.char(0 as char),
+            string-type => Value.text(""),
+            buffer-type => Value.bytes({ data: buffer(16), version: 0, }),
+            list-type(_) => Value.list({ items: [], fixed: false, version: 0, }),
+            fixed-list(fixed) => {
+                let items: list<Value> = [];
+                for index in 0..fixed.len { items.push(zero(run, fixed.item)); }
+                Value.list({ items: items, fixed: true, version: 0, })
+            }
+            map-type(_) => Value.map({ keys: [], values: [], places: map.new(), version: 0, }),
+            option-type(_) => option(none),
+            tuple-type(xs) => Value.tuple(xs.map({ one -> zero(run, one) })),
+            named(name) => match run.flags.get(name-text(name)) {
+                some(flags) => { return Value.flags({ bits: 0, names: flags.flags, }); }
+                none => match run.records.get(name-text(name)) {
+                some(declaration) => Value.object({ type: name-text(name), fields: declaration.fields, values: declaration.field-types.map({ one -> zero(run, one) }), copied: declaration.value, anon: false, observers: Value.unit, ignored: [], }),
+                none => Value.unit,
+            },
+            },
+            _ => Value.unit,
+        }
+    }
+
+    // a value as it is put somewhere (a binding, a field, a list's item): a value record copied,
+    // and what holds one; anything shared as it is
+    @(private) copied: func(value: Value) -> Value {
+        match value {
+            object(object) => if object.copied || object.anon {
+                Value.object({ type: object.type, fields: object.fields, values: object.values.map({ one -> copied(one) }), copied: object.copied, anon: object.anon, observers: Value.unit, ignored: [], })
+            } else {
+                value
+            },
+            tuple(items) => Value.tuple(items.map({ one -> copied(one) })),
+            list(xs) => if xs.fixed { Value.list({ items: xs.items.map({ one -> copied(one) }), fixed: true, version: 0, }) } else { value },
+            case(case-value) => match case-value.payload {
+                some(payload) => Value.case({ kind: case-value.kind, type: case-value.type, name: case-value.name, index: case-value.index, payload: some(copied(payload)), }),
+                none => value,
+            },
+            _ => value,
+        }
+    }
+
+    // ---------------------------------------------------------------- shown
+
+    // a value's text: display (an interpolation's: a string, a char as its text), else debug (WAVE:
+    // {x: 1}, "a", some(2)), as std's value.render writes it
+    @(private) shown: func(value: Value, display: bool) -> string {
+        match value {
+            unit => "unit",
+            bool(flag) => if flag { "true" } else { "false" },
+            int(integer) => if kind-signed(integer.kind) { "{integer.bits as s64}" } else { "{integer.bits}" },
+            flags(flags) => {
+                let set: list<string> = [];
+                for index in 0..flags.names.len() { if (flags.bits >> (index as u64)) & 1 != 0 { set.push(wave-label(flags.names[index])); } }
+                "\{" + set.join(", ") + "\}"
+            }
+            float(number) => if number.kind == number-kind.f32 { "{number.value as f32}" } else { "{number.value}" },
+            char(letter) => if display { "{letter}" } else { "{letter:?}" },
+            text(contents) => if display { contents } else { "{contents:?}" },
+            bytes(held-bytes) => if display { held-bytes.data.to-string() } else { "{held-bytes.data:?}" },
+            map(entries) => "map({entries.keys.len()})",
+            func(_) => "<func>",
+            seq(_) => "<seq>",
+            future(_) => "<future>",
+            stream(_) => "<stream>",
+            writer(_) => "<stream>",
+            list(xs) => "[" + xs.items.map({ one -> shown(one, false) }).join(", ") + "]",
+            tuple(items) => "(" + items.map({ one -> shown(one, false) }).join(", ") + ")",
+            case(case-value) => {
+                if case-value.kind == "option" && case-value.name == "none" { return "none"; }
+                let label = if case-value.kind == "variant" { wave-label(case-value.name) } else { case-value.name };
+                match case-value.payload {
+                    some(payload) => {
+                        match payload {
+                            unit => { if case-value.kind == "result" { return label; } }
+                            _ => {}
+                        }
+                        "{label}({shown(payload, false)})"
+                    }
+                    none => label,
+                }
+            }
+            object(object) => {
+                if object.fields.len() == 0 { return if object.anon { "\{\}" } else { "\{:\}" }; }
+                let parts: list<string> = [];
+                for index in 0..object.fields.len() {
+                    let name = if object.anon { object.fields[index] } else { wave-label(object.fields[index]) };
+                    parts.push("{name}: {shown(object.values[index], false)}");
+                }
+                if object.anon { "\{ " + parts.join(", ") + " \}" } else { "\{" + parts.join(", ") + "\}" }
+            }
+        }
+    }
+
+    @(private) wave-label: func(name: string) -> string {
+        if ["true", "false", "inf", "nan", "some", "none", "ok", "err",].contains(name) { "%" + name } else { name }
+    }
+
+    // ---------------------------------------------------------------- natives
+
+    // the funcs and externs done here, by key: the prelude's, and std's over raw memory
+    @(private) native-keys: func() -> list<string> {
+        [
+            "print", "eprint", "panic", "unreachable", "byte-at", "from-byte", "parse-f64", "fixed-text",
+            "host-triple", "executable-path", "stderr-color", "f64-bits", "f32-bits", "bits-f64", "black-box",
+            "wasi:cli/environment.get-arguments", "wasi:cli/exit.exit",
+            "wasi:cli/stdout.write-via-stream", "wasi:cli/stderr.write-via-stream",
+            "wasi:cli/exit.exit-with-code", "wasi:cli/environment.get-initial-cwd",
+            "wasi:random/random.get-random-bytes", "wasi:random/random.get-random-u64",
+            "wasi:random/insecure.get-insecure-random-bytes", "wasi:random/insecure.get-insecure-random-u64",
+            "wasi:random/insecure-seed.get-insecure-seed",
+            "wasi:clocks/system-clock.now", "wasi:clocks/system-clock.get-resolution",
+            "wasi:clocks/monotonic-clock.now", "wasi:clocks/monotonic-clock.get-resolution",
+            "yel:std/streams.stream-pair", "yel:std/streams.close", "yel:std/async.now-ms",
+            "std:process/process.fork", "std:process/process.wait", "std:process/process.run",
+            "std:process/process.run-with", "std:process/process.target", "std:process/process.end",
+            "yel:std/list.len", "yel:std/list.at", "yel:std/list.get", "yel:std/list.set", "yel:std/list.push",
+            "yel:std/list.pop", "yel:std/list.grow",
+            "yel:std/map.new", "yel:std/map.len", "yel:std/map.set", "yel:std/map.get", "yel:std/map.get-or",
+            "yel:std/map.at", "yel:std/map.has", "yel:std/map.remove", "yel:std/map.keys", "yel:std/map.values",
+            "yel:std/text.concat", "yel:std/text.equal", "yel:std/text.compare", "yel:std/text.substring",
+            "yel:std/text.bytes", "yel:std/text.hash", "yel:std/text.len", "yel:std/format.f64-text", "yel:std/format.f32-text",
+            "yel:std/buffer.buffer", "yel:std/buffer.push", "yel:std/buffer.push-byte", "yel:std/buffer.push-char",
+            "yel:std/buffer.push-bytes", "yel:std/buffer.to-string", "yel:std/buffer.to-bytes", "yel:std/buffer.reserve",
+            "yel:std/buffer.len",
+        ]
+    }
+
+    @(private) native: func(run: Interp, key: string, args: list<Value>) -> option<Value> {
+        let arg = { at: s64 -> if at < args.len() { args[at] } else { Value.unit } };
+        if key == "print" {
+            print(held-text(arg(0)));
+            return some(Value.unit);
+        }
+        if key == "eprint" {
+            eprint(held-text(arg(0)));
+            return some(Value.unit);
+        }
+        if key == "panic" { panic(held-text(arg(0))); }
+        if key == "unreachable" { stop("yelc run: reached what never runs"); }
+        if key == "byte-at" { return some(Value.int({ bits: held-text(arg(0)).byte-at(held-integer(arg(1))) as u64, kind: number-kind.s64, })); }
+        if key == "from-byte" { return some(Value.text(from-byte(held-integer(arg(0))))); }
+        if key == "parse-f64" { return some(made-float(parse-f64(held-text(arg(0))), number-kind.f64)); }
+        if key == "fixed-text" { return some(Value.text(fixed-text(float-value(arg(0)), held-integer(arg(1)) as s32))); }
+        if key == "host-triple" { return some(Value.text(host-triple())); }
+        if key == "executable-path" { return some(Value.text(executable-path())); }
+        if key == "stderr-color" { return some(Value.bool(stderr-color())); }
+        if key == "f64-bits" { return some(Value.int({ bits: f64-bits(float-value(arg(0))), kind: number-kind.u64, })); }
+        if key == "f32-bits" { return some(Value.int({ bits: f32-bits(float-value(arg(0)) as f32), kind: number-kind.u64, })); }
+        if key == "bits-f64" { return some(made-float(bits-f64(held-integer(arg(0)) as u64), number-kind.f64)); }
+        if key == "black-box" { return some(arg(0)); }
+        if key == "yel:std/streams.stream-pair" {
+            let pair: tuple<stream<Value>, writer<Value>> = streams.stream-pair(held-integer(arg(0)));
+            let (reading, writing) = pair;
+            return some(Value.tuple([Value.stream({ s: reading, }), Value.writer({ w: writing, }),]));
+        }
+        if key == "yel:std/streams.close" {
+            match arg(0) {
+                writer(boxed) => streams.close(boxed.w),
+                _ => {}
+            }
+            return some(Value.unit);
+        }
+        match run.hosted.get(key) {
+            some(given) => { return some(given(run, args)); }
+            none => {}
+        }
+        if key == "yel:std/async.now-ms" { return some(Value.int({ bits: async.now-ms() as u64, kind: number-kind.s64, })); }
+        // (wasi:cli's exit: ok(()) 0, err(()) 1, stdout written first, as std's own does it)
+        if key == "wasi:cli/exit.exit" {
+            exit.exit(if case-name(arg(0)) == "ok" { ok(()) } else { err(()) });
+        }
+        // (a stream to stdout or stderr: its bytes written as they are read, its future done once
+        // the writer closes it)
+        if key == "wasi:cli/stdout.write-via-stream" || key == "wasi:cli/stderr.write-via-stream" {
+            return match arg(0) {
+                stream(boxed) => some(Value.future({ f: start drained(boxed.s, key.starts-with("wasi:cli/stderr")), })),
+                _ => stop("yelc run: {key} given what is no stream"),
+            };
+        }
+        if key == "wasi:cli/exit.exit-with-code" { exit.exit-with-code(held-integer(arg(0)) as u8); }
+        if key == "wasi:cli/environment.get-initial-cwd" {
+            return some(option(match environment.get-initial-cwd() {
+                some(dir) => some(Value.text(dir)),
+                none => none,
+            }));
+        }
+        // (the system's own random numbers and clocks)
+        if key == "wasi:random/random.get-random-bytes" { return some(byte-list(random.get-random-bytes(held-integer(arg(0)) as u64))); }
+        if key == "wasi:random/random.get-random-u64" { return some(Value.int({ bits: random.get-random-u64(), kind: number-kind.u64, })); }
+        if key == "wasi:random/insecure.get-insecure-random-bytes" { return some(byte-list(insecure.get-insecure-random-bytes(held-integer(arg(0)) as u64))); }
+        if key == "wasi:random/insecure.get-insecure-random-u64" { return some(Value.int({ bits: insecure.get-insecure-random-u64(), kind: number-kind.u64, })); }
+        if key == "wasi:random/insecure-seed.get-insecure-seed" {
+            let (first, second) = insecure-seed.get-insecure-seed();
+            return some(Value.tuple([Value.int({ bits: first, kind: number-kind.u64, }), Value.int({ bits: second, kind: number-kind.u64, }),]));
+        }
+        if key == "wasi:clocks/system-clock.now" {
+            let now = system-clock.now();
+            let record = run.records.keys().filter({ one -> one.ends-with("system-clock.instant") || one.ends-with("system-clock#instant") });
+            return some(Value.object({
+                type: record.get(0).unwrap-or("instant"),
+                fields: ["seconds", "nanoseconds",],
+                values: [Value.int({ bits: now.seconds as u64, kind: number-kind.s64, }), Value.int({ bits: now.nanoseconds as u64, kind: number-kind.u32, }),],
+                copied: true, anon: false, observers: Value.unit, ignored: [],
+            }));
+        }
+        if key == "wasi:clocks/system-clock.get-resolution" { return some(Value.int({ bits: system-clock.get-resolution(), kind: number-kind.u64, })); }
+        if key == "wasi:clocks/monotonic-clock.now" { return some(Value.int({ bits: monotonic-clock.now(), kind: number-kind.u64, })); }
+        if key == "wasi:clocks/monotonic-clock.get-resolution" { return some(Value.int({ bits: monotonic-clock.get-resolution(), kind: number-kind.u64, })); }
+        if key == "wasi:cli/environment.get-arguments" {
+            let items: list<Value> = [];
+            for one in run.arguments { items.push(Value.text(one)); }
+            return some(Value.list({ items: items, fixed: false, version: 0, }));
+        }
+        if key.starts-with("std:process/process.") { return process-native(key.substring(20, key.len()), args); }
+        if key.starts-with("yel:std/list.") { return list-native(key.substring(13, key.len()), args); }
+        if key.starts-with("yel:std/map.") { return map-native(key.substring(12, key.len()), args); }
+        if key.starts-with("yel:std/text.") { return text-native(key.substring(13, key.len()), args); }
+        if key.starts-with("yel:std/buffer.") { return buffer-native(key.substring(15, key.len()), args); }
+        if key == "yel:std/format.f64-text" { return some(Value.text("{float-value(arg(0))}")); }
+        if key == "yel:std/format.f32-text" { return some(Value.text("{float-value(arg(0)) as f32}")); }
+        none
+    }
+
+    // std:process, done by this process itself (a fork's child runs on in the interpreter, its
+    // memory a copy of its parent's)
+    @(private) process-native: func(name: string, args: list<Value>) -> option<Value> {
+        if name == "end" { process.end(held-integer(args[0])); }
+        if name == "target" { return some(Value.text(process.target())); }
+        if name == "fork" {
+            return some(match process.fork() {
+                ok(child) => made-result(true, match child {
+                    some(id) => option(some(Value.int({ bits: id as u64, kind: number-kind.s64, }))),
+                    none => option(none),
+                }),
+                err(why) => made-result(false, Value.text(why)),
+            });
+        }
+        if name == "wait" { return some(ended-value(process.wait(held-integer(args[0])))); }
+        if name == "run" || name == "run-with" {
+            let arguments: list<string> = [];
+            match args[1] {
+                list(xs) => { for one in xs.items { arguments.push(held-text(one)); } }
+                _ => {}
+            }
+            let dir = if args.len() > 2 { held-text(args[2]) } else { "" };
+            if name == "run" { return some(ended-value(process.run(held-text(args[0]), arguments, dir))); }
+            let environment: list<tuple<string, string>> = [];
+            match args[3] {
+                list(xs) => {
+                    for one in xs.items {
+                        match one {
+                            tuple(pair) => environment.push((held-text(pair[0]), held-text(pair[1]))),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return some(ended-value(process.run-with(held-text(args[0]), arguments, dir, environment, held-text(args[4]))));
+        }
+        none
+    }
+
+    // ok(x) or err(x) as a value
+    // bytes as a list of u8s
+    @(private) byte-list: func(bytes: list<u8>) -> Value {
+        Value.list({ items: bytes.map({ one -> Value.int({ bits: one as u64, kind: number-kind.u8, }) }), fixed: false, version: 0, })
+    }
+
+    // a stream's bytes written to stdout (or stderr) as each is read: ok(()) once it is closed
+    @(private) drained: async func(items: stream<Value>, error: bool) -> Value {
+        loop {
+            let one = match wait streams.read(items) {
+                some(value) => value,
+                none => { break; }
+            };
+            let out = buffer(1);
+            out.push-byte(held-integer(one));
+            if error { eprint(out.to-string()); } else { print(out.to-string()); }
+        }
+        Value.case({ kind: "result", type: "", name: "ok", index: 0, payload: none, })
+    }
+
+    @(private) made-result: func(good: bool, payload: Value) -> Value {
+        Value.case({ kind: "result", type: "", name: if good { "ok" } else { "err" }, index: if good { 0 } else { 1 }, payload: some(payload), })
+    }
+
+    // what a process ended with (process.ended: code(n) or signal(n)), or why it could not run
+    @(private) ended-value: func(outcome: result<process.ended, string>) -> Value {
+        match outcome {
+            ok(ended) => made-result(true, match ended {
+                code(code) => Value.case({ kind: "variant", type: "std:process/process.ended", name: "code", index: 0, payload: some(Value.int({ bits: code as u64, kind: number-kind.s64, })), }),
+                signal(signal) => Value.case({ kind: "variant", type: "std:process/process.ended", name: "signal", index: 1, payload: some(Value.int({ bits: signal as u64, kind: number-kind.s64, })), }),
+            }),
+            err(why) => made-result(false, Value.text(why)),
+        }
+    }
+
+    @(private) list-native: func(name: string, args: list<Value>) -> option<Value> {
+        let xs = match args[0] {
+            list(found) => found,
+            _ => { return none; }
+        };
+        if name == "len" { return some(Value.int({ bits: xs.items.len() as u64, kind: number-kind.s64, })); }
+        if name == "at" {
+            let at = held-integer(args[1]);
+            if at < 0 || at >= xs.items.len() { panic("index {at} out of range (length {xs.items.len()})"); }
+            return some(xs.items[at]);
+        }
+        if name == "get" {
+            let at = held-integer(args[1]);
+            return some(if at < 0 || at >= xs.items.len() { option(none) } else { option(some(xs.items[at])) });
+        }
+        if name == "set" {
+            let at = held-integer(args[1]);
+            if at < 0 || at >= xs.items.len() { panic("index {at} out of range (length {xs.items.len()})"); }
+            xs.items[at] = copied(args[2]);
+            xs.version += 1;
+            return some(Value.unit);
+        }
+        if name == "push" {
+            xs.items.push(copied(args[1]));
+            xs.version += 1;
+            return some(Value.unit);
+        }
+        if name == "pop" {
+            if xs.items.len() == 0 { panic("pop of an empty list"); }
+            xs.version += 1;
+            return some(xs.items.pop());
+        }
+        if name == "grow" { return some(Value.unit); }
+        none
+    }
+
+    // a map key's fingerprint: equal keys (as == says) give one text
+    @(private) fingerprint: func(value: Value) -> string {
+        match value {
+            text(contents) => "s" + contents,
+            int(integer) => "i{integer.bits}",
+            flags(flags) => "f{flags.bits}",
+            char(letter) => "c{letter as s64}",
+            bool(flag) => if flag { "t" } else { "f" },
+            float(number) => "d{f64-bits(number.value)}",
+            _ => "v" + shown(value, false),
+        }
+    }
+
+    @(private) map-native: func(name: string, args: list<Value>) -> option<Value> {
+        if name == "new" { return some(Value.map({ keys: [], values: [], places: map.new(), version: 0, })); }
+        let entries = match args[0] {
+            map(found) => found,
+            _ => { return none; }
+        };
+        if name == "len" { return some(Value.int({ bits: entries.keys.len() as u64, kind: number-kind.s64, })); }
+        if name == "keys" { return some(Value.list({ items: entries.keys.map({ one -> one }), fixed: false, version: 0, })); }
+        if name == "values" { return some(Value.list({ items: entries.values.map({ one -> one }), fixed: false, version: 0, })); }
+        let place = entries.places.get(fingerprint(args[1]));
+        if name == "has" { return some(Value.bool(place != none)); }
+        if name == "get" {
+            return some(match place {
+                some(at) => option(some(entries.values[at])),
+                none => option(none),
+            });
+        }
+        if name == "get-or" {
+            return some(match place {
+                some(at) => entries.values[at],
+                none => args[2],
+            });
+        }
+        if name == "at" {
+            return some(match place {
+                some(at) => entries.values[at],
+                none => panic("no key in the map: {shown(args[1], false)}"),
+            });
+        }
+        if name == "set" {
+            entries.version += 1;
+            match place {
+                some(at) => { entries.values[at] = copied(args[2]); }
+                none => {
+                    entries.places.set(fingerprint(args[1]), entries.keys.len());
+                    entries.keys.push(copied(args[1]));
+                    entries.values.push(copied(args[2]));
+                }
+            }
+            return some(Value.unit);
+        }
+        if name == "remove" {
+            if place != none { entries.version += 1; }
+            return some(match place {
+                some(at) => {
+                    let keys: list<Value> = [];
+                    let values: list<Value> = [];
+                    let places: map<string, s64> = map.new();
+                    for index in 0..entries.keys.len() {
+                        if index != at {
+                            places.set(fingerprint(entries.keys[index]), keys.len());
+                            keys.push(entries.keys[index]);
+                            values.push(entries.values[index]);
+                        }
+                    }
+                    entries.keys = keys;
+                    entries.values = values;
+                    entries.places = places;
+                    Value.bool(true)
+                }
+                none => Value.bool(false),
+            });
+        }
+        none
+    }
+
+    @(private) text-native: func(name: string, args: list<Value>) -> option<Value> {
+        if name == "concat" { return some(Value.text(held-text(args[0]) + held-text(args[1]))); }
+        if name == "equal" { return some(Value.bool(held-text(args[0]) == held-text(args[1]))); }
+        if name == "compare" {
+            let one = held-text(args[0]);
+            let other = held-text(args[1]);
+            let order = one.compare(other);
+            let sign: s64 = if order < 0 { -1 } else if order > 0 { 1 } else { 0 };
+            return some(Value.int({ bits: sign as u64, kind: number-kind.s64, }));
+        }
+        if name == "substring" { return some(Value.text(held-text(args[0]).substring(held-integer(args[1]), held-integer(args[2])))); }
+        if name == "bytes" {
+            let contents = held-text(args[0]);
+            let out: list<Value> = [];
+            for at in 0..contents.len() { out.push(Value.int({ bits: contents.byte-at(at) as u64, kind: number-kind.u8, })); }
+            return some(Value.list({ items: out, fixed: false, version: 0, }));
+        }
+        if name == "hash" { return some(Value.int({ bits: held-text(args[0]).hash(), kind: number-kind.u64, })); }
+        if name == "len" { return some(Value.int({ bits: held-text(args[0]).len() as u64, kind: number-kind.s64, })); }
+        none
+    }
+
+    @(private) buffer-native: func(name: string, args: list<Value>) -> option<Value> {
+        if name == "buffer" { return some(Value.bytes({ data: buffer(if args.len() > 0 { held-integer(args[0]) } else { 16 }), version: 0, })); }
+        let held-bytes = match args[0] {
+            bytes(found) => found,
+            _ => { return none; }
+        };
+        if name == "push" {
+            held-bytes.version += 1;
+            held-bytes.data.push(held-text(args[1]));
+            return some(Value.unit);
+        }
+        if name == "push-byte" {
+            held-bytes.version += 1;
+            held-bytes.data.push-byte(held-integer(args[1]));
+            return some(Value.unit);
+        }
+        if name == "push-char" {
+            held-bytes.version += 1;
+            match args[1] {
+                char(letter) => held-bytes.data.push-char(letter),
+                _ => {}
+            }
+            return some(Value.unit);
+        }
+        if name == "push-bytes" {
+            held-bytes.version += 1;
+            match args[1] {
+                list(xs) => { for one in xs.items { held-bytes.data.push-byte(held-integer(one)); } }
+                _ => {}
+            }
+            return some(Value.unit);
+        }
+        if name == "to-string" { return some(Value.text(held-bytes.data.to-string())); }
+        if name == "to-bytes" {
+            let contents = held-bytes.data.to-string();
+            let out: list<Value> = [];
+            for at in 0..contents.len() { out.push(Value.int({ bits: contents.byte-at(at) as u64, kind: number-kind.u8, })); }
+            return some(Value.list({ items: out, fixed: false, version: 0, }));
+        }
+        if name == "reserve" { return some(Value.unit); }
+        if name == "len" { return some(Value.int({ bits: held-bytes.data.to-string().len() as u64, kind: number-kind.s64, })); }
+        none
+    }
+
+    @(private) held-text: func(value: Value) -> string {
+        match value {
+            text(contents) => contents,
+            _ => shown(value, true),
+        }
+    }
+
+    @(private) held-integer: func(value: Value) -> s64 {
+        match value {
+            int(integer) => integer.bits as s64,
+            char(letter) => letter as s64,
+            bool(flag) => if flag { 1 } else { 0 },
+            _ => 0,
+        }
+    }
+
+    @(private) float-value: func(value: Value) -> f64 {
+        match value {
+            float(number) => number.value,
+            int(integer) => (integer.bits as s64) as f64,
+            _ => 0.0,
+        }
+    }
+}
