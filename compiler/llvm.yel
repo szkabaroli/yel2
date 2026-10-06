@@ -57,8 +57,9 @@ resource Lower {
 }
 
 // what a module's types are made of: the module, the program's declarations, the target's C ABI
-// (imports: a WIT import's wrapper's C name to its native host's: imports-hosts in gen.yel)
-resource Types { m: BcModule, g: Gen, abi: string, imports: map<string, string>, }
+// (imports: a WIT import's wrapper's C name to its native host's: imports-hosts in gen.yel), and
+// whether its C widens a narrow integer for the one it gives it to (calling.extends-narrow)
+resource Types { m: BcModule, g: Gen, abi: string, imports: map<string, string>, extends: bool, }
 
 // (gen's core imports: Types.g.core-imports, by their C names)
 
@@ -85,7 +86,7 @@ module llvm {
         let m = bitcode.module-of(triple);
         let abi = calling.abi(triple);
         if abi == "" { diagnostics.fail("yelc --backend bitcode: no C calling convention for the target {triple} yet"); }
-        let types: Types = { m: m, g: g, abi: abi, imports: imports, };
+        let types: Types = { m: m, g: g, abi: abi, imports: imports, extends: calling.extends-narrow(triple), };
         let made: Made = { singletons: map.new(), pure: map.new(), calling-pure: false, globals: map.new(), };
         let index: map<string, s64> = map.new();
         if g.context.debug {
@@ -1358,7 +1359,7 @@ module llvm {
             // a () or never: a yel extern's C gives a yunit (a byte), the runtime's own (y_mark)
             // gives nothing
             result-ty = if gives { value-type(l.types, l.ir, result) } else if l.externs.has(name) { bitcode.int-type(m, 8) } else { bitcode.void-type(m) };
-            if gives { attributes.push({ index: 0, attributes: extension(result), }); }
+            if gives { attributes.push({ index: 0, attributes: extension(result, l.types.extends), }); }
         } else if returning.how == PassingKind.parts {
             result-ty = parts-type(m, returning.parts);
         } else {
@@ -1372,7 +1373,7 @@ module llvm {
             let passing = signature.params[k];
             let t = types[k];
             if passing.how == PassingKind.direct {
-                attributes.push({ index: params.len() + 1, attributes: extension(t), });
+                attributes.push({ index: params.len() + 1, attributes: extension(t, l.types.extends), });
                 params.push(value-type(l.types, l.ir, t));
                 values.push(args[k]);
             } else if passing.how == PassingKind.parts {
@@ -1532,9 +1533,9 @@ module llvm {
     }
 
     // a narrow integer param's (or result's) widening: a bool's or an unsigned one's with zeros, a
-    // signed one's with its sign
-    extension: func(t: Type) -> list<u64> {
-        if is-string(t) || bits(t) >= 32 { return []; }
+    // signed one's with its sign; none where the target's C widens nothing (extends: false)
+    extension: func(t: Type, extends: bool) -> list<u64> {
+        if !extends || is-string(t) || bits(t) >= 32 { return []; }
         if signed(t) { bitcode.signext() } else { bitcode.zeroext() }
     }
 
@@ -3818,6 +3819,15 @@ module calling {
         if triple.starts-with("x86_64") && !triple.contains("windows") { return "x86-64"; }
         if triple.starts-with("wasm32") { return "wasm32"; }
         ""
+    }
+
+    // whether the target's C widens a narrow integer (a bool, an 8- or 16-bit one) to 32 bits for
+    // the one it gives it to (clang's signext and zeroext): x86-64's, Apple's arm64 and wasm32's do;
+    // AArch64's own (AAPCS64: Linux, Windows) leaves the upper bits unknown, the receiver's to widen
+    extends-narrow: func(triple: string) -> bool {
+        let aarch64 = triple.starts-with("aarch64") || triple.starts-with("arm64");
+        let apple = triple.contains("apple") || triple.contains("darwin") || triple.contains("macos") || triple.contains("ios");
+        !aarch64 || apple
     }
 
     // a pointer's bytes on a target
