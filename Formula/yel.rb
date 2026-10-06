@@ -1,29 +1,29 @@
-# Written by tools/formula.sh for pre-alpha-1 (the release workflow): do not edit by hand.
+# Written by tools/formula.sh for pre-alpha-2 (the release workflow): do not edit by hand.
 class Yel < Formula
   desc "Compiler for the yel programming language"
   homepage "https://github.com/szkabaroli/yel2"
-  version "pre-alpha-1"
+  version "pre-alpha-2"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-1/yel-darwin-arm64.tar.gz"
-      sha256 "8b689a4aacd8693b2a69e00d554b749076ce9c17a172ada289557e62bc1b3745"
+      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-2/yel-darwin-arm64.tar.gz"
+      sha256 "694025856b451bd81d68836f5debab6dd4be390f1b92d81238231d257fa5f439"
     end
     on_intel do
-      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-1/yel-darwin-x64.tar.gz"
-      sha256 "694729c56b85404b00638c6d83f7b0bd4617fecbbafe2b01e1b509d0e0ae6ce6"
+      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-2/yel-darwin-x64.tar.gz"
+      sha256 "fc554f480b42d2fd898eb4575af4c826bc1200bb9b1dea807bed4e3339691358"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-1/yel-linux-arm64.tar.gz"
-      sha256 "c8124ac61c9fccb8cb0faff59f1e0f19444f888e7f32405b8654bb9334c8b722"
+      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-2/yel-linux-arm64.tar.gz"
+      sha256 "a2083548eb08482534654b5e4b38b5d37d5f8a4d8422b1754558a5e0e14ea663"
     end
     on_intel do
-      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-1/yel-linux-x64.tar.gz"
-      sha256 "d0fb32b5da40ee1689417b269938379a90748c99228012381ca53e352639dacf"
+      url "https://github.com/szkabaroli/yel2/releases/download/pre-alpha-2/yel-linux-x64.tar.gz"
+      sha256 "761a18ea585429c3c042019c3c624c0696450132956b01ceb4215d5bc2c5fc09"
     end
   end
 
