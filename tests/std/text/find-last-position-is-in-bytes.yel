@@ -1,0 +1,9 @@
+// ---
+// description: find-last gives a position in bytes
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("éé".find-last("é"), some(2));
+}

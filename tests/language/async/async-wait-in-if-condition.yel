@@ -1,0 +1,18 @@
+// ---
+// description: wait is an expression: it works in a condition
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+positive: async func(x: s32) -> bool {
+    wait yield-turn();
+    x > 0
+}
+
+main: async func() {
+    let seen = "";
+    if wait positive(3) { seen = "yes"; } else { seen = "no"; }
+    expect.equal(seen, "yes");
+    if wait positive(-3) { seen = "yes"; } else { seen = "no"; }
+    expect.equal(seen, "no");
+}

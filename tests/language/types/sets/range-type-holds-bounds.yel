@@ -1,0 +1,14 @@
+// ---
+// description: a range type holds its bounds
+// features: [types, sets, ranges]
+// ---
+from "std:testing" include expect;
+
+type percent = 0..=100;
+
+main: func() {
+    let low: percent = 0;
+    let high: percent = 100;
+    expect.equal(low, 0);
+    expect.equal(high, 100);
+}

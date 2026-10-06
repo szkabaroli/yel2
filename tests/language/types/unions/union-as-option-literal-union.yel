@@ -1,0 +1,14 @@
+// ---
+// description: as? onto a literal union checks the value
+// features: [types, unions, as]
+// ---
+from "std:testing" include expect;
+
+type answer = "yes" | "no" | s32;
+
+main: func() {
+    let yes: string = "yes";
+    let maybe: string = "maybe";
+    expect.equal(expect.some(yes as? answer), "yes");
+    expect.none(maybe as? answer);
+}

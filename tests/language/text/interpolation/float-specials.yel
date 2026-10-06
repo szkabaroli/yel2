@@ -1,0 +1,13 @@
+// ---
+// description: inf, -inf and nan show by name
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let up: f64 = inf;
+    let not: f64 = nan;
+    expect.equal("{up}", "inf");
+    expect.equal("{-up}", "-inf");
+    expect.equal("{not}", "nan");
+}

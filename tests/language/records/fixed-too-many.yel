@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a list<s32, 2> of 3 items
+// features: [records, fixed-lists]
+// negative: compile
+// error: 8:27: a list<s32, 2> of 3 items
+// ---
+main: func() {
+    let v: list<s32, 2> = [1, 2, 3];
+}

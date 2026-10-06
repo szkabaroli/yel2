@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: the right of ==: expected s32, found f64
+// features: [types, integers]
+// negative: compile
+// error: 7:63: the right of ==: expected s32, found f64
+// ---
+main: func() { let a: s32 = 1; let b: f64 = 1.0; let c = a == b; }

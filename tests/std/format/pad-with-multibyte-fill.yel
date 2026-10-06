@@ -1,0 +1,9 @@
+// ---
+// description: pad takes a fill that has several bytes
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.pad("a", 3, "é", ">"), "ééa");
+}

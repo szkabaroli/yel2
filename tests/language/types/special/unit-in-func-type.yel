@@ -1,0 +1,13 @@
+// ---
+// description: a func type returning unit
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count = 0;
+    let bump: func() -> () = { count += 1; };
+    bump();
+    bump();
+    expect.equal(count, 2);
+}

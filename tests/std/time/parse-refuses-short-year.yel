@@ -1,0 +1,10 @@
+// ---
+// description: time.parse refuses a year of three digits
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(expect.err(time.parse("202-10-05")), "a year is four digits, at 0");
+}

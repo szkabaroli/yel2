@@ -1,0 +1,19 @@
+// ---
+// description: a future that lost a race is awaited with the others in wait for all
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+delayed: async func(turns: s32, name: string) -> string {
+    for turn in 0..turns { wait yield-turn(); }
+    name
+}
+
+main: async func() {
+    let slow = start delayed(5, "slow");
+    let fast = start delayed(1, "fast");
+    let first = wait slow | fast;
+    let both = wait { slow: slow, fast: fast, };
+    expect.equal(both.slow, "slow");
+    expect.equal(both.fast, "fast");
+}

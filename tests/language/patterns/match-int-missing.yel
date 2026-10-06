@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: the match has no arm for 3: add one, or a _ arm
+// features: [patterns]
+// negative: compile
+// error: 9:5: the match has no arm for 3: add one, or a _ arm
+// ---
+main: func() -> s32 {
+    let n = 3;
+    match n {
+        0 | 1 => 0,
+        0x2 => 1,
+    }
+}

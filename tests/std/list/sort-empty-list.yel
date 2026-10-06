@@ -1,0 +1,11 @@
+// ---
+// description: sort of an empty list does nothing
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<s32> = [];
+    nothing.sort({ a, b -> a < b });
+    expect.equal(nothing.len(), 0);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a hundred random UUIDs are all different
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let seen: set<string> = set.new();
+    for index in 0..100 { seen.add(uuid.to-string(uuid.random())); }
+    expect.equal(seen.len(), 100);
+}

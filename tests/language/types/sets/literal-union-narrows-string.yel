@@ -1,0 +1,17 @@
+// ---
+// description: a string tested against a literal narrows to it
+// features: [types, sets, is]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post";
+
+main: func() {
+    let text: string = "post";
+    if text is method {
+        let which: method = text;
+        expect.equal(which, "post");
+    } else {
+        expect.fail("text is a method");
+    }
+}

@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: argument 2 of same: expected an integer, found string
+// features: [types, generics]
+// negative: compile
+// error: 8:32: argument 2 of same: expected an integer, found string
+// ---
+same: func<T>(a: T, b: T) -> T { a }
+main: func() { let x = same(1, "a"); }

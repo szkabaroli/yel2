@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: Shape has no case squre
+// features: [types]
+// negative: compile
+// error: 10:13: Shape has no case squre
+// help: did you mean square?
+// ---
+variant Shape { circle(f64), square(f64), }
+main: func() {
+    let s = Shape.squre(2.0);
+}

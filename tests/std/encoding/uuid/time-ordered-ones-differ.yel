@@ -1,0 +1,10 @@
+// ---
+// description: two version 7 UUIDs made at once differ
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.not-equal(uuid.to-string(uuid.time-ordered()), uuid.to-string(uuid.time-ordered()));
+}

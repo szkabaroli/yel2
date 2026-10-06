@@ -1,0 +1,26 @@
+// ---
+// description: regex /\w+/ on "hi_there, you!": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /\w+/;
+    let text = "hi_there, you!";
+    expect.equal(shown(regex-under-test.find(text)), "\"hi_there\"@0-8[]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\"hi_there\"@0-8[] \"you\"@10-13[]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "<hi_there>, <you>!");
+}

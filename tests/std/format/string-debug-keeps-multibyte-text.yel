@@ -1,0 +1,9 @@
+// ---
+// description: a quoted string keeps multibyte text as it is
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{"é😀":?}", "\"é😀\"");
+}

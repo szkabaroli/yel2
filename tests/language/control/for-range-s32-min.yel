@@ -1,0 +1,10 @@
+// ---
+// description: a range starting at s32's minimum counts up from it
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let seen: list<s32> = [];
+    for i in -2147483648..-2147483645 { seen.push(i); }
+    expect.equal(seen, [-2147483648, -2147483647, -2147483646,]);
+}

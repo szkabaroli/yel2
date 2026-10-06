@@ -1,0 +1,15 @@
+// ---
+// description: a recursive func with if/else as its value
+// features: [syntax,functions]
+// ---
+from "std:testing" include expect;
+
+fib: func(n: s32) -> s32 {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+main: func() {
+    expect.equal(fib(0), 0);
+    expect.equal(fib(1), 1);
+    expect.equal(fib(20), 6765);
+}

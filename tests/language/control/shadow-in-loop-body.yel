@@ -1,0 +1,13 @@
+// ---
+// description: a let in a loop's body hides the outer name each turn, leaving it unchanged
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let x = 100;
+    for i in 0..3 {
+        let x = i;
+        expect.equal(x, i);
+    }
+    expect.equal(x, 100);
+}

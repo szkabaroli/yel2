@@ -1,0 +1,12 @@
+// ---
+// description: a parenthesized expression can be cast
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let first: s32 = 200;
+    let second: s32 = 100;
+    expect.equal((first + second) as u8, 44);
+    expect.equal((4294967296 as s64) as s32, 0);
+}

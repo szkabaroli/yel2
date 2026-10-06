@@ -1,0 +1,14 @@
+// ---
+// description: anonymous records as a list's items
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+type point = { x: s32, y: s32 };
+
+main: func() {
+    let points: list<point> = [{ x: 0, y: 0, }, { x: 0, y: 5, }, { x: 3, y: 3, },];
+    expect.equal(points.len(), 3);
+    expect.equal(points[1].y, 5);
+    expect.equal(points[2], { y: 3, x: 3, });
+}

@@ -1,0 +1,20 @@
+// ---
+// description: write gives scheme:path for a URL with no host
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let made: url.parts = {
+        scheme: "mailto",
+        username: "",
+        password: "",
+        host: none,
+        port: none,
+        path: "a@b",
+        query: none,
+        fragment: none,
+    };
+    expect.equal(url.write(made), "mailto:a@b");
+}

@@ -1,0 +1,16 @@
+// ---
+// description: an option of a distinct type
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+find: func(present: bool) -> option<binding> {
+    if present { some(7 as binding) } else { none }
+}
+
+main: func() {
+    expect.equal(expect.some(find(true)) as u32, 7);
+    expect.none(find(false));
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a task waiting for a stream no one writes, its writer still held in a list: a deadlock, exit 1
+// features: [async, streams]
+// exit: 1
+// ---
+// (the writer is in a list, so it is not closed for the reader: nothing will wake it)
+main: async func() {
+    let (items, out) = stream-pair(1);
+    let held = [out,];
+    let item: option<s32> = wait items.read();
+    print("{held.len()}\n");
+}

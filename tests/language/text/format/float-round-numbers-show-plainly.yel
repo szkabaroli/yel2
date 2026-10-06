@@ -1,0 +1,12 @@
+// ---
+// description: a float like 100.0 shows in plain digits, not as 1e+02 (99.0 does; 10.0 gives 1e+01)
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let hundred: f64 = 100.0;
+    let ten: f64 = 10.0;
+    expect.holds(!"{hundred}".contains("e"));
+    expect.holds(!"{ten}".contains("e"));
+}

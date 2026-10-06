@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: f takes 1 arguments, given 2
+// features: [funcs]
+// negative: compile
+// error: 8:23: f takes 1 arguments, given 2
+// ---
+f: func(x: s32) -> s32 { x }
+main: func() -> s32 { f(1, 2) }

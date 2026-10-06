@@ -1,0 +1,11 @@
+// ---
+// description: to-date-time moves from 29 February to 1 March
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = time.to-date-time(time.from-unix-millis(1709164800000 + 86400000));
+    expect.equal((when.year, when.month, when.day), (2024, 3, 1));
+}

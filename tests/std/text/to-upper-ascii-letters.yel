@@ -1,0 +1,9 @@
+// ---
+// description: to-upper makes ASCII letters upper case
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("Mixed case 9".to-upper(), "MIXED CASE 9");
+}

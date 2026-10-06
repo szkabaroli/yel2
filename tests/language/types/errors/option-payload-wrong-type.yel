@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: some's payload: expected s32, found string
+// features: [types, option]
+// negative: compile
+// error: 7:42: some's payload: expected s32, found string
+// ---
+main: func() { let a: option<s32> = some("x"); }

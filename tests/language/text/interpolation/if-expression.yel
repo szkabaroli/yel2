@@ -1,0 +1,11 @@
+// ---
+// description: an if expression with braces works inside an interpolation
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let flag = true;
+    expect.equal("{if flag { "yes" } else { "no" }}", "yes");
+    expect.equal("{if !flag { 1 } else { 2 }}", "2");
+}

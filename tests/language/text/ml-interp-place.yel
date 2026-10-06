@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: the right of +: expected an integer, found string
+// features: [text]
+// negative: compile
+// error: 10:20: the right of +: expected an integer, found string
+// ---
+main: func() -> s32 {
+    let s = """
+        fine
+          sum {1 + "x"}
+        """;
+    0
+}

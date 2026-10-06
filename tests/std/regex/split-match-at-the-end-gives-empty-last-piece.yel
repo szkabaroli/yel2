@@ -1,0 +1,9 @@
+// ---
+// description: split ends with an empty piece where a match is at the end
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/,/.split("a,"), ["a", "",]);
+}

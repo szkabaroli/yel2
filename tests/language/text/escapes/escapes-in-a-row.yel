@@ -1,0 +1,14 @@
+// ---
+// description: several escapes in a row
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "\t\n\\\"";
+    expect.equal(text.len(), 4);
+    expect.equal(text.byte-at(0), 9);
+    expect.equal(text.byte-at(1), 10);
+    expect.equal(text.byte-at(2), 92);
+    expect.equal(text.byte-at(3), 34);
+}

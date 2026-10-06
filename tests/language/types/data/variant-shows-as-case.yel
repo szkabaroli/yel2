@@ -1,0 +1,19 @@
+// ---
+// description: a variant shows as its case and payload
+// features: [types, variants, display]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+variant Shape {
+    dot,
+    circle(s32),
+    rect(Point),
+}
+
+main: func() {
+    expect.equal("{Shape.dot}", "dot");
+    expect.equal("{Shape.circle(2)}", "circle(2)");
+    expect.equal("{Shape.rect({ x: 5, y: 6, })}", "rect(\{x: 5, y: 6\})");
+}

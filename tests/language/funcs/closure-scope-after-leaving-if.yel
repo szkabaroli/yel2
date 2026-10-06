@@ -1,0 +1,19 @@
+// ---
+// description: a closure sees a local bound after an if that leaves
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+count: func(n: s64) -> s64 {
+    if n > 3 { return 1; }
+    let names: list<string> = [];
+    let add = { name: string -> names.push(name); };
+    add("a");
+    add("b");
+    names.len()
+}
+
+main: func() {
+    expect.equal(count(2), 2);
+    expect.equal(count(9), 1);
+}

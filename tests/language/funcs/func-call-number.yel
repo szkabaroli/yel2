@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: x is not a func (an integer): it cannot be called
+// features: [funcs]
+// negative: compile
+// error: 9:5: x is not a func (an integer): it cannot be called
+// ---
+main: func() {
+    let x = 1;
+    x(2);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: a closure captures its func's parameter
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+scaled: func(items: list<s32>, factor: s32) -> list<s32> { items.map({ item -> item * factor }) }
+
+main: func() {
+    let result = scaled([1, 2, 3,], 4);
+    expect.equal(result[0], 4);
+    expect.equal(result[2], 12);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a for's variable hides an outer name of the same name
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let item = 99;
+    let sum = 0;
+    for item in [1, 2, 3,] { sum += item; }
+    expect.equal(sum, 6);
+    expect.equal(item, 99);
+}

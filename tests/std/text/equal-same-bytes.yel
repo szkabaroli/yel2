@@ -1,0 +1,11 @@
+// ---
+// description: equal is true for strings with the same bytes
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(equal("abc", "abc"));
+    expect.holds("abc" == "abc");
+    expect.holds(equal("", ""));
+}

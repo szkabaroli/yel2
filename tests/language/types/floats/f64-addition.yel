@@ -1,0 +1,12 @@
+// ---
+// description: f64 addition keeps double precision
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let tenth: f64 = 0.1;
+    let fifth: f64 = 0.2;
+    expect.equal("{tenth + fifth}", "0.30000000000000004");
+    expect.holds(tenth + fifth != 0.3);
+}

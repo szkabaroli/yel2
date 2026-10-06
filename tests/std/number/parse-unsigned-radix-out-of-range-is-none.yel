@@ -1,0 +1,10 @@
+// ---
+// description: parse-unsigned-radix refuses a radix outside 2 to 36
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned-radix("1", 1));
+    expect.none(number.parse-unsigned-radix("1", 37));
+}

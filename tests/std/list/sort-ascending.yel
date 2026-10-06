@@ -1,0 +1,11 @@
+// ---
+// description: sort puts the items in the order less says
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [5, 3, 9, 1, 4,];
+    xs.sort({ a, b -> a < b });
+    expect.equal(xs, [1, 3, 4, 5, 9,]);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: true as a type of one value
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type always = true;
+
+main: func() {
+    let flag: always = true;
+    expect.holds(flag);
+    let plain: bool = flag;
+    expect.holds(plain);
+}

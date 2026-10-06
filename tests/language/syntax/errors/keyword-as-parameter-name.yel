@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: expected a name, found the keyword for (a name of that word is written %for)
+// features: [syntax,names]
+// negative: compile
+// error: 7:15: expected a name, found the keyword for (a name of that word is written %for)
+// ---
+reverse: func(for: s32) {}
+main: func() {}

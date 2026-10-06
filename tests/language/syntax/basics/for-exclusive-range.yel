@@ -1,0 +1,14 @@
+// ---
+// description: for over a..b leaves b out
+// features: [syntax,loops]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let total = 0;
+    for i in 0..5 { total += i; }
+    expect.equal(total, 10);
+    let never = 0;
+    for i in 3..3 { never += 1; }
+    expect.equal(never, 0);
+}

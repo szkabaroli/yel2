@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: argument 1 of take: expected Point, found { x: an integer, y: an integer }
+// features: [records]
+// negative: compile
+// error: 12:10: argument 1 of take: expected Point, found { x: an integer, y: an integer }
+// help: a record literal is a Point where one is wanted: write its type (let p: Point = …)
+// ---
+resource Point { x: s32, y: s32, }
+take: func(p: Point) {}
+main: func() {
+    let p = { x: 1, y: 2, };
+    take(p);
+}

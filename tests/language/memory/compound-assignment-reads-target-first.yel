@@ -1,0 +1,12 @@
+// ---
+// description: x op= v reads x before it evaluates v: a local
+// features: [memory]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let k = 10;
+    let bump = { -> k = 20; 2 };
+    k += bump();
+    expect.equal(k, 12);
+}

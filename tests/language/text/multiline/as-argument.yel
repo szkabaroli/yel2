@@ -1,0 +1,13 @@
+// ---
+// description: a multiline string may be an argument
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+size: func(text: string) -> s64 { text.len() }
+
+main: func() {
+    expect.equal(size("""
+        abc
+        """), 3);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: a closure given a readonly row may not keep it where it may be written
+// features: [readonly]
+// negative: compile
+// error: 10:43: argument 2 of push is readonly, and push keeps it where it may be written
+// ---
+main: func() {
+    let grid: list<list<s32>> & readonly = [[1,], [2,],];
+    let seen: list<list<s32>> = [];
+    let any = grid.any({ row -> seen.push(row); true });
+}

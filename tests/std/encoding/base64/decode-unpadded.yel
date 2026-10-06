@@ -1,0 +1,11 @@
+// ---
+// description: base64.decode reads text with no padding
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    expect.equal(expect.ok(base64.decode("Zg")), [102,]);
+    expect.equal(expect.ok(base64.decode("Zm8")), [102, 111,]);
+}

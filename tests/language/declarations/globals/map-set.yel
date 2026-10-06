@@ -1,0 +1,13 @@
+// ---
+// description: a map global holds what is set
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let ages: map<string, s64>;
+
+main: func() {
+    ages.set("ada", 36);
+    expect.equal(ages["ada"], 36);
+    expect.equal(ages.len(), 1);
+}

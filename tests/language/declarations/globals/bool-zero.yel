@@ -1,0 +1,11 @@
+// ---
+// description: a bool global starts false
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let ready: bool;
+
+main: func() {
+    expect.holds(!ready);
+}

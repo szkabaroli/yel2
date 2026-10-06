@@ -1,0 +1,12 @@
+// ---
+// description: an inclusive range ending at s32's greatest value takes no step past it
+// features: [memory, ranges]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: s32 = 2147483647;
+    let seen = 0;
+    for i in 2147483645..=top { seen += 1; }
+    expect.equal(seen, 3);
+}

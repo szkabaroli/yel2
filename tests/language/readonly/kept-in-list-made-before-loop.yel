@@ -1,0 +1,16 @@
+// ---
+// description: each turn's record kept in a list made before the loop
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Point { x: s32, y: s32, }
+main: func() {
+    let points: list<Point> = [];
+    for i in 0..5 {
+        let p: Point = { x: i, y: i * i, };
+        points.push(p);
+    }
+    let squares: list<s32> = [];
+    for p in points { squares.push(p.y); }
+    expect.equal(squares, [0, 1, 4, 9, 16,]);
+}

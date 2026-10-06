@@ -1,0 +1,13 @@
+// ---
+// description: to-string of a number, a bool and a buffer
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push("xy");
+    expect.equal(to-string(42), "42");
+    expect.equal(to-string(true), "true");
+    expect.equal(b.to-string(), "xy");
+}

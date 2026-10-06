@@ -1,0 +1,12 @@
+// ---
+// description: for over a list of resources may change each, as they are shared
+// features: [control]
+// ---
+from "std:testing" include expect;
+resource Cell { value: s32, }
+main: func() {
+    let cells: list<Cell> = [{ value: 1, }, { value: 2, },];
+    for cell in cells { cell.value *= 10; }
+    expect.equal(cells[0].value, 10);
+    expect.equal(cells[1].value, 20);
+}

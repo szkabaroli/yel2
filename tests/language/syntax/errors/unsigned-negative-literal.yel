@@ -1,0 +1,7 @@
+// ---
+// description: docs: a literal that does not fit its type is an error; -1 for a u8 compiles and wraps to 255
+// features: [declarations]
+// negative: compile
+// error: -1 is out of range for u8
+// ---
+main: func() { let value: u8 = -1; print("{value}\n"); }

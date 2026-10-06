@@ -1,0 +1,14 @@
+// ---
+// description: remove leaves the other keys in their order
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    for key in 0..6 { m.set(key, key * key); }
+    m.remove(2);
+    m.remove(0);
+    expect.equal(m.keys(), [1, 3, 4, 5,]);
+    expect.equal(m.values(), [1, 9, 16, 25,]);
+}

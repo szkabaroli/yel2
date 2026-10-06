@@ -1,0 +1,16 @@
+// ---
+// description: ok(n) | err(n) in one arm when both bind the same type
+// features: [types, result, match]
+// ---
+from "std:testing" include expect;
+
+payload: func(outcome: result<s32, s32>) -> s32 {
+    match outcome {
+        ok(number) | err(number) => number,
+    }
+}
+
+main: func() {
+    expect.equal(payload(ok(3)), 3);
+    expect.equal(payload(err(9)), 9);
+}

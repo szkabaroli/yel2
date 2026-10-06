@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: tests/packages/noid is included, so it names itself (package ns:name;)
+// features: [modules]
+// negative: compile
+// error: 7:1: tests/packages/noid is included, so it names itself (package ns:name;)
+// ---
+from "../../packages/noid" include m;
+main: func() -> s32 { m.f() }

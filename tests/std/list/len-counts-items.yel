@@ -1,0 +1,10 @@
+// ---
+// description: len gives how many items a list has
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2, 3,].len(), 3);
+    expect.equal([7,].len(), 1);
+}

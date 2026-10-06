@@ -1,0 +1,15 @@
+// ---
+// description: a continue on the last value of a range up to u64's greatest ends it
+// features: [memory, ranges]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let umax: u64 = 18446744073709551615;
+    let odd = 0;
+    for u in 18446744073709551610..=umax {
+        if u % 2 == 0 { continue; }
+        odd += 1;
+    }
+    expect.equal(odd, 3);
+}

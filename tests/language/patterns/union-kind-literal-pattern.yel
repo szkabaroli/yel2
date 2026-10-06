@@ -1,0 +1,19 @@
+// ---
+// description: a literal pattern in a union of kinds tests the tag of its kind
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(value: s32 | string) -> string {
+    match value {
+        0 => "zero",
+        "" => "empty",
+        let n: s32 => "number",
+        let s: string => "text",
+    }
+}
+main: func() {
+    expect.equal(describe(0), "zero");
+    expect.equal(describe(""), "empty");
+    expect.equal(describe(5), "number");
+    expect.equal(describe("x"), "text");
+}

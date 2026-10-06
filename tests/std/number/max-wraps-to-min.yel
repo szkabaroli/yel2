@@ -1,0 +1,10 @@
+// ---
+// description: adding 1 to s8.MAX wraps to s8.MIN
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: s8 = s8.MAX;
+    expect.equal(top + 1, s8.MIN);
+}

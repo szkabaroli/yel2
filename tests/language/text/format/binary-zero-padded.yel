@@ -1,0 +1,11 @@
+// ---
+// description: a base with zero padding and a width
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{5:08b}", "00000101");
+    expect.equal("{255:06x}", "0000ff");
+    expect.equal("{8:04o}", "0010");
+}

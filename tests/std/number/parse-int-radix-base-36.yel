@@ -1,0 +1,10 @@
+// ---
+// description: parse-int-radix reads base 36, where z is 35
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("z", 36), some(35));
+    expect.equal(number.parse-int-radix("Zz", 36), some(1295));
+}

@@ -1,0 +1,9 @@
+// ---
+// description: split by an empty match cuts between characters, not at the ends
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/x*/.split("abc"), ["a", "b", "c",]);
+}

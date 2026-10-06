@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: text.substring takes three arguments
+// features: [text]
+// negative: compile
+// error: 8:16: yel:std/text.substring takes 3 arguments, given 2
+// ---
+main: func() {
+    let part = text.substring("a", 1);
+}

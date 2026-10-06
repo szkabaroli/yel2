@@ -1,0 +1,13 @@
+// ---
+// description: closures made in a loop share a variable declared outside it
+// features: [funcs, closures, loops]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let total = 0;
+    let adders: list<func()> = [];
+    for turn in 0..3 { adders.push({ total += turn + 1; }); }
+    for adder in adders { adder(); }
+    expect.equal(total, 6);
+}

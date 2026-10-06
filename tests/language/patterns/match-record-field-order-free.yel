@@ -1,0 +1,11 @@
+// ---
+// description: a record pattern names fields in any order
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+resource Point { x: s32, y: s32, }
+main: func() {
+    let p: Point = { x: 1, y: 2, };
+    let text = match p { { y: 2, x: 1 } => "both", _ => "no", };
+    expect.equal(text, "both");
+}

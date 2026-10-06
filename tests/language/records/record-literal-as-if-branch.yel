@@ -1,0 +1,14 @@
+// ---
+// description: record literals as the branches of an if
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+choose: func(flag: bool) -> { name: string, size: s32 } {
+    if flag { { name: "big", size: 10, } } else { { name: "small", size: 1, } }
+}
+
+main: func() {
+    expect.equal(choose(true).name, "big");
+    expect.equal(choose(false).size, 1);
+}

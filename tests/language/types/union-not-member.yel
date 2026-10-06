@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of i: expected s32 | string, found bool
+// features: [types]
+// negative: compile
+// error: 9:17: the value of i: expected s32 | string, found bool
+// ---
+type id = s32 | string;
+main: func() {
+    let i: id = true;
+}

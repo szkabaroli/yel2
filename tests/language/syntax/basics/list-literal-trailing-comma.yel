@@ -1,0 +1,12 @@
+// ---
+// description: a list literal may end with a trailing comma
+// features: [syntax,lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names = ["yel", "zero",];
+    expect.equal(names.len(), 2);
+    let plain = ["a", "b"];
+    expect.equal(plain.len(), 2);
+}

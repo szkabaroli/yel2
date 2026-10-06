@@ -1,0 +1,9 @@
+// ---
+// description: an interpolated u64 greatest
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{u64.MAX}", "18446744073709551615");
+}

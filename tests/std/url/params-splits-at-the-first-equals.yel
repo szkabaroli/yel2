@@ -1,0 +1,10 @@
+// ---
+// description: params takes later = signs as part of the value
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("a=b=c"), [("a", "b=c"),]);
+}

@@ -1,0 +1,20 @@
+// ---
+// description: a generic func matching option<T> with T a union compiles (the compiler panics: index -1 out of range)
+// features: [types, unions, generics]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+first: func<T>(value: option<T>) -> T {
+    match value {
+        some(inner) => inner,
+        none => panic("none"),
+    }
+}
+
+main: func() {
+    let found: option<id> = some(7);
+    let who = first(found);
+    expect.equal("{who}", "7");
+}

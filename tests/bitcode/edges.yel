@@ -26,8 +26,8 @@ main: func() -> s32 {
     acc = mix(acc, c as u64);
     let t = true;
     acc = mix(acc, t as u64);
-    acc = mix(acc, (7 % -3) as u64);
-    acc = mix(acc, (-7 / 2) as u64);
+    acc = mix(acc, ((7 as s64) % -3) as u64);
+    acc = mix(acc, ((-7 as s64) / 2) as u64);
     let unsigned: u64 = 18446744073709551615;
     acc = mix(acc, unsigned / 3);
     (acc % 256) as s32

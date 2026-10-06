@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: a is bound twice in one pattern
+// features: [patterns]
+// negative: compile
+// error: 10:9: a is bound twice in one pattern
+// ---
+main: func() -> s32 {
+    let t = (1, 2);
+    match t {
+        let (a, a) => a,
+    }
+}

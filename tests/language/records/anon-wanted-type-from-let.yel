@@ -1,0 +1,13 @@
+// ---
+// description: a let's annotation makes a literal the named record
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+resource Person { name: string, age: s32, }
+
+main: func() {
+    let ada: Person = { name: "ada", age: 36, };
+    expect.equal(ada.name, "ada");
+    expect.equal(ada.age, 36);
+}

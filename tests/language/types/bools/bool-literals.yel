@@ -1,0 +1,12 @@
+// ---
+// description: true and false
+// features: [types, bools]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let yes: bool = true;
+    let no: bool = false;
+    expect.holds(yes);
+    expect.holds(!no);
+}

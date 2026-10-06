@@ -1,0 +1,15 @@
+// ---
+// description: a closure captures a record variable, so a write shows outside
+// features: [funcs, closures, records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let point: Point = { x: 1, y: 2, };
+    let shift: func() = { point.x += 10; };
+    shift();
+    expect.equal(point.x, 11);
+    expect.equal(point.y, 2);
+}

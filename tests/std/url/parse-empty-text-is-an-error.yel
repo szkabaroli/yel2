@@ -1,0 +1,10 @@
+// ---
+// description: parse refuses empty text
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.err(url.parse(""));
+}

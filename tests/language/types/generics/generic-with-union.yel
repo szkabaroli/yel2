@@ -1,0 +1,15 @@
+// ---
+// description: a generic func over a union type
+// features: [types, generics, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+same: func<T>(value: T) -> T { value }
+
+main: func() {
+    let who: id = "x";
+    let back = same(who);
+    expect.holds(back is string);
+}

@@ -1,0 +1,17 @@
+// ---
+// description: match on some binds the payload
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+describe: func(found: option<s32>) -> string {
+    match found {
+        some(value) => "some {value}",
+        none => "nothing",
+    }
+}
+
+main: func() {
+    expect.equal(describe(some(8)), "some 8");
+    expect.equal(describe(none), "nothing");
+}

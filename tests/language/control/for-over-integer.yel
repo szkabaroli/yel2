@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a for's list: expected list<_>, found an integer
+// features: [control]
+// negative: compile
+// error: 8:5: a for's list: expected list<_>, found an integer
+// ---
+main: func() {
+    for i in 5 { }
+}

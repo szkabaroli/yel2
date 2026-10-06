@@ -1,0 +1,12 @@
+// ---
+// description: pop then push puts the new item where the last was
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2, 3,];
+    xs.pop();
+    xs.push(9);
+    expect.equal(xs, [1, 2, 9,]);
+}

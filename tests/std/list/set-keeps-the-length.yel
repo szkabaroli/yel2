@@ -1,0 +1,11 @@
+// ---
+// description: set does not change how many items there are
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2, 3,];
+    xs.set(0, 5);
+    expect.equal(xs.len(), 3);
+}

@@ -1,0 +1,17 @@
+// ---
+// description: an anonymous record given to a func stays as it was
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+type point = { x: s32, y: s32 };
+
+moved: func(p: point, by: s32) -> point { { x: p.x + by, y: p.y + by, } }
+
+main: func() {
+    let a = { x: 1, y: 2, };
+    let c = moved(a, 10);
+    expect.equal(a.x, 1);
+    expect.equal(c.x, 11);
+    expect.equal(c.y, 12);
+}

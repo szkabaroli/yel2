@@ -1,0 +1,12 @@
+// ---
+// description: wildcards in a tuple pattern
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+first-zero: func(t: tuple<s32, s32>) -> bool {
+    match t { (0, _) => true, _ => false, }
+}
+main: func() {
+    expect.holds(first-zero((0, 5)));
+    expect.holds(!first-zero((1, 0)));
+}

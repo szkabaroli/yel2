@@ -1,0 +1,11 @@
+// ---
+// description: a float operation past the largest value gives an infinity
+// features: [types, floats, infinity]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let large: f64 = 1e300;
+    expect.equal(large * large, inf);
+    expect.equal(-large * large, -inf);
+}

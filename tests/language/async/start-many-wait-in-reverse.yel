@@ -1,0 +1,19 @@
+// ---
+// description: futures waited for in the opposite order of their start
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+value: async func(x: s32) -> s32 {
+    for turn in 0..x { wait yield-turn(); }
+    x
+}
+
+main: async func() {
+    let first = start value(1);
+    let second = start value(2);
+    let third = start value(3);
+    expect.equal(wait third, 3);
+    expect.equal(wait second, 2);
+    expect.equal(wait first, 1);
+}

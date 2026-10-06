@@ -1,0 +1,1 @@
+panic: tests/std/core/assert-failure-tells-the-condition.yel:8:5: assertion failed: total * 2 == 7

@@ -1,0 +1,10 @@
+// ---
+// description: an f32 shows its own shortest digits
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let tenth: f32 = 0.1;
+    expect.equal("{tenth}", "0.1");
+}

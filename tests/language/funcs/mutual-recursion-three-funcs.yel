@@ -1,0 +1,13 @@
+// ---
+// description: three funcs call in a cycle
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+first: func(n: s32) -> s32 { if n <= 0 { 0 } else { 1 + second(n - 1) } }
+second: func(n: s32) -> s32 { if n <= 0 { 0 } else { 1 + third(n - 1) } }
+third: func(n: s32) -> s32 { if n <= 0 { 0 } else { 1 + first(n - 1) } }
+
+main: func() {
+    expect.equal(first(10), 10);
+}

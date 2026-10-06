@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a generator does not return a value, it yields
+// features: [generators]
+// negative: compile
+// error: 8:12: numbers's result: expected seq<s32>, found an integer
+// ---
+numbers: func() -> seq<s32> {
+    return 1;
+}
+main: func() {}

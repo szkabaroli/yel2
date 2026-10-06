@@ -1,0 +1,9 @@
+// ---
+// description: from-utf8 tells where a continuation byte has no lead
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([104, 128,]), err(1));
+}

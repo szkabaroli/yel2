@@ -1,0 +1,18 @@
+// ---
+// description: break leaves a wait for over a stream with items unread
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(8);
+    for x in 0..6 { wait out.write(x); }
+    let seen: list<s32> = [];
+    wait for x in items {
+        if x == 2 { break; }
+        seen.push(x);
+    }
+    expect.equal(seen, [0, 1,]);
+    expect.equal(expect.some(wait items.read()), 3);
+    out.close();
+}

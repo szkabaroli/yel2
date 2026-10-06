@@ -1,0 +1,19 @@
+// ---
+// description: json.integer reads s64's greatest and refuses past it
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    expect.equal(json.integer(some(json.value.number("9223372036854775807"))), some(s64.MAX));
+    expect.none(json.integer(some(json.value.number("9223372036854775808"))));
+}

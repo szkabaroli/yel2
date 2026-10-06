@@ -1,0 +1,11 @@
+// ---
+// description: origin has the host in lower case
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("HTTP://EXAMPLE.com/"));
+    expect.equal(url.origin(u), "http://example.com");
+}

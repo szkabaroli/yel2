@@ -1,0 +1,16 @@
+// ---
+// description: a record field of a literal union
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post" | "put";
+
+resource Request { method: method, path: string, }
+
+main: func() {
+    let request: Request = { method: "put", path: "/x", };
+    expect.equal(request.method, "put");
+    request.method = "get";
+    expect.equal(request.method, "get");
+}

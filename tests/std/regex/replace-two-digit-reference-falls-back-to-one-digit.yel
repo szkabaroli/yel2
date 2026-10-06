@@ -1,0 +1,9 @@
+// ---
+// description: replace reads $10 as $1 and a 0 where the regex has fewer groups
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/(a)/.replace("a", "$10"), "a0");
+}

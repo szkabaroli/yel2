@@ -1,0 +1,25 @@
+// ---
+// description: a stream with room for two makes writer and reader alternate
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+produce: async func(out: writer<s32>, count: s32) {
+    for x in 0..count {
+        wait out.write(x * x);
+        log.push("wrote {x * x}");
+    }
+    out.close();
+}
+
+main: async func() {
+    let (squares, out) = stream-pair(2);
+    let producer = start produce(out, 5);
+    wait for x in squares { log.push("read {x}"); }
+    wait producer;
+    expect.equal(log, [
+        "wrote 0", "wrote 1", "read 0", "read 1", "wrote 4", "wrote 9", "read 4", "read 9", "wrote 16", "read 16",
+    ]);
+}

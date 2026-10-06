@@ -1,0 +1,11 @@
+// ---
+// description: contains is true for an item that is in the list
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [5, 3, 9,];
+    expect.holds(xs.contains(9));
+    expect.holds(!xs.contains(7));
+}

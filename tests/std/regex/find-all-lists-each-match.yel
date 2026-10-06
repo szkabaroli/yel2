@@ -1,0 +1,9 @@
+// ---
+// description: find-all gives each match one after another
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/\w+/.find-all("hi there, you").map({ m -> m.text }), ["hi", "there", "you",]);
+}

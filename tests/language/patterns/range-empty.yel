@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: 5..=1 holds no value: its end is before its start
+// features: [patterns]
+// negative: compile
+// error: 7:1: 5..=1 holds no value: its end is before its start
+// ---
+type backwards = 5..=1;
+main: func() {}

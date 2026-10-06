@@ -1,0 +1,21 @@
+// ---
+// description: a union of char literals
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type direction = 'n' | 's' | 'e' | 'w';
+
+turn: func(heading: direction) -> direction {
+    match heading {
+        'n' => 'e',
+        'e' => 's',
+        's' => 'w',
+        'w' => 'n',
+    }
+}
+
+main: func() {
+    expect.equal(turn('n'), 'e');
+    expect.equal(turn(turn('w')), 'e');
+}

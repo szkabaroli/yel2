@@ -1,0 +1,13 @@
+// ---
+// description: u16 to s8 keeps the low byte
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: u16 = 65535;
+    expect.equal(value as s8, -1);
+    expect.equal(value as u8, 255);
+    let other: u16 = 0x1234;
+    expect.equal(other as u8, 0x34);
+}

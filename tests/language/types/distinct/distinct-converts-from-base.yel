@@ -1,0 +1,15 @@
+// ---
+// description: as makes a distinct type from its base, and back
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+main: func() {
+    let id = 3 as binding;
+    expect.equal(id as u32, 3);
+    let raw: u32 = 9;
+    let wrapped = raw as binding;
+    expect.equal(wrapped as u32, 9);
+}

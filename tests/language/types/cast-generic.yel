@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: as gives a number or a char, not T
+// features: [types]
+// negative: compile
+// error: 7:33: as gives a number or a char, not T
+// ---
+convert: func<T>(x: s32) -> T { x as T }
+main: func() {}

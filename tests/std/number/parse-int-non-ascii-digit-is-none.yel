@@ -1,0 +1,9 @@
+// ---
+// description: parse-int refuses digits that are not ASCII
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int("١٢"));
+}

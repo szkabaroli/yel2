@@ -1,0 +1,9 @@
+// ---
+// description: find-last of a text longer than the string is none
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none("ab".find-last("abc"));
+}

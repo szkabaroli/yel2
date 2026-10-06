@@ -1,0 +1,11 @@
+// ---
+// description: NaN is not equal to itself
+// features: [types, floats, nan]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = nan;
+    expect.holds(value != value);
+    expect.holds(!(value == value));
+}

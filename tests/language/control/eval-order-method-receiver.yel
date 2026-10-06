@@ -1,0 +1,14 @@
+// ---
+// description: a method call's receiver is evaluated before its arguments
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<string>;
+make: func() -> list<s32> { trace.push("receiver"); [] }
+arg: func() -> s32 { trace.push("argument"); 4 }
+main: func() {
+    let xs = make();
+    xs.push(arg());
+    expect.equal(trace, ["receiver", "argument",]);
+    expect.equal(xs, [4,]);
+}

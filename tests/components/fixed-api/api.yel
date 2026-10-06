@@ -1,0 +1,20 @@
+// fixed-length lists exported (tests/components/fixed-caller imports them): flat where they fit in the flat
+// values, in memory where not, and in a record's field
+
+package test:fixed@0.1.0;
+
+module api {
+    record Pixel { rgb: list<u8, 3>, alpha: u8, }
+
+    flip: func(v: list<s32, 3>) -> list<s32, 3> { [v[2], v[1], v[0]] }
+
+    shout: func(v: list<string, 2>) -> list<string, 2> { ["{v[1]}!", "{v[0]}!"] }
+
+    corner: func(m: list<list<u8, 2>, 2>) -> u8 { m[1][0] }
+
+    brighten: func(p: Pixel) -> Pixel {
+        let rgb = p.rgb;
+        for i in 0..3 { rgb[i] = rgb[i] / 2 + 128; }
+        { rgb: rgb, alpha: p.alpha, }
+    }
+}

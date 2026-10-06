@@ -1,0 +1,14 @@
+// ---
+// description: a match on a type of one value needs that arm alone
+// features: [types, one-value]
+// ---
+from "std:testing" include expect;
+
+type only = "post";
+
+main: func() {
+    let value: only = "post";
+    let seen = false;
+    match value { "post" => { seen = true; } }
+    expect.holds(seen);
+}

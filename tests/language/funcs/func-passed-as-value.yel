@@ -1,0 +1,16 @@
+// ---
+// description: a top-level func is passed as an argument and called through the parameter
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+twice: func(f: func(s32) -> s32, x: s32) -> s32 { f(f(x)) }
+
+inc: func(x: s32) -> s32 { x + 1 }
+
+square: func(x: s32) -> s32 { x * x }
+
+main: func() {
+    expect.equal(twice(inc, 5), 7);
+    expect.equal(twice(square, 3), 81);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: an empty list shows as []
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let none-yet: list<s32> = [];
+    expect.equal("{none-yet}", "[]");
+}

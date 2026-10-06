@@ -1,0 +1,12 @@
+// ---
+// description: a generic func gives back what holds nothing written
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+first-or: func<T>(xs: list<T>, fallback: T) -> T {
+    if xs.len() == 0 { fallback } else { xs[0] }
+}
+main: func() {
+    let fixed: list<s32> & readonly = [7, 8,];
+    expect.equal(first-or(fixed, 0), 7);
+}

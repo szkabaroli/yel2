@@ -1,0 +1,13 @@
+// ---
+// description: a branch that returns has no value, so the other branch's type stands
+// features: [control]
+// ---
+from "std:testing" include expect;
+half: func(n: s32) -> s32 {
+    let r = if n % 2 == 0 { n / 2 } else { return -1; };
+    r
+}
+main: func() {
+    expect.equal(half(10), 5);
+    expect.equal(half(7), -1);
+}

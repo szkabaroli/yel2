@@ -1,0 +1,10 @@
+// ---
+// description: parse-float refuses a sign alone
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("-"));
+    expect.none(number.parse-float("+"));
+}

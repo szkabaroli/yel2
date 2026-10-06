@@ -1,0 +1,11 @@
+// ---
+// description: parse reads :60 as the first second of the next minute
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at = expect.ok(time.parse("2016-12-31T23:59:60Z"));
+    expect.equal(time.to-iso(at), "2017-01-01T00:00:00.000Z");
+}

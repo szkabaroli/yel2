@@ -1,0 +1,16 @@
+// ---
+// description: resources are equal by identity, not by fields
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+main: func() {
+    let a: Counter = { value: 1, };
+    let same = a;
+    let twin: Counter = { value: 1, };
+    expect.holds(a == same);
+    expect.holds(a != twin);
+    expect.holds(!(a == twin));
+}

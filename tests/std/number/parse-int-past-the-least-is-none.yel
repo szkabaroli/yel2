@@ -1,0 +1,9 @@
+// ---
+// description: parse-int refuses a number past s64's least
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int("-9223372036854775809"));
+}

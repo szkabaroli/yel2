@@ -1,0 +1,11 @@
+// ---
+// description: regex.group gives none for a named group that took no part
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = expect.some(/(?<a>x)|(?<b>y)/.find("y"));
+    expect.none(regex.group(found, "a"));
+    expect.equal(regex.group(found, "b"), some("y"));
+}

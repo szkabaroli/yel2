@@ -1,0 +1,13 @@
+// ---
+// description: push puts a string at the end
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(8);
+    b.push("ab");
+    b.push("cd");
+    expect.equal(b.to-string(), "abcd");
+    expect.equal(b.len(), 4);
+}

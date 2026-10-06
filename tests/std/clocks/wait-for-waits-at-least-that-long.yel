@@ -1,0 +1,12 @@
+// ---
+// description: wait-for waits at least as long as asked
+// features: [clocks, async]
+// ---
+from "std:testing" include expect;
+from "std:clocks" include monotonic-clock;
+
+main: async func() {
+    let start = monotonic-clock.now();
+    wait monotonic-clock.wait-for(20000000);
+    expect.holds(monotonic-clock.now() - start >= 20000000);
+}

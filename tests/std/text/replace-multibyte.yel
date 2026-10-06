@@ -1,0 +1,9 @@
+// ---
+// description: replace works on multibyte text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("café café".replace("é", "e"), "cafe cafe");
+}

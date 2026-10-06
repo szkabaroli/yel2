@@ -1,0 +1,18 @@
+// ---
+// description: wait on the scrutinee of a match
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+find: async func(wanted: s32) -> option<s32> {
+    wait yield-turn();
+    if wanted > 0 { some(wanted) } else { none }
+}
+
+main: async func() {
+    let described = match wait find(2) {
+        some(found) => "found {found}",
+        none => "nothing",
+    };
+    expect.equal(described, "found 2");
+}

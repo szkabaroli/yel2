@@ -1,0 +1,11 @@
+// ---
+// description: #column is the column it is written at
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let here = #column;
+    expect.equal(here, 16);
+    expect.equal(    #column, 22);
+}

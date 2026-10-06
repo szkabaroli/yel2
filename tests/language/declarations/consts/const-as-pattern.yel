@@ -1,0 +1,16 @@
+// ---
+// description: a match pattern compares with a const
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const LIMIT = 10;
+
+describe: func(n: s32) -> string {
+    match n { LIMIT => "limit", _ => "other", }
+}
+
+main: func() {
+    expect.equal(describe(10), "limit");
+    expect.equal(describe(3), "other");
+}

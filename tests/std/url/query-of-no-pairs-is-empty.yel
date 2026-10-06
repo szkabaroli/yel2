@@ -1,0 +1,11 @@
+// ---
+// description: query of no pairs is empty
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let nothing: list<tuple<string, string>> = [];
+    expect.equal(url.query(nothing), "");
+}

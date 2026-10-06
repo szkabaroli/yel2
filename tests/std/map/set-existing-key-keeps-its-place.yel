@@ -1,0 +1,14 @@
+// ---
+// description: set on a key that is there keeps its place in the order
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    m.set("b", 2);
+    m.set("a", 3);
+    expect.equal(m.keys(), ["a", "b",]);
+    expect.equal(m.values(), [3, 2,]);
+}

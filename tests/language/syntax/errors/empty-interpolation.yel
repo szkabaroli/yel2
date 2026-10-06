@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: unexpected '}'
+// features: [syntax,literals]
+// negative: compile
+// error: 8:18: unexpected '}'
+// ---
+main: func() {
+    let text = "{}";
+}

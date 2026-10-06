@@ -1,0 +1,16 @@
+// ---
+// description: bool and char keys work
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let flags: map<bool, string> = map.new();
+    flags.set(true, "yes");
+    flags.set(false, "no");
+    expect.equal(flags[true], "yes");
+    let letters: map<char, s32> = map.new();
+    letters.set('a', 1);
+    letters.set('é', 2);
+    expect.equal(letters['é'], 2);
+}

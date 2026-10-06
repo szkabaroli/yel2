@@ -1,0 +1,9 @@
+// ---
+// description: assert stops the program with the place and the condition as written
+// features: [core]
+// exit: 1
+// ---
+main: func() {
+    let total = 3;
+    assert(total * 2 == 7);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: an unsigned integer with its high bit set is larger than one without
+// features: [types, integers, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let high: u32 = 4294967295;
+    let low: u32 = 1;
+    expect.holds(high > low);
+    expect.holds(low < high);
+    let wide: u64 = 18446744073709551615;
+    expect.holds(wide > 1);
+    let narrow: u8 = 255;
+    expect.holds(narrow > 1);
+}

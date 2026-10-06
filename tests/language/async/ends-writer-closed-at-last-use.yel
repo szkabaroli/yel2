@@ -1,0 +1,17 @@
+// ---
+// description: a writer only this func has is closed where it is last used: its reader sees the end
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+total: async func(items: stream<s32>) -> s32 {
+    let sum = 0;
+    wait for x in items { sum += x; }
+    sum
+}
+
+main: async func() {
+    let (items, out) = stream-pair(8);
+    for x in 0..4 { wait out.write(x * 10); }
+    expect.equal(wait total(items), 60);
+}

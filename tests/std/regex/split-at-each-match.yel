@@ -1,0 +1,9 @@
+// ---
+// description: split cuts the text at each match
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/\s*,\s*/.split("a , b,c"), ["a", "b", "c",]);
+}

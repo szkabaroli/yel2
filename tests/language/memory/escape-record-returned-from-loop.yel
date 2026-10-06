@@ -1,0 +1,27 @@
+// ---
+// description: a record made in a loop and returned from the func escapes it
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Vec { x: s32, y: s32, }
+
+find: func(limit: s32) -> Vec {
+    let found: Vec = { x: -1, y: -1, };
+    for i in 0..limit {
+        let candidate: Vec = { x: i, y: i * 2, };
+        if candidate.y > 10 {
+            found = candidate;
+            break;
+        }
+    }
+    found
+}
+
+main: func() {
+    let result = find(100);
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    expect.equal(result.x, 6);
+    expect.equal(result.y, 12);
+}

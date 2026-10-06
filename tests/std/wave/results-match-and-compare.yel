@@ -1,0 +1,18 @@
+// ---
+// description: results can be matched on, and compared
+// features: [wave]
+// ---
+check: func(n: s32) -> result<s32, string> {
+    if n < 0 { err("negative: {n}") } else { ok(n * 2) }
+}
+
+describe: func(r: result<s32, string>) -> string {
+    match r {
+        ok(v) => "doubled {v}",
+        err(e) => "failed: {e}",
+    }
+}
+
+main: func() {
+    print("{describe(check(21))}; {describe(check(-2))}; {check(1) == ok(2)}\n");
+}

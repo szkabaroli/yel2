@@ -1,0 +1,12 @@
+// ---
+// description: let destructures a tuple holding a record
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+record Point { x: s32, y: s32, }
+main: func() {
+    let pair: tuple<Point, string> = ({ x: 1, y: 2, }, "p");
+    let ({ x, y }, name) = pair;
+    expect.equal(x + y, 3);
+    expect.equal(name, "p");
+}

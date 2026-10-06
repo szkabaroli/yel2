@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /a**/ repeats a repeat
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /a**/: nothing to repeat at 2
+// ---
+main: func() {
+    let found = /a**/;
+}

@@ -1,0 +1,15 @@
+// ---
+// description: a generator makes a hundred thousand values one at a time
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+counting: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield x; }
+}
+
+main: func() {
+    let total: s64 = 0;
+    for value in counting(100000) { total += value as s64; }
+    expect.equal(total, 4999950000);
+}

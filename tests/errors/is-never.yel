@@ -1,6 +1,0 @@
-// error: 5:8: a "get" | "post" is never a "put": the test is always false
-type method = "get" | "post";
-main: func() {
-    let m: method = "get";
-    if m is "put" {}
-}

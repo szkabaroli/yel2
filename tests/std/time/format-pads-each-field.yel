@@ -1,0 +1,11 @@
+// ---
+// description: format pads month, day, hour, minute and second to two digits
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when: time.date-time = { year: 7, month: 2, day: 3, hour: 4, minute: 5, second: 6, nanosecond: 0, offset: 0, };
+    expect.equal(time.format(when), "0007-02-03T04:05:06Z");
+}

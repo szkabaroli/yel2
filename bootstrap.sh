@@ -17,7 +17,7 @@
 #                                  every one)
 #   ./bootstrap.sh --update-seed   --full, then, every test passed, yelc3.c the new seed
 #   ./bootstrap.sh [--full] <step>...   build.yel's steps instead (build/yelc0 build --help lists
-#                                  them: test-errors, test-programs, ...)
+#                                  them: test-language, test-run, test-packages, ...)
 #
 # A new language feature lands in two steps, because the seed only compiles what it knew: first
 # teach yelc the feature without using it in compiler/, and update the seed; then use it.

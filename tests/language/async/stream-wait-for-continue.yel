@@ -1,0 +1,17 @@
+// ---
+// description: continue in a wait for over a stream skips an item
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(8);
+    for x in 0..6 { wait out.write(x); }
+    out.close();
+    let odd: list<s32> = [];
+    wait for x in items {
+        if x % 2 == 0 { continue; }
+        odd.push(x);
+    }
+    expect.equal(odd, [1, 3, 5,]);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: an anonymous record in a tuple
+// features: [records, tuples]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let pair = ({ x: 1, y: 2, }, true);
+    expect.equal(pair.0.y, 2);
+    expect.holds(pair.1);
+}

@@ -1,0 +1,21 @@
+// ---
+// description: a let arm takes what the arms before it left
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post" | "put" | "delete";
+type write = "post" | "put";
+writes: func(m: write) -> string { "write {m}" }
+kind: func(m: method) -> string {
+    match m {
+        "get" => "read",
+        "delete" => "remove",
+        let rest => writes(rest),
+    }
+}
+main: func() {
+    expect.equal(kind("get"), "read");
+    expect.equal(kind("delete"), "remove");
+    expect.equal(kind("post"), "write post");
+    expect.equal(kind("put"), "write put");
+}

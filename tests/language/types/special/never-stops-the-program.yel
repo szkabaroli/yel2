@@ -1,0 +1,16 @@
+// ---
+// description: a call of never stops the program and nothing after it runs
+// features: [types, never]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+stop: func(reason: string) -> never {
+    print("stopping: {reason}\n");
+    panic(reason)
+}
+
+main: func() {
+    stop("odd");
+    print("not printed\n");
+}

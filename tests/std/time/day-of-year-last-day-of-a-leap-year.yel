@@ -1,0 +1,10 @@
+// ---
+// description: day-of-year of 31 December is 366 in a leap year
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.day-of-year(expect.ok(time.parse-date-time("2024-12-31"))), 366);
+}

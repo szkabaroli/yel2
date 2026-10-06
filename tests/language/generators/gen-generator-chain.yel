@@ -1,0 +1,25 @@
+// ---
+// description: a generator reading another through a pipeline of three
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+source: func(limit: s32) -> seq<s32> {
+    for x in 1..=limit { yield x; }
+}
+
+doubled: func(values: seq<s32>) -> seq<s32> {
+    for value in values { yield value * 2; }
+}
+
+large: func(values: seq<s32>) -> seq<s32> {
+    for value in values {
+        if value > 4 { yield value; }
+    }
+}
+
+main: func() {
+    let seen: list<s32> = [];
+    for value in large(doubled(source(5))) { seen.push(value); }
+    expect.equal(seen, [6, 8, 10,]);
+}

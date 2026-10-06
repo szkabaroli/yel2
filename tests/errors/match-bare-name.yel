@@ -1,7 +1,0 @@
-// error: 5:9: n is not a case of an integer or a constant: bind it with let n
-main: func() -> s32 {
-    match 3 {
-        0 => 0,
-        n => n,
-    }
-}

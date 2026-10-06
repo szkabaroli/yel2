@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: resource Counter has no field count
+// features: [records, resources]
+// negative: compile
+// error: 10:5: resource Counter has no field count
+// ---
+resource Counter { value: s32, }
+main: func() {
+    let c: Counter = { value: 1, };
+    c.count = 2;
+}

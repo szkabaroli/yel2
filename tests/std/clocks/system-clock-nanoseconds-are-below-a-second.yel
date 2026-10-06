@@ -1,0 +1,11 @@
+// ---
+// description: the system clock's nanoseconds are below a second
+// features: [clocks]
+// ---
+from "std:testing" include expect;
+from "std:clocks" include system-clock, monotonic-clock;
+
+main: func() {
+    let now = system-clock.now();
+    expect.holds(now.nanoseconds < 1000000000);
+}

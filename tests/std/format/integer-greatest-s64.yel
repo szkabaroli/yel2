@@ -1,0 +1,9 @@
+// ---
+// description: an interpolated s64 greatest
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{s64.MAX}", "9223372036854775807");
+}

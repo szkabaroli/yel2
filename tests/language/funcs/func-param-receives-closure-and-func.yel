@@ -1,0 +1,15 @@
+// ---
+// description: one func parameter takes a closure then a named func
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+run: func(f: func(s32) -> s32, x: s32) -> s32 { f(x) }
+
+inc: func(x: s32) -> s32 { x + 1 }
+
+main: func() {
+    let offset = 100;
+    expect.equal(run({ x -> x + offset }, 1), 101);
+    expect.equal(run(inc, 1), 2);
+}

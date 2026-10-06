@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: a readonly list's rows filter gives back stay readonly
+// features: [readonly]
+// negative: compile
+// error: 11:5: argument 1 of push is readonly, and push writes it
+// help: give it a value that is not readonly (a copy), or make push only read it
+// ---
+main: func() {
+    let grid: list<list<s32>> & readonly = [[1,], [2,],];
+    let full = grid.filter({ row -> row.len() > 0 });
+    full[0].push(1);
+}

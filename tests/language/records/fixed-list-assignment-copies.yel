@@ -1,0 +1,13 @@
+// ---
+// description: a fixed-length list is copied on assignment
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let a: list<s32, 3> = [1, 2, 3];
+    let b = a;
+    b[0] = 100;
+    expect.equal(a[0], 1);
+    expect.equal(b[0], 100);
+}

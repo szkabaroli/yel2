@@ -1,0 +1,23 @@
+// ---
+// description: the loser's future can be waited for after the race
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+quick: async func() -> s32 {
+    wait yield-turn();
+    1
+}
+
+slow: async func() -> string {
+    for turn in 0..5 { wait yield-turn(); }
+    "slow"
+}
+
+main: async func() {
+    let first = start quick();
+    let second = start slow();
+    let winner = wait first | second;
+    expect.equal(wait second, "slow");
+    expect.equal(wait first, 1);
+}

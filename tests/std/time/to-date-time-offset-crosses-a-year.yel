@@ -1,0 +1,12 @@
+// ---
+// description: to-date-time with an offset can give the next year
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at = expect.ok(time.parse("2025-12-31T23:30:00Z"));
+    let when = time.to-date-time(at, 60);
+    expect.equal((when.year, when.month, when.day, when.hour, when.minute), (2026, 1, 1, 0, 30));
+}

@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: unknown format spec '>8q': [[fill]align][0][width][.precision][? x X b o]
+// features: [text]
+// negative: compile
+// error: 9:18: unknown format spec '>8q': [[fill]align][0][width][.precision][? x X b o]
+// ---
+main: func() {
+    let name = "yel";
+    print("{name:>8q}");
+}

@@ -1,0 +1,17 @@
+// ---
+// description: a record pattern in a record pattern
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+record Point { x: s32, y: s32, }
+record Line { from: Point, to: Point, }
+describe: func(line: Line) -> string {
+    match line {
+        { from: { x: 0, y: 0 }, to: let to } => "from origin to {to.x}",
+        _ => "elsewhere",
+    }
+}
+main: func() {
+    expect.equal(describe({ from: { x: 0, y: 0, }, to: { x: 5, y: 5, }, }), "from origin to 5");
+    expect.equal(describe({ from: { x: 1, y: 0, }, to: { x: 5, y: 5, }, }), "elsewhere");
+}

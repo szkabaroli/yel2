@@ -1,0 +1,36 @@
+// ---
+// description: reactive.stop lets one effect go and leaves the others
+// features: [observable, reactive]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let profile = fresh();
+    let kept = 0;
+    let stopped = 0;
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let first = reactive.effect({ -> kept += 1; let _ = profile.id; { -> } });
+        let second = reactive.effect({ -> stopped += 1; let _ = profile.id; { -> } });
+        reactive.stop(second);
+    });
+    profile.id = 2;
+    reactive.flush();
+    expect.equal(kept, 2);
+    expect.equal(stopped, 1);
+    reactive.dispose(owner);
+}

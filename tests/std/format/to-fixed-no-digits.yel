@@ -1,0 +1,10 @@
+// ---
+// description: to-fixed with 0 digits writes no point
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-fixed(2.7, 0), "3");
+    expect.equal(format.to-fixed(12.0, 0), "12");
+}

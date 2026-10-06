@@ -1,9 +1,0 @@
-// error: 6:18: argument 1 of same is readonly, and same gives it back as a value that may be written
-same: func<T>(xs: list<T>) -> list<T> { xs }
-
-main: func() {
-    let frozen: list<s32> & readonly = [1, 2,];
-    let m = same(frozen);
-    m.push(9);
-    print("after {frozen}\n");
-}

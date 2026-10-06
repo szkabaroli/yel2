@@ -1,0 +1,18 @@
+// ---
+// description: the bytes of many calls have both 0 and 1 in the top bit
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include random;
+
+main: func() {
+    let high = false;
+    let low = false;
+    for round in 0..20 {
+        for byte in random.get-random-bytes(16) {
+            if byte >= 128 { high = true; } else { low = true; }
+        }
+    }
+    expect.holds(high);
+    expect.holds(low);
+}

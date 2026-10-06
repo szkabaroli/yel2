@@ -1,0 +1,13 @@
+// ---
+// description: changing the list to-bytes gave leaves the buffer alone
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push("ab");
+    let bytes = b.to-bytes();
+    bytes[0] = 90;
+    expect.equal(b.to-string(), "ab");
+}

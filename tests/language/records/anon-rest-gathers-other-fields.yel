@@ -1,0 +1,16 @@
+// ---
+// description: ...rest gathers a record's other fields as an anonymous record
+// features: [records, patterns]
+// ---
+from "std:testing" include expect;
+
+resource Person { name: string, age: s32, city: string, }
+
+main: func() {
+    let ada: Person = { name: "ada", age: 36, city: "london", };
+    let { name, ...rest } = ada;
+    expect.equal(name, "ada");
+    expect.equal(rest.age, 36);
+    expect.equal(rest.city, "london");
+    expect.equal(rest, { city: "london", age: 36, });
+}

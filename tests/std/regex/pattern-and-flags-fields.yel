@@ -1,0 +1,11 @@
+// ---
+// description: a regex has its pattern and its flags as fields
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = /a+b/i;
+    expect.equal(found.pattern, "a+b");
+    expect.equal(found.flags, "i");
+}

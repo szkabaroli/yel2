@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: item 1 of a tuple: expected string, found an integer
+// features: [types, types]
+// negative: compile
+// error: 7:48: item 1 of a tuple: expected string, found an integer
+// ---
+main: func() { let a: tuple<s32, string> = (1, 2); }

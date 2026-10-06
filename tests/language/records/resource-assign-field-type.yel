@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: field value of Counter: expected s32, found bool
+// features: [records, resources]
+// negative: compile
+// error: 9:31: field value of Counter: expected s32, found bool
+// ---
+resource Counter { value: s32, }
+main: func() {
+    let c: Counter = { value: true, };
+}

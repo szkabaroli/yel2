@@ -1,0 +1,9 @@
+// ---
+// description: to-radix writes binary
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-radix(5, 2, false), "101");
+}

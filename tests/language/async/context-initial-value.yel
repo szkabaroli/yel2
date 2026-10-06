@@ -1,0 +1,11 @@
+// ---
+// description: a @(context) global outside any task is a global with its initial value
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let request: string = "none";
+
+main: async func() {
+    expect.equal(request, "none");
+}

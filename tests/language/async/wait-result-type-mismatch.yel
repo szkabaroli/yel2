@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the result of a wait has the async func's type
+// features: [async]
+// negative: compile
+// error: 9:24: the value of text: expected string, found s32
+// ---
+work: async func() -> s32 { 1 }
+main: async func() {
+    let text: string = wait work();
+}

@@ -1,0 +1,11 @@
+// ---
+// description: \u{..} past 0x7F is its UTF-8 bytes
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "\u{e9}";
+    expect.equal(text, "é");
+    expect.equal(text.len(), 2);
+}

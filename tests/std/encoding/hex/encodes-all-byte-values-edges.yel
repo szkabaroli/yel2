@@ -1,0 +1,10 @@
+// ---
+// description: hex.encode writes two digits for the least and greatest byte
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(hex.encode([0, 15, 16, 255,]), "000f10ff");
+}

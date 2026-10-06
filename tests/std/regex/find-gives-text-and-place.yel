@@ -1,0 +1,12 @@
+// ---
+// description: find gives the matched text and its byte place
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = expect.some(/b+/.find("aabbbcc"));
+    expect.equal(found.text, "bbb");
+    expect.equal(found.start, 2);
+    expect.equal(found.end, 5);
+}

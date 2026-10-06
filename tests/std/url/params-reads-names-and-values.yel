@@ -1,0 +1,10 @@
+// ---
+// description: params reads each name and value of a query
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("a=1&b=2"), [("a", "1"), ("b", "2"),]);
+}

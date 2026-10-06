@@ -1,0 +1,12 @@
+// ---
+// description: a func calls itself twice
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+fib: func(n: s32) -> s32 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+
+main: func() {
+    expect.equal(fib(1), 1);
+    expect.equal(fib(10), 55);
+}

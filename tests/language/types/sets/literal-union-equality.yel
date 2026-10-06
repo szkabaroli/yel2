@@ -1,0 +1,16 @@
+// ---
+// description: == between a literal union and a literal
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post";
+type safe = "get";
+
+main: func() {
+    let which: method = "post";
+    let narrow: safe = "get";
+    expect.holds(which == "post");
+    expect.holds(narrow == "get");
+    expect.holds(which != narrow);
+}

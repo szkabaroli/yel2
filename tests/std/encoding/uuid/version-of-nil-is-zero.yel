@@ -1,0 +1,10 @@
+// ---
+// description: the nil UUID has version 0
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(uuid.version(uuid.nil()), 0);
+}

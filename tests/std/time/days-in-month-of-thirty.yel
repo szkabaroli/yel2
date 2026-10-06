@@ -1,0 +1,10 @@
+// ---
+// description: April, June, September and November have 30 days
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    for month in [4, 6, 9, 11,] { expect.equal(time.days-in-month(2026, month), 30); }
+}

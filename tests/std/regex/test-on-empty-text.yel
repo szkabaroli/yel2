@@ -1,0 +1,11 @@
+// ---
+// description: test on an empty text matches only what can be empty
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!/a/.test(""));
+    expect.holds(/a*/.test(""));
+    expect.holds(/^$/.test(""));
+}

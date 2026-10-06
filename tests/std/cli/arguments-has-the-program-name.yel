@@ -1,0 +1,10 @@
+// ---
+// description: get-arguments has at least the program's own name
+// features: [cli]
+// ---
+from "std:testing" include expect;
+from "std:cli" include environment, exit;
+
+main: func() {
+    expect.holds(environment.get-arguments().len() >= 1);
+}

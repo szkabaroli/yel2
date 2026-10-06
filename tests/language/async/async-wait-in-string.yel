@@ -1,0 +1,15 @@
+// ---
+// description: wait inside a string interpolation
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+value: async func() -> s32 {
+    wait yield-turn();
+    7
+}
+
+main: async func() {
+    let text = "got {wait value()}";
+    expect.equal(text, "got 7");
+}

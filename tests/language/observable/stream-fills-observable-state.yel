@@ -1,0 +1,35 @@
+// ---
+// description: a task reading a stream writes each message into observable state
+// features: [observable, async, streams]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Inbox { latest: string, }
+
+produce: async func(out: writer<string>) {
+    for index in 1..=3 {
+        wait yield-turn();
+        wait out.write("message {index}");
+    }
+    out.close();
+}
+
+pump: async func(inbox: Inbox, messages: stream<string>) {
+    wait for message in messages {
+        inbox.latest = message;
+        reactive.flush();
+    }
+}
+
+main: async func() {
+    let inbox: Inbox = { latest: "none", };
+    let seen: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { -> let _ = reactive.effect({ -> seen.push(inbox.latest); { -> } }); });
+    let (messages, out) = stream-pair(4);
+    let producer = start produce(out);
+    wait pump(inbox, messages);
+    wait producer;
+    expect.equal(seen, ["none", "message 1", "message 2", "message 3",]);
+    reactive.dispose(owner);
+}

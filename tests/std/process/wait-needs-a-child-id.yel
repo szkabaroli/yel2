@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: process.wait takes a child's number, not a string
+// features: [process]
+// negative: compile
+// error: 10:30: argument 1 of std:process/process.wait: expected s64, found string
+// ---
+from "std:process" include process;
+
+main: func() {
+    let ended = process.wait("x");
+}

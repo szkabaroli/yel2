@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: the match has no arm for "post": add one, or a _ arm
+// features: [types, sets]
+// negative: compile
+// error: 9:5: the match has no arm for "post": add one, or a _ arm
+// ---
+type method = "get" | "post";
+describe: func(which: method) -> string {
+    match which {
+        "get" => "read",
+    }
+}
+main: func() {}

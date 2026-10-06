@@ -1,0 +1,13 @@
+// ---
+// description: a standard library module named as a qualifier
+// features: [funcs, methods]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let values: set<s32> = set.new();
+    set.add(values, 1);
+    values.add(2);
+    expect.holds(values.has(1));
+    expect.holds(values.has(2));
+}

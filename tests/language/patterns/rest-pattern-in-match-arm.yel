@@ -1,0 +1,16 @@
+// ---
+// description: ...rest in a match arm
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+resource Point { x: s32, y: s32, z: s32, }
+describe: func(p: Point) -> s32 {
+    match p {
+        let { x: 0, ...rest } => rest.y + rest.z,
+        let { x, ...rest } => x,
+    }
+}
+main: func() {
+    expect.equal(describe({ x: 0, y: 2, z: 3, }), 5);
+    expect.equal(describe({ x: 7, y: 2, z: 3, }), 7);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a new buffer has no bytes
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(0);
+    expect.equal(b.len(), 0);
+    expect.equal(b.to-string(), "");
+    expect.equal(b.to-bytes().len(), 0);
+}

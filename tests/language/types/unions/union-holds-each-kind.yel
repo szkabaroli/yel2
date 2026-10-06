@@ -1,0 +1,14 @@
+// ---
+// description: a union of kinds holds a value of any of its kinds
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let number: id = 3;
+    let text: id = "three";
+    expect.equal("{number}", "3");
+    expect.equal("{text}", "three");
+}

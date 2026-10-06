@@ -1,0 +1,27 @@
+// ---
+// description: a race of three futures gives the first done
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+delayed: async func(turns: s32, name: string) -> string {
+    for turn in 0..turns { wait yield-turn(); }
+    name
+}
+
+quick: async func() -> s32 {
+    wait yield-turn();
+    7
+}
+
+main: async func() {
+    let first = start delayed(8, "a");
+    let second = start quick();
+    let third = start delayed(9, "c");
+    match wait first | second | third {
+        let number: s32 => expect.equal(number, 7),
+        let text: string => expect.fail("a slow one won: {text}"),
+    }
+    wait first;
+    wait third;
+}

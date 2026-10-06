@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned-radix refuses a hex number past u64
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned-radix("10000000000000000", 16));
+}

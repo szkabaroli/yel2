@@ -1,0 +1,24 @@
+// ---
+// description: a yield in the arms of a match
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+variant Token { number(s32), word(string), space, }
+
+values: func(limit: s32) -> seq<string> {
+    for index in 0..limit {
+        let token = if index % 3 == 0 { Token.number(index) } else if index % 3 == 1 { Token.word("w") } else { Token.space };
+        match token {
+            number(n) => { yield "n{n}"; }
+            word(text) => { yield "{text}{index}"; }
+            space => {}
+        }
+    }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for item in values(5) { seen.push(item); }
+    expect.equal(seen, ["n0", "w1", "n3", "w4",]);
+}

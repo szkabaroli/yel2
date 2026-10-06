@@ -1,0 +1,21 @@
+// ---
+// description: a for that breaks leaves the rest of a generator unmade
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+let made: s32 = 0;
+
+counting: func() -> seq<s32> {
+    for x in 0..100 {
+        made += 1;
+        yield x;
+    }
+}
+
+main: func() {
+    for value in counting() {
+        if value == 3 { break; }
+    }
+    expect.equal(made, 4);
+}

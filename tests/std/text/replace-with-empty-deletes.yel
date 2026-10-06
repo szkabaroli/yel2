@@ -1,0 +1,9 @@
+// ---
+// description: replace with empty text removes the matches
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a-b-c".replace("-", ""), "abc");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: params of an empty query is empty
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("").len(), 0);
+}

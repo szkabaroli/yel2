@@ -1,0 +1,16 @@
+// ---
+// description: a map with every key removed is empty and can be used again
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    for key in 0..10 { m.set(key, key); }
+    for key in 0..10 { m.remove(key); }
+    expect.equal(m.len(), 0);
+    expect.equal(m.keys().len(), 0);
+    m.set(5, 50);
+    expect.equal(m.keys(), [5,]);
+    expect.equal(m[5], 50);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: contains is false for text that is not inside
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!"hello".contains("elk"));
+}

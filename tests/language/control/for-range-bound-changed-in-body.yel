@@ -1,0 +1,14 @@
+// ---
+// description: changing the variable a bound was read from does not change the turns
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let end = 3;
+    let turns = 0;
+    for i in 0..end {
+        end = 10;
+        turns += 1;
+    }
+    expect.equal(turns, 3);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: a list of strings shows its items quoted
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{["a", "b",]}", "[\"a\", \"b\"]");
+}

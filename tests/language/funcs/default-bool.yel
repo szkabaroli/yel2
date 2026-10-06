@@ -1,0 +1,12 @@
+// ---
+// description: a bool's default
+// features: [funcs, defaults]
+// ---
+from "std:testing" include expect;
+
+label: func(text: string, loud: bool = false) -> string { if loud { text + "!" } else { text } }
+
+main: func() {
+    expect.equal(label("hi"), "hi");
+    expect.equal(label("hi", true), "hi!");
+}

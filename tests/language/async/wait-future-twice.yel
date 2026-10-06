@@ -1,0 +1,16 @@
+// ---
+// description: a future already done is waited for again with the same result
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+value: async func() -> s32 {
+    wait yield-turn();
+    9
+}
+
+main: async func() {
+    let future = start value();
+    expect.equal(wait future, 9);
+    expect.equal(wait future, 9);
+}

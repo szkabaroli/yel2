@@ -1,0 +1,9 @@
+// ---
+// description: trim takes tabs, line feeds and carriage returns
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("\t\r\n hi \n\r\t".trim(), "hi");
+}

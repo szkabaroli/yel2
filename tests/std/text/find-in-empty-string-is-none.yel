@@ -1,0 +1,9 @@
+// ---
+// description: find of a non-empty text in an empty string is none
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none("".find("a"));
+}

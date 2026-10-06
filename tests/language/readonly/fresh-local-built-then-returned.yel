@@ -1,0 +1,14 @@
+// ---
+// description: a list built a push at a time and given back readonly
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+squares: func(n: s32) -> list<s32> & readonly {
+    let out: list<s32> = [];
+    for i in 0..n { out.push(i * i); }
+    out
+}
+main: func() {
+    expect.equal(squares(5), [0, 1, 4, 9, 16,]);
+    expect.equal(squares(0), []);
+}

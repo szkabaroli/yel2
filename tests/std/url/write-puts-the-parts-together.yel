@@ -1,0 +1,20 @@
+// ---
+// description: write gives scheme, user, host, port, path, query and fragment in order
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let made: url.parts = {
+        scheme: "https",
+        username: "ada",
+        password: "pw",
+        host: some("example.com"),
+        port: some(8080),
+        path: "/a",
+        query: some("q=1"),
+        fragment: some("top"),
+    };
+    expect.equal(url.write(made), "https://ada:pw@example.com:8080/a?q=1#top");
+}

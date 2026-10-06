@@ -1,0 +1,14 @@
+// ---
+// description: a map with string keys keeps its entries while garbage is made
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let table: map<string, s32> = map.new();
+    for i in 0..200 { table.set("key {i}", i); }
+    for i in 0..30000 { let junk = "junk {i}"; }
+    let total = 0;
+    for i in 0..200 { total += table.get-or("key {i}", 0); }
+    expect.equal(total, 19900);
+}

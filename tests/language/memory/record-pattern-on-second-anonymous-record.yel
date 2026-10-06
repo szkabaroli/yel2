@@ -1,0 +1,21 @@
+// ---
+// description: a record pattern matches a union's second anonymous record
+// features: [memory, patterns]
+// ---
+from "std:testing" include expect;
+
+type shape = { a: s32 } | { b: string };
+
+which: func(x: shape) -> string {
+    match x {
+        { a: let a } => "a {a}",
+        { b: let b } => "b {b}",
+    }
+}
+
+main: func() {
+    let first: shape = { b: "hi", };
+    let second: shape = { a: 2, };
+    expect.equal(which(first), "b hi");
+    expect.equal(which(second), "a 2");
+}

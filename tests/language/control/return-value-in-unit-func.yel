@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: f's result: expected (), found an integer
+// features: [control]
+// negative: compile
+// error: 8:12: f's result: expected (), found an integer
+// ---
+f: func() {
+    return 1;
+}
+main: func() {}

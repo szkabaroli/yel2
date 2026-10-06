@@ -1,0 +1,13 @@
+// ---
+// description: a buffer gathers many parts into one string
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(0);
+    for index in 0..50 { b.push("{index},"); }
+    let text = b.to-string();
+    expect.equal(text.len(), 10 * 2 + 40 * 3);
+    expect.equal(text.slice(0, 8), "0,1,2,3,");
+}

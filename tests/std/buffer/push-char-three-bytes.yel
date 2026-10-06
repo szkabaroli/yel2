@@ -1,0 +1,11 @@
+// ---
+// description: push-char writes the euro sign as three bytes
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push-char('€');
+    expect.equal(b.to-bytes(), [226, 130, 172,]);
+}

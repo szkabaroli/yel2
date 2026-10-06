@@ -1,0 +1,10 @@
+// ---
+// description: base32.encode writes the values 26 to 31 as 2 to 7
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    expect.equal(base32.encode([0xFF, 0xFF, 0xFF, 0xFF, 0xFF,]), "77777777");
+}

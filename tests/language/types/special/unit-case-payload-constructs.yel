@@ -1,0 +1,14 @@
+// ---
+// description: Shape.dot(()) is Shape.dot
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+variant Shape { dot, circle(s32), }
+
+main: func() {
+    let explicit = Shape.dot(());
+    let bare: Shape = dot(());
+    expect.holds(explicit == Shape.dot);
+    expect.holds(bare == explicit);
+}

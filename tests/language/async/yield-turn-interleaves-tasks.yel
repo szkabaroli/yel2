@@ -1,0 +1,22 @@
+// ---
+// description: two tasks that yield a turn each step interleave in start order
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+run-job: async func(name: string, steps: s32) {
+    for step in 0..steps {
+        log.push("{name}{step}");
+        wait yield-turn();
+    }
+}
+
+main: async func() {
+    let first = start run-job("a", 3);
+    let second = start run-job("b", 3);
+    wait first;
+    wait second;
+    expect.equal(log, ["a0", "b0", "a1", "b1", "a2", "b2",]);
+}

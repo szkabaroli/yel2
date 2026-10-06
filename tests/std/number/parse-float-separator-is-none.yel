@@ -1,0 +1,9 @@
+// ---
+// description: parse-float refuses a digit separator
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("1_000.5"));
+}

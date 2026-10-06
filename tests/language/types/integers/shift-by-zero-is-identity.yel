@@ -1,0 +1,11 @@
+// ---
+// description: shifting by zero changes nothing
+// features: [types, integers, shifts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s16 = -1234;
+    expect.equal(value << 0, value);
+    expect.equal(value >> 0, value);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: split cuts at each separator
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("the quick brown fox".split(" "), ["the", "quick", "brown", "fox",]);
+}

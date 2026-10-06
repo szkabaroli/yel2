@@ -1,0 +1,19 @@
+// ---
+// description: a seq is a value: it goes to a func that reads it
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+counting: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield x; }
+}
+
+total: func(values: seq<s32>) -> s32 {
+    let sum = 0;
+    for value in values { sum += value; }
+    sum
+}
+
+main: func() {
+    expect.equal(total(counting(5)), 10);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a tuple global starts as the zero of each item
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let pair: tuple<s32, list<s64>>;
+
+main: func() {
+    expect.equal(pair.0, 0);
+    expect.equal(pair.1.len(), 0);
+}

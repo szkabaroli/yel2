@@ -1,0 +1,13 @@
+// ---
+// description: #caller-expression and #caller-location together
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+traced: func(value: s32, written: string = #caller-expression(value), at: source-location = #caller-location) -> string {
+    "{written} = {value} at line {at.line}, in {at.func}"
+}
+
+main: func() {
+    expect.equal(traced(2 + 3), "2 + 3 = 5 at line 12, in main");
+}

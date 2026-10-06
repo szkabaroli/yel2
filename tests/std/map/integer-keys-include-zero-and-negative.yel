@@ -1,0 +1,15 @@
+// ---
+// description: zero and negative numbers can be keys
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s64, string> = map.new();
+    m.set(0, "zero");
+    m.set(-1, "minus one");
+    m.set(s64.MIN, "least");
+    expect.equal(m[0], "zero");
+    expect.equal(m[-1], "minus one");
+    expect.equal(m[s64.MIN], "least");
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a seq kept in a local is read later
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+counting: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield x; }
+}
+
+main: func() {
+    let lazy = counting(3);
+    let seen: list<s32> = [];
+    for value in lazy { seen.push(value); }
+    expect.equal(seen, [0, 1, 2,]);
+}

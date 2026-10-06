@@ -1,0 +1,10 @@
+// ---
+// description: byte-at gives the byte at a position
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".byte-at(0), 104);
+    expect.equal("hello".byte-at(4), 111);
+}

@@ -1,0 +1,22 @@
+// ---
+// description: a list of a literal union
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type level = 1 | 2 | 3;
+
+label: func(which: level) -> string {
+    match which {
+        1 => "low",
+        2 => "mid",
+        3 => "high",
+    }
+}
+
+main: func() {
+    let levels: list<level> = [1, 3, 2,];
+    let seen = "";
+    for which in levels { seen = seen + label(which) + " "; }
+    expect.equal(seen, "low high mid ");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a range pattern's start: expected bool, found an integer
+// features: [patterns]
+// negative: compile
+// error: 8:26: a range pattern's start: expected bool, found an integer
+// ---
+main: func() {
+    let r = match true { 0..=1 => 1, _ => 0, };
+}

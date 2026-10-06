@@ -1,0 +1,11 @@
+// ---
+// description: get-random-bytes does not give only zeros
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include random;
+
+main: func() {
+    let bytes = random.get-random-bytes(64);
+    expect.holds(bytes.any({ byte -> byte != 0 }));
+}

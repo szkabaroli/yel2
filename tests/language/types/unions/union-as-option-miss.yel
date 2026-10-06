@@ -1,0 +1,13 @@
+// ---
+// description: as? gives none where the union holds another kind
+// features: [types, unions, as]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let who: id = 3;
+    let text: option<string> = who as? string;
+    expect.none(text);
+}

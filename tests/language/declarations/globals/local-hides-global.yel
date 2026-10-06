@@ -1,0 +1,12 @@
+// ---
+// description: a local of the same name hides the global
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let count: s64 = 5;
+
+main: func() {
+    let count = 100;
+    expect.equal(count, 100);
+}

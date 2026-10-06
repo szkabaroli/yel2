@@ -1,0 +1,9 @@
+// ---
+// description: chars joins the bytes of a multibyte character
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("héllo".chars(), ['h', 'é', 'l', 'l', 'o',]);
+}

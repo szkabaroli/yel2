@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: argument 1 of reads: expected "get", found "get" | "post"
+// features: [patterns]
+// negative: compile
+// error: 11:33: argument 1 of reads: expected "get", found "get" | "post"
+// ---
+type method = "get" | "post";
+reads: func(m: "get") -> string { "read" }
+main: func() {
+    let m: method = "get";
+    if m is "get" { print(reads(m)); }
+    m = "post";
+}

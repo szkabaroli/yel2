@@ -1,5 +1,0 @@
-// error: 4:5: .x of a { x: an integer, y: an integer }: an anonymous record is a value, its fields not assigned (make another)
-main: func() {
-    let a = { x: 1, y: 2, };
-    a.x = 3;
-}

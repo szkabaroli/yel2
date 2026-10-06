@@ -1,0 +1,13 @@
+// ---
+// description: a generator given a list literal yields its items, under GC stress too
+// features: [generators, memory]
+// ---
+from "std:testing" include expect;
+sums: func(values: list<s32>) -> seq<s32> {
+    for value in values { yield value; }
+}
+main: func() {
+    let seen: list<s32> = [];
+    for value in sums([1, 2, 3,]) { seen.push(value); }
+    expect.equal(seen, [1, 2, 3,]);
+}

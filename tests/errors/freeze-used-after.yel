@@ -1,7 +1,0 @@
-// error: 5:43: readonly is wanted here: words is used again after (once readonly, use the readonly name)
-main: func() {
-    let words: list<string> = [];
-    words.push("a");
-    let frozen: list<string> & readonly = words;
-    words.push("b");
-}

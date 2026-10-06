@@ -1,0 +1,63 @@
+// streams and futures given across WIT (WASI 0.3): tests/components/stream-caller's imports, plugged (wac)
+// into these exports
+
+package test:streams@0.1.0;
+
+// a stream written, n squares, then closed
+fill: async func(out: writer<s32>, n: s32) {
+    for i in 0..n { wait out.write(i * i); }
+    out.close();
+}
+
+triple: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x * 3
+}
+
+// a stream and a future in one value: they cross inside it
+record Feed { values: stream<s32>, count: future<s32>, }
+
+module api {
+    // a stream given the caller: a task of this call writes it after its result is given
+    squares: async func(n: s32) -> stream<s32> {
+        let (s, w) = stream-pair(2);
+        start fill(w, n);
+        s
+    }
+
+    // a stream the caller writes, read to its end
+    total: async func(xs: stream<s32>) -> s32 {
+        let t = 0;
+        wait for x in xs { t += x; }
+        t
+    }
+
+    // a future given the caller, and one it gives
+    later: async func(x: s32) -> future<s32> { start triple(x) }
+
+    plus: async func(f: future<s32>, y: s32) -> s32 { (wait f) + y }
+
+    // nested: in a record, in an option, in a list
+    both: async func(n: s32) -> Feed {
+        let (s, w) = stream-pair(2);
+        start fill(w, n);
+        { values: s, count: start triple(n), }
+    }
+
+    maybe: async func(n: s32) -> option<stream<s32>> {
+        if n == 0 { return none; }
+        let (s, w) = stream-pair(2);
+        start fill(w, n);
+        some(s)
+    }
+
+    totals: async func(xs: list<stream<s32>>) -> list<s32> {
+        let out: list<s32> = [];
+        for s in xs {
+            let t = 0;
+            wait for x in s { t += x; }
+            out.push(t);
+        }
+        out
+    }
+}

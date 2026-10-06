@@ -1,0 +1,15 @@
+// ---
+// description: a stream carries strings
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (words, out) = stream-pair(4);
+    wait out.write("one");
+    wait out.write("two");
+    out.close();
+    let joined = "";
+    wait for word in words { joined = "{joined}{word};"; }
+    expect.equal(joined, "one;two;");
+}

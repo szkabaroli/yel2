@@ -1,0 +1,12 @@
+// ---
+// description: arithmetic on the base wraps as the base does
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type small = distinct u8;
+
+main: func() {
+    let top = 255 as small;
+    expect.equal(((top as u8) + 1) as small as u8, 0);
+}

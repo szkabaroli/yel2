@@ -1,0 +1,17 @@
+// ---
+// description: a race with a timer is a timeout: the timer wins over slow work
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+slow: async func() -> string {
+    wait sleep(300);
+    "late"
+}
+
+main: async func() {
+    match wait slow() | sleep(10) {
+        let text: string => expect.fail("the slow one won"),
+        () => {}
+    }
+}

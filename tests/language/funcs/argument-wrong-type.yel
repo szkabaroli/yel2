@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: argument 1 of f: expected s32, found string
+// features: [funcs]
+// negative: compile
+// error: 8:25: argument 1 of f: expected s32, found string
+// ---
+f: func(x: s32) -> s32 { x }
+main: func() -> s32 { f("a") }

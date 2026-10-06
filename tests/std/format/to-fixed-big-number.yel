@@ -1,0 +1,9 @@
+// ---
+// description: to-fixed writes a large number in full
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-fixed(1e15, 1), "1000000000000000.0");
+}

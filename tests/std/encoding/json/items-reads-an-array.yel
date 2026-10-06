@@ -1,0 +1,22 @@
+// ---
+// description: json.items gives the items of an array value
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let message = expect.ok(json.parse("\{\"id\": 7, \"params\": \{\"position\": \{\"line\": 3\}, \"items\": [10, \"x\"]\}, \"name\": \"hover\", \"ratio\": 1.5, \"on\": true\}"));
+    let items = expect.some(json.items(json.path(message, ["params", "items",])));
+    expect.equal(items.len(), 2);
+    expect.equal(json.integer(some(items[0])), some(10));
+    expect.equal(json.string-value(some(items[1])), some("x"));
+}

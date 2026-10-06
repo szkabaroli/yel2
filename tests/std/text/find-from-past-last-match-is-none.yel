@@ -1,0 +1,9 @@
+// ---
+// description: find-from past the last match gives none
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none("banana".find-from("an", 4));
+}

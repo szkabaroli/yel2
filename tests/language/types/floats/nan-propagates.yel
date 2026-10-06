@@ -1,0 +1,13 @@
+// ---
+// description: arithmetic with NaN gives NaN
+// features: [types, floats, nan]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = nan;
+    let sum = value + 1.0;
+    let product = 2.0 * value;
+    expect.holds(sum != sum);
+    expect.holds(product != product);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: origin has no port where it is the scheme's default
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("http://h:80/"));
+    expect.equal(url.origin(u), "http://h");
+}

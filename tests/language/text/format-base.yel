@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: x in a spec: expected an integer, found string
+// features: [text]
+// negative: compile
+// error: 9:11: x in a spec: expected an integer, found string
+// ---
+main: func() {
+    let name = "yel";
+    print("{name:x}");
+}

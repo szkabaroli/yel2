@@ -1,0 +1,16 @@
+// ---
+// description: a func value narrowed from a union of func types is called
+// features: [memory, types]
+// ---
+from "std:testing" include expect;
+
+type fi = func() -> s32;
+type fs = func() -> string;
+type either = fi | fs;
+
+seven: func() -> s32 { 7 }
+
+main: func() {
+    let f: either = seven;
+    if f is fi { expect.equal(f() + 1, 8); } else { expect.fail("not an fi"); }
+}

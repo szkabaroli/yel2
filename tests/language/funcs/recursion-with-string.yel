@@ -1,0 +1,14 @@
+// ---
+// description: a recursive func builds a string
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+repeat: func(word: string, times: s32) -> string {
+    if times == 0 { "" } else { word + repeat(word, times - 1) }
+}
+
+main: func() {
+    expect.equal(repeat("ab", 3), "ababab");
+    expect.equal(repeat("ab", 0), "");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: to-fixed keeps the sign
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-fixed(-1.25, 1), "-1.2");
+}

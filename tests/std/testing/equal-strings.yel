@@ -1,0 +1,9 @@
+// ---
+// description: expect.equal passes for equal strings
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a" + "b", "ab");
+}

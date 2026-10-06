@@ -1,0 +1,21 @@
+// ---
+// description: a union of literals and a kind, matched by literal and by type
+// features: [types, unions, match]
+// ---
+from "std:testing" include expect;
+
+type answer = "yes" | "no" | s32;
+
+answer-text: func(reply: answer) -> string {
+    match reply {
+        "yes" => "agreed",
+        "no" => "refused",
+        let n: s32 => "{n} votes",
+    }
+}
+
+main: func() {
+    expect.equal(answer-text("yes"), "agreed");
+    expect.equal(answer-text("no"), "refused");
+    expect.equal(answer-text(12), "12 votes");
+}

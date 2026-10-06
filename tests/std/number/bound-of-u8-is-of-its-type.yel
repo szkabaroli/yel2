@@ -1,0 +1,11 @@
+// ---
+// description: u8.MAX fits where a u8 is wanted
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: u8 = u8.MAX;
+    let bottom: u8 = u8.MIN;
+    expect.holds(bottom <= top);
+}

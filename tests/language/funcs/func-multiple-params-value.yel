@@ -1,0 +1,17 @@
+// ---
+// description: a func value takes several parameters
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+add: func(a: s32, b: s32) -> s32 { a + b }
+
+fold: func(items: list<s32>, f: func(s32, s32) -> s32, start: s32) -> s32 {
+    let acc = start;
+    for item in items { acc = f(acc, item); }
+    acc
+}
+
+main: func() {
+    expect.equal(fold([1, 2, 3, 4,], add, 0), 10);
+}

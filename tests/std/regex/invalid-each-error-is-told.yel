@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: each bad regex in a func is told, the parse going on past one
+// features: [regex]
+// negative: compile
+// error: 10:17: the regex /(ab/: a group not closed
+// error: 11:18: the regex /*x/: nothing to repeat at 0
+// error: 12:17: the regex /a{3,2}/: a count 3 past its most, 2
+// ---
+main: func() {
+    let first = /(ab/;
+    let second = /*x/;
+    let third = /a{3,2}/;
+}

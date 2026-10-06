@@ -1,0 +1,12 @@
+// ---
+// description: an option holding a tuple
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found: option<tuple<s32, string>> = some((1, "a"));
+    let (number, text) = expect.some(found);
+    expect.equal(number, 1);
+    expect.equal(text, "a");
+}

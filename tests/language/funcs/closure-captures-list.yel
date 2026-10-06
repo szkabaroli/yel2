@@ -1,0 +1,14 @@
+// ---
+// description: a closure pushes onto a captured list
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names: list<string> = [];
+    let add = { name: string -> names.push(name); };
+    add("a");
+    add("b");
+    expect.equal(names.len(), 2);
+    expect.equal(names[1], "b");
+}

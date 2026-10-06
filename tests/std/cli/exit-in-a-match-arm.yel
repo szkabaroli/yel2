@@ -1,0 +1,14 @@
+// ---
+// description: exit in a match arm stops the program where that arm is taken
+// features: [cli]
+// exit: 9
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    let word = match 2 {
+        1 => "one",
+        _ => exit.exit-with-code(9),
+    };
+    print("never {word}\n");
+}

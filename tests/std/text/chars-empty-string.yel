@@ -1,0 +1,9 @@
+// ---
+// description: chars of an empty string is empty
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("".chars().len(), 0);
+}

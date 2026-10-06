@@ -1,0 +1,10 @@
+// ---
+// description: uuid.parse refuses a dash where a digit is expected
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(expect.err(uuid.parse("550e840-0e29b-41d4-a716-446655440000")), "not a hex digit at byte 7");
+}

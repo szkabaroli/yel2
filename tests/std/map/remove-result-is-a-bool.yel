@@ -1,0 +1,12 @@
+// ---
+// description: remove gives a bool, true or false, not the value it took out
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 5);
+    expect.equal(m.remove("a"), true);
+    expect.equal(m.remove("a"), false);
+}

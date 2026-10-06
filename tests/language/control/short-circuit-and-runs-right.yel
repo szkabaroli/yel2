@@ -1,0 +1,12 @@
+// ---
+// description: && runs its right side when the left is true
+// features: [control]
+// ---
+from "std:testing" include expect;
+let calls: s32;
+touch: func(value: bool) -> bool { calls += 1; value }
+main: func() {
+    let result = touch(true) && touch(true);
+    expect.holds(result);
+    expect.equal(calls, 2);
+}

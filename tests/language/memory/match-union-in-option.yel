@@ -1,0 +1,23 @@
+// ---
+// description: a union inside an option is matched by member after the option
+// features: [memory, patterns]
+// ---
+from "std:testing" include expect;
+
+type v = s32 | string;
+
+member: func(x: option<v>) -> string {
+    match x {
+        some(x) => match x {
+            let n: s32 => "n {n}",
+            let s: string => "s {s}",
+        },
+        none => "none",
+    }
+}
+
+main: func() {
+    expect.equal(member(some(3)), "n 3");
+    expect.equal(member(some("q")), "s q");
+    expect.equal(member(none), "none");
+}

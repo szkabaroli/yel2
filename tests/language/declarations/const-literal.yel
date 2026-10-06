@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: a const's value is a literal: a number, a string, a char or a bool (or a directive: #embed(path), #file, #line)
+// features: [declarations]
+// negative: compile
+// error: 7:1: a const's value is a literal: a number, a string, a char or a bool (or a directive: #embed(path), #file, #line)
+// ---
+const TWICE = 1 + 1;
+main: func() -> s32 { TWICE }

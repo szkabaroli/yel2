@@ -1,0 +1,22 @@
+// ---
+// description: return in a generator ends it
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+until-five: func(limit: s32) -> seq<s32> {
+    for value in 0..limit {
+        if value == 5 { return; }
+        yield value;
+    }
+    yield 100;
+}
+
+main: func() {
+    let seen: list<s32> = [];
+    for value in until-five(9) { seen.push(value); }
+    expect.equal(seen, [0, 1, 2, 3, 4,]);
+    let all: list<s32> = [];
+    for value in until-five(3) { all.push(value); }
+    expect.equal(all, [0, 1, 2, 100,]);
+}

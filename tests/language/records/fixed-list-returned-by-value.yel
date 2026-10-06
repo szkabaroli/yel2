@@ -1,0 +1,19 @@
+// ---
+// description: a fixed-length list is returned by value
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+scaled: func(v: list<s32, 3>, k: s32) -> list<s32, 3> {
+    let out = v;
+    for i in 0..3 { out[i] = v[i] * k; }
+    out
+}
+
+main: func() {
+    let v: list<s32, 3> = [1, 2, 3];
+    let w = scaled(v, 10);
+    expect.equal(w[0], 10);
+    expect.equal(w[2], 30);
+    expect.equal(v[2], 3);
+}

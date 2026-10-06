@@ -1,7 +1,0 @@
-// error: 6:5: func access has the name of a type of module api
-// note: WIT gives an interface's types and funcs one set of names
-package test:clash;
-module api {
-    flags Access { read, write, }
-    access: func(a: Access) -> Access { a }
-}

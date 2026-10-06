@@ -1,0 +1,15 @@
+// ---
+// description: an integer literal takes the type its context wants
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+take: func(value: u8) -> u8 { value }
+
+main: func() {
+    let count: u32 = 5;
+    expect.holds(count == 5);
+    expect.equal(take(200), 200);
+    let wide: u64 = 18446744073709551615;
+    expect.equal(wide, u64.MAX);
+}

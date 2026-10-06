@@ -1,0 +1,12 @@
+// ---
+// description: to-date-time moves the clock ahead for a positive offset
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = time.to-date-time(time.from-unix-millis(1759660496789), 120);
+    expect.equal((when.year, when.month, when.day, when.hour, when.minute), (2025, 10, 5, 12, 34));
+    expect.equal(when.offset, 120);
+}

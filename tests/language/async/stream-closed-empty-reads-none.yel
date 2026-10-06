@@ -1,0 +1,11 @@
+// ---
+// description: a stream closed with nothing written reads none at once
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(2);
+    out.close();
+    expect.none(wait items.read());
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a match that starts a statement is the statement, and the value after it is the next
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+sign: func(n: s32) -> s32 {
+    let seen = 0;
+    match n { 0 => { seen = 1; }, _ => { seen = 2; }, }
+    -seen
+}
+
+main: func() {
+    expect.equal(sign(0), -1);
+    expect.equal(sign(7), -2);
+}

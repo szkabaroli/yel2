@@ -1,0 +1,10 @@
+// ---
+// description: from-utf8 makes a string of well-formed bytes
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([104, 105,]), ok("hi"));
+    expect.equal(from-utf8([195, 169,]), ok("é"));
+}

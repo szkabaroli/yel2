@@ -1,0 +1,11 @@
+// ---
+// description: a hash is never 0
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.not-equal(hash(""), 0);
+    expect.not-equal(hash("a"), 0);
+    expect.holds(hash("anything") % 2 == 1);
+}

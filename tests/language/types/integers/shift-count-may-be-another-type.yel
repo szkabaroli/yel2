@@ -1,0 +1,14 @@
+// ---
+// description: a shift's count may be of another integer type than the value
+// features: [types, integers, shifts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: u8 = 1;
+    let count: u32 = 4;
+    expect.equal(value << count, 16);
+    let wide: s64 = 256;
+    let small: u8 = 4;
+    expect.equal(wide >> small, 16);
+}

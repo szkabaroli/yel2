@@ -1,0 +1,16 @@
+// ---
+// description: an arm that returns has no value
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+double-or-bail: func(v: option<s32>) -> s32 {
+    let n = match v {
+        some(value) => value,
+        none => { return -1; }
+    };
+    n * 2
+}
+main: func() {
+    expect.equal(double-or-bail(some(4)), 8);
+    expect.equal(double-or-bail(none), -1);
+}

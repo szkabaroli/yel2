@@ -1,0 +1,11 @@
+// ---
+// description: () == () is true
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let first: () = ();
+    let second: () = ();
+    expect.holds(first == second);
+}

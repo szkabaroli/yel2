@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: json.parse takes a string, not a number
+// features: [encoding, json]
+// negative: compile
+// error: 10:27: argument 1 of std:encoding/json.parse: expected string, found an integer
+// ---
+from "std:encoding/json" include json;
+
+main: func() {
+    let item = json.parse(1);
+}

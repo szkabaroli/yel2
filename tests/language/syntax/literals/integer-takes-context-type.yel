@@ -1,0 +1,14 @@
+// ---
+// description: an integer literal takes the type its context wants
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let byte: u8 = 200;
+    let wide: u64 = 5;
+    let signed: s16 = -3;
+    expect.equal(byte as s32, 200);
+    expect.equal(wide, 5 as u64);
+    expect.equal(signed as s32, -3);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: readonly is wanted here: a is made outside the loop it is made readonly in (the next turn would see it)
+// features: [readonly]
+// negative: compile
+// error: 10:39: readonly is wanted here: a is made outside the loop it is made readonly in (the next turn would see it)
+// ---
+main: func() {
+    let a: list<s32> = [];
+    for i in 0..3 {
+        let r: list<s32> & readonly = a;
+    }
+}

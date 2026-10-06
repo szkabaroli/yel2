@@ -1,0 +1,11 @@
+// ---
+// description: join refuses a relative path against a base with no path to be relative to
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let base = expect.ok(url.parse("mailto:a@b"));
+    expect.err(url.join(base, "c"));
+}

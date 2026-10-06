@@ -1,0 +1,13 @@
+// ---
+// description: a readonly parameter takes a mutable value the func only reads
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+count: func(xs: list<string> & readonly) -> s64 { xs.len() }
+main: func() {
+    let open = ["a",];
+    open.push("b");
+    expect.equal(count(open), 2);
+    open.push("c");
+    expect.equal(count(open), 3);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a negative float cast to an unsigned integer is 0
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let negative: f64 = -2.9;
+    expect.equal(negative as u8, 0);
+    expect.equal(negative as u32, 0);
+    expect.equal(negative as u64, 0);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: field items of Box: expected list<s32>, found list<s32> & readonly
+// features: [readonly]
+// negative: compile
+// error: 10:29: field items of Box: expected list<s32>, found list<s32> & readonly
+// ---
+resource Box { items: list<s32>, }
+main: func() {
+    let fixed: list<s32> & readonly = [1,];
+    let box: Box = { items: fixed, };
+}

@@ -1,0 +1,10 @@
+// ---
+// description: find-from starts looking at the given byte
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("banana".find-from("an", 2), some(3));
+    expect.equal("banana".find-from("an", 1), some(1));
+}

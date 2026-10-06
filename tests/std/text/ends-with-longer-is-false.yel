@@ -1,0 +1,9 @@
+// ---
+// description: a suffix longer than the string is not one
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!"lo".ends-with("hello"));
+}

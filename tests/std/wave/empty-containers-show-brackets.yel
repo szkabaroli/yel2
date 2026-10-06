@@ -1,0 +1,9 @@
+// ---
+// description: an empty list and an empty record-less option show as they are written
+// features: [wave]
+// ---
+main: func() {
+    let nothing: list<s32> = [];
+    let absent: option<s32> = none;
+    print("{nothing} {absent}\n");
+}

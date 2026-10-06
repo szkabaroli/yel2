@@ -1,0 +1,9 @@
+// ---
+// description: a string shows as it is
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{"a b"}", "a b");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: let with a tuple in a tuple
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let ((a, b), c) = ((1, 2), 3);
+    expect.equal(a + b + c, 6);
+}

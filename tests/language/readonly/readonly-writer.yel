@@ -1,0 +1,14 @@
+// ---
+// description: does not compile: argument 1 of grow is readonly, and grow writes it
+// features: [readonly]
+// negative: compile
+// error: 13:10: argument 1 of grow is readonly, and grow writes it
+// ---
+grow: func(xs: list<string>) {
+    let ys = xs;
+    ys.push("more");
+}
+main: func() {
+    let fixed: list<string> & readonly = ["a",];
+    grow(fixed);
+}

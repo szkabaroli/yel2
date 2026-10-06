@@ -1,0 +1,10 @@
+// ---
+// description: #file is the path of the file it is written in
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let path = #file;
+    expect.holds(path.ends-with("file-ends-with-test-name.yel"));
+}

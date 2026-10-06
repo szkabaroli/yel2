@@ -1,0 +1,21 @@
+// ---
+// description: an anonymous record returns several named results
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+bounds: func(xs: list<s32>) -> { min: s32, max: s32 } {
+    let lo = xs[0];
+    let hi = xs[0];
+    for x in xs {
+        if x < lo { lo = x; }
+        if x > hi { hi = x; }
+    }
+    { min: lo, max: hi, }
+}
+
+main: func() {
+    let r = bounds([4, -2, 9, 3,]);
+    expect.equal(r.min, -2);
+    expect.equal(r.max, 9);
+}

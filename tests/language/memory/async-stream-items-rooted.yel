@@ -1,0 +1,15 @@
+// ---
+// description: items waiting in a stream's queue are kept alive while the reader is slow
+// features: [memory, async, streams, gc]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(100);
+    for i in 0..100 { wait out.write("item {i}"); }
+    out.close();
+    for i in 0..30000 { let junk = "junk {i}"; }
+    let total = 0;
+    wait for item in items { total += item.len() as s32; }
+    expect.equal(total, 10 * 6 + 90 * 7);
+}

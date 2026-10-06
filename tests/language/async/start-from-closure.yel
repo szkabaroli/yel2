@@ -1,0 +1,16 @@
+// ---
+// description: start is allowed in a closure
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let touched: bool = false;
+
+touch: async func() { touched = true; }
+
+main: async func() {
+    let begin = { -> start touch() };
+    let future = begin();
+    wait future;
+    expect.holds(touched);
+}

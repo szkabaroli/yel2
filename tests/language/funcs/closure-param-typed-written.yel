@@ -1,0 +1,14 @@
+// ---
+// description: a closure's parameter type may be written
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+resource Person { name: string, age: s32, }
+
+main: func() {
+    let people: list<Person> = [{ name: "ada", age: 36, }, { name: "alan", age: 41, },];
+    let labels = people.map({ p: Person -> "{p.name} {p.age}" });
+    expect.equal(labels[0], "ada 36");
+    expect.equal(labels[1], "alan 41");
+}

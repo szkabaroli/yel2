@@ -1,0 +1,9 @@
+// ---
+// description: parse-float reads digits alone
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("3"), some(3.0));
+}

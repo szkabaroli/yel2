@@ -1,0 +1,13 @@
+// ---
+// description: an if in parentheses is an operand: what follows subtracts from it
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let n = 5;
+    let v = (if n > 0 { n } else { 0 - n }) - 1;
+    expect.equal(v, 4);
+    let w = (if n < 0 { n } else { 0 - n }) - 1;
+    expect.equal(w, -6);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: binding every item of a tuple
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let t = (1, "two", true);
+    let text = match t { (let a, let b, let c) => "{a} {b} {c}", };
+    expect.equal(text, "1 two true");
+}

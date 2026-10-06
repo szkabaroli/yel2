@@ -1,0 +1,12 @@
+// ---
+// description: ? on a record shows its fields
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+record entry { name: string, size: s32, }
+
+main: func() {
+    let one: entry = { name: "a.txt", size: 12, };
+    expect.equal("{one:?}", "\{name: \"a.txt\", size: 12\}");
+}

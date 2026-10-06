@@ -1,0 +1,15 @@
+// ---
+// description: every list in a constant list is a list of its own
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+grid: func() -> list<list<s32>> { [[1, 2,], [3,], [4, 5, 6,],] }
+
+main: func() {
+    let changed = grid();
+    changed[1].push(9);
+    expect.equal(changed[1].len(), 2);
+    expect.equal(grid()[1].len(), 1);
+    expect.equal(grid()[2].len(), 3);
+}

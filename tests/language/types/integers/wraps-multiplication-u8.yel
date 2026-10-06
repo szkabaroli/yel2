@@ -1,0 +1,11 @@
+// ---
+// description: u8 multiplication wraps (the maximum squared is 1)
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: u8 = u8.MAX;
+    expect.equal(top * top, 1);
+    expect.equal(top * 2, top - 1);
+}

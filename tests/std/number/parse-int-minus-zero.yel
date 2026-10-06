@@ -1,0 +1,9 @@
+// ---
+// description: parse-int reads -0 as zero
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int("-0"), some(0));
+}

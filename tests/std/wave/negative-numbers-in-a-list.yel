@@ -1,0 +1,7 @@
+// ---
+// description: negative numbers in a list show their sign
+// features: [wave]
+// ---
+main: func() {
+    print("{[-1, 0, 1,]}\n");
+}

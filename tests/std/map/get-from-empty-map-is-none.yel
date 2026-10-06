@@ -1,0 +1,10 @@
+// ---
+// description: get on an empty map is none
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    expect.none(m.get(0));
+}

@@ -1,0 +1,15 @@
+// ---
+// description: each kind of push goes after the one before
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push("key");
+    b.push-byte(61);
+    b.push-char('→');
+    b.push-bytes([33, 33,]);
+    expect.equal(b.to-string(), "key=→!!");
+    expect.equal(b.len(), 9);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: only the chosen branch of an if is evaluated
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<string>;
+mark: func(label: string) -> s32 { trace.push(label); 1 }
+main: func() {
+    let n = if mark("cond") == 1 { mark("then") } else { mark("else") };
+    expect.equal(n, 1);
+    expect.equal(trace, ["cond", "then",]);
+}

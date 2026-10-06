@@ -1,0 +1,10 @@
+// ---
+// description: expect.ok gives the value inside an ok
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let good: result<s32, string> = ok(9);
+    expect.equal(expect.ok(good), 9);
+}

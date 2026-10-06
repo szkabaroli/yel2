@@ -1,0 +1,15 @@
+// ---
+// description: return from inside a for gives the func's value
+// features: [control]
+// ---
+from "std:testing" include expect;
+first-over: func(items: list<s32>, limit: s32) -> s32 {
+    for item in items {
+        if item > limit { return item; }
+    }
+    -1
+}
+main: func() {
+    expect.equal(first-over([3, 9, 4, 12,], 5), 9);
+    expect.equal(first-over([3, 9,], 50), -1);
+}

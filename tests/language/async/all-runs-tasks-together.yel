@@ -1,0 +1,18 @@
+// ---
+// description: wait for all runs its tasks together: both start before either ends
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+step: async func(name: string) {
+    log.push("{name} begins");
+    wait yield-turn();
+    log.push("{name} ends");
+}
+
+main: async func() {
+    let both = wait { left: step("left"), right: step("right"), };
+    expect.equal(log, ["left begins", "right begins", "left ends", "right ends",]);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: the right side of an assignment runs before the store
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<string>;
+mark: func(label: string, n: s32) -> s32 { trace.push(label); n }
+place: func(label: string, n: s64) -> s64 { trace.push(label); n }
+main: func() {
+    let xs = [0, 0, 0,];
+    xs[place("index", 1)] = mark("value", 9);
+    expect.equal(xs, [0, 9, 0,]);
+    expect.equal(trace.len(), 2);
+}

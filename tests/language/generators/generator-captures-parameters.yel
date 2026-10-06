@@ -1,0 +1,15 @@
+// ---
+// description: a generator's parameters live in its frame across yields
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+repeat: func(text: string, times: s32) -> seq<string> {
+    for turn in 0..times { yield "{text}{turn}"; }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for item in repeat("x", 3) { seen.push(item); }
+    expect.equal(seen, ["x0", "x1", "x2",]);
+}

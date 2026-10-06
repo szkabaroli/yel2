@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: a s32 | string is never a bool: the test is always false
+// features: [types, unions]
+// negative: compile
+// error: 8:36: a s32 | string is never a bool: the test is always false
+// ---
+type id = s32 | string;
+main: func() { let who: id = 1; if who is bool { } }

@@ -1,0 +1,11 @@
+// ---
+// description: from-byte makes a string of one ASCII byte
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-byte(65), "A");
+    expect.equal(from-byte(10), "\n");
+    expect.equal(from-byte(65).len(), 1);
+}

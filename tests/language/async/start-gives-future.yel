@@ -1,0 +1,15 @@
+// ---
+// description: start begins a call and a later wait gives its result
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+value: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x + 1
+}
+
+main: async func() {
+    let future = start value(1);
+    expect.equal(wait future, 2);
+}

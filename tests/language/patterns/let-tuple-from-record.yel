@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a tuple pattern on a { x: an integer, y: an integer }
+// features: [patterns]
+// negative: compile
+// error: 9:5: a tuple pattern on a { x: an integer, y: an integer }
+// ---
+main: func() {
+    let p = { x: 1, y: 2, };
+    let (a, b) = p;
+}

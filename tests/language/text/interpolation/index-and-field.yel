@@ -1,0 +1,14 @@
+// ---
+// description: an interpolation may index a list or read a field
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+record point { x: s32, y: s32, }
+
+main: func() {
+    let items = [10, 20];
+    let at: point = { x: 1, y: 2, };
+    expect.equal("{items[1]}", "20");
+    expect.equal("{at.y}", "2");
+}

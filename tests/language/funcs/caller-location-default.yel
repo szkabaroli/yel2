@@ -1,0 +1,12 @@
+// ---
+// description: #caller-location as a default is the call's place
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+where: func(at: source-location = #caller-location) -> s32 { at.line }
+
+main: func() {
+    expect.equal(where(), 10);
+    expect.equal(where(), 11);
+}

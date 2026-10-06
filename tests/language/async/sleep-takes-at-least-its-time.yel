@@ -1,0 +1,12 @@
+// ---
+// description: sleep waits no less than the time asked
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let before = now-ms();
+    wait sleep(40);
+    let waited = now-ms() - before;
+    expect.holds(waited >= 35);
+}

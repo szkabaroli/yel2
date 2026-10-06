@@ -1,0 +1,15 @@
+// ---
+// description: a fixed-length list held by a record is set in place there
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+resource Particle { name: string, pos: list<f64, 3>, }
+
+main: func() {
+    let particle: Particle = { name: "dust", pos: [0.5, 1.5, 2.5], };
+    particle.pos[1] = 9.0;
+    expect.equal(particle.pos[1], 9.0);
+    expect.equal(particle.pos[0], 0.5);
+    expect.equal(particle.pos[2], 2.5);
+}

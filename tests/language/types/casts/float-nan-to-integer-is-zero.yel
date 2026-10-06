@@ -1,0 +1,12 @@
+// ---
+// description: NaN cast to any integer is 0
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = nan;
+    expect.equal(value as s64, 0);
+    expect.equal(value as u8, 0);
+    expect.equal(value as s32, 0);
+}

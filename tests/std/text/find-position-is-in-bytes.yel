@@ -1,0 +1,10 @@
+// ---
+// description: find gives a position in bytes, not characters
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("héllo".find("l"), some(3));
+    expect.equal("😀x".find("x"), some(4));
+}

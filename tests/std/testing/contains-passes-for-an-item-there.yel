@@ -1,0 +1,9 @@
+// ---
+// description: expect.contains passes where the list holds the item
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.contains([1, 2, 3,], 2);
+}

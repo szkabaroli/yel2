@@ -1,0 +1,12 @@
+// ---
+// description: the empty string can be a key
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("", 5);
+    expect.equal(m[""], 5);
+    expect.holds(m.has(""));
+}

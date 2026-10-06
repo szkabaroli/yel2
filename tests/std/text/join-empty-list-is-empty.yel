@@ -1,0 +1,10 @@
+// ---
+// description: join of no strings is empty
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let none-at-all: list<string> = [];
+    expect.equal(join(none-at-all, ","), "");
+}

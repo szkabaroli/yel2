@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: the right of ==: expected binding, found u32
+// features: [types, distinct]
+// negative: compile
+// error: 8:67: the right of ==: expected binding, found u32
+// ---
+type binding = distinct u32;
+main: func() { let a = 3 as binding; let b: u32 = 3; let c = a == b; }

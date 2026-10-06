@@ -1,0 +1,10 @@
+// ---
+// description: the system clock has a resolution above zero
+// features: [clocks]
+// ---
+from "std:testing" include expect;
+from "std:clocks" include system-clock, monotonic-clock;
+
+main: func() {
+    expect.holds(system-clock.get-resolution() > 0);
+}

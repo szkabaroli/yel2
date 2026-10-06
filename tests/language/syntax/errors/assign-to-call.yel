@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: only a variable, a field or a list's item can be assigned
+// features: [syntax,statements]
+// negative: compile
+// error: 9:5: only a variable, a field or a list's item can be assigned
+// ---
+value: func() -> s32 { 1 }
+main: func() {
+    value() = 2;
+}

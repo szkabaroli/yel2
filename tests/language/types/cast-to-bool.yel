@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: as gives a number or a char, not bool
+// features: [types]
+// negative: compile
+// error: 8:13: as gives a number or a char, not bool
+// ---
+main: func() {
+    let b = 1 as bool;
+}

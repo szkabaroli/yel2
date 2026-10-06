@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: join takes a list of strings, not of numbers
+// features: [text]
+// negative: compile
+// error: 8:24: a list's item: expected string, found an integer
+// ---
+main: func() {
+    let joined = join([1, 2,], ",");
+}

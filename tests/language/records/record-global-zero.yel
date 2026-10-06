@@ -1,0 +1,14 @@
+// ---
+// description: a global record starts as its zero value
+// features: [records, let]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+let origin: Point;
+
+main: func() {
+    expect.equal(origin.x, 0);
+    expect.equal(origin.y, 0);
+}

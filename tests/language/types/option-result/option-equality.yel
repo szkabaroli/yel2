@@ -1,0 +1,16 @@
+// ---
+// description: == compares options by their payloads
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let first: option<s32> = some(1);
+    let second: option<s32> = some(1);
+    let third: option<s32> = some(2);
+    let none-value: option<s32> = none;
+    expect.holds(first == second);
+    expect.holds(first != third);
+    expect.holds(first != none-value);
+    expect.holds(none-value == none);
+}

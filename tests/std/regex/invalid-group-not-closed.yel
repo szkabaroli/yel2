@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /(ab/: a group not closed
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /(ab/: a group not closed
+// ---
+main: func() {
+    let found = /(ab/;
+}

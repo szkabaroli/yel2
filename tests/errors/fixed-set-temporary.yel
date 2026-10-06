@@ -1,7 +1,0 @@
-// error: 6:5: a fixed-length list's item is set in a variable or a field, where the list is
-three: func() -> list<s32, 3> {
-    [1, 2, 3]
-}
-main: func() {
-    three()[0] = 5;
-}

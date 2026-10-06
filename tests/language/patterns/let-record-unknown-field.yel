@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: a Point has no field z
+// features: [patterns]
+// negative: compile
+// error: 10:5: a Point has no field z
+// ---
+record Point { x: s32, y: s32, }
+main: func() {
+    let p: Point = { x: 1, y: 2, };
+    let { z } = p;
+}

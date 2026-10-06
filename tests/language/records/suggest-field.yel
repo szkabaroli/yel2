@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: record Person has no field nmae
+// features: [records]
+// negative: compile
+// error: 11:13: record Person has no field nmae
+// help: did you mean name?
+// ---
+record Person { name: string, age: s32, }
+main: func() {
+    let p: Person = { name: "ada", age: 36, };
+    print("{p.nmae}\n");
+}

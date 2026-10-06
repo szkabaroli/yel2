@@ -1,0 +1,11 @@
+// ---
+// description: a float and an integer meet through as
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count: s32 = 3;
+    let scale: f64 = 1.5;
+    expect.equal(count as f64 * scale, 4.5);
+}

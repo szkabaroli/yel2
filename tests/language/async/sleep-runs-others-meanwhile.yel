@@ -1,0 +1,30 @@
+// ---
+// description: while a task sleeps the others run
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+sleeper: async func() {
+    log.push("sleep begins");
+    wait sleep(30);
+    log.push("sleep ends");
+}
+
+busy: async func() {
+    for turn in 0..3 {
+        log.push("busy");
+        wait yield-turn();
+    }
+}
+
+main: async func() {
+    let first = start sleeper();
+    let second = start busy();
+    wait second;
+    expect.equal(log, ["sleep begins", "busy", "busy", "busy",]);
+    wait first;
+    expect.equal(log.len(), 5);
+    expect.equal(log[4], "sleep ends");
+}

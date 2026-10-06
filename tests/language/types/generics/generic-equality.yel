@@ -1,0 +1,16 @@
+// ---
+// description: == inside a generic func is made for each type
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+equal-to: func<T>(left: T, right: T) -> bool { left == right }
+
+main: func() {
+    expect.holds(equal-to(1, 1));
+    expect.holds(!equal-to(1, 2));
+    expect.holds(equal-to("ab", "a" + "b"));
+    let first: option<s32> = some(1);
+    let second: option<s32> = some(1);
+    expect.holds(equal-to(first, second));
+}

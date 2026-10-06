@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned-radix reads binary digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-unsigned-radix("1111", 2), some(15));
+}

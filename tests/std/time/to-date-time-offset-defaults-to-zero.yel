@@ -1,0 +1,10 @@
+// ---
+// description: to-date-time with no offset is UTC
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.to-date-time(time.from-unix-millis(5)).offset, 0);
+}

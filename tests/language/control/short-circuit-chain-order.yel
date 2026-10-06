@@ -1,0 +1,12 @@
+// ---
+// description: a chain of && and || runs left to right and stops at the deciding term
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<string>;
+note: func(label: string, value: bool) -> bool { trace.push(label); value }
+main: func() {
+    let result = note("a", true) && note("b", false) || note("c", true) && note("d", true);
+    expect.holds(result);
+    expect.equal(trace, ["a", "b", "c", "d",]);
+}

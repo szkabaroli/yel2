@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: list.sort takes a func for the order, not a number
+// features: [list]
+// negative: compile
+// error: 9:18: argument 2 of yel:std/list.sort: expected func(an integer, an integer) -> bool, found an integer
+// ---
+main: func() {
+    let numbers = [2, 1,];
+    numbers.sort(5);
+}

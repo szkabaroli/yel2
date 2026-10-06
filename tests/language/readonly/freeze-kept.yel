@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: readonly is wanted here: ws is kept where it may be written (stored, or captured by a closure)
+// features: [readonly]
+// negative: compile
+// error: 10:38: readonly is wanted here: ws is kept where it may be written (stored, or captured by a closure)
+// ---
+main: func() {
+    let ws: list<string> = [];
+    let all: list<list<string>> = [ws,];
+    let r: list<string> & readonly = ws;
+}

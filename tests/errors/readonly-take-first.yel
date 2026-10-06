@@ -1,6 +1,0 @@
-// error: 4:13: argument 1 of take-first is readonly, and take-first writes it
-main: func() {
-    let frozen: list<s32> & readonly = [1, 2, 3,];
-    let x = frozen.take-first();
-    print("frozen {frozen}\n");
-}

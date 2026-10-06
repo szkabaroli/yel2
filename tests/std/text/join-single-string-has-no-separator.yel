@@ -1,0 +1,9 @@
+// ---
+// description: join of one string is that string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(join(["only",], ", "), "only");
+}

@@ -1,0 +1,19 @@
+// ---
+// description: a closure that returns a closure keeps both environments
+// features: [memory, closures, gc]
+// ---
+from "std:testing" include expect;
+
+outer: func(a: string) -> func(string) -> func() -> string {
+    { b: string ->
+        let joined = "{a}+{b}";
+        { -> "{joined}!" }
+    }
+}
+
+main: func() {
+    let make = outer("first");
+    let finish = make("second");
+    for i in 0..30000 { let junk = "junk {i}"; }
+    expect.equal(finish(), "first+second!");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a range of unsigned starts at zero
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let end: u32 = 3;
+    let total: u32 = 0;
+    let start: u32 = 0;
+    for i in start..end { total += i; }
+    expect.equal(total, 3);
+}

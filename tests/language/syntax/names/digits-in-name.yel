@@ -1,0 +1,11 @@
+// ---
+// description: a name may hold digits after its first letter
+// features: [syntax,names]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let point2 = 2;
+    let x1-y2 = 3;
+    expect.equal(point2 + x1-y2, 5);
+}

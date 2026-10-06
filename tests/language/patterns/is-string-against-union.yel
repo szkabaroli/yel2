@@ -1,0 +1,15 @@
+// ---
+// description: a string tested against a union of literals narrows to it
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post";
+parse: func(s: string) -> option<method> {
+    if s is method { some(s) } else { none }
+}
+main: func() {
+    expect.equal(parse("get"), some("get"));
+    expect.equal(parse("post"), some("post"));
+    expect.equal(parse("patch"), none);
+    expect.equal(parse(""), none);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: a quoted char escapes a line feed
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{'\n':?}", "'\\n'");
+}

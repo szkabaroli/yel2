@@ -1,0 +1,13 @@
+// ---
+// description: keys are in the order they were first set
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("zebra", 1);
+    m.set("apple", 2);
+    m.set("mango", 3);
+    expect.equal(m.keys(), ["zebra", "apple", "mango",]);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: #embed may be a const's value
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+const MOTD: string = #embed("motd.txt");
+
+main: func() {
+    expect.equal(MOTD, "hello embed\n");
+}

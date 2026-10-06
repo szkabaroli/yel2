@@ -1,0 +1,12 @@
+// ---
+// description: one or two quotes in a row inside need no escape
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        a "quote", "" two
+        """;
+    expect.equal(text, "a \"quote\", \"\" two");
+}

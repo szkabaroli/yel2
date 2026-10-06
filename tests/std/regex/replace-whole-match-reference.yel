@@ -1,0 +1,9 @@
+// ---
+// description: replace takes $& as the whole match
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/b+/.replace("abbc", "[$&]"), "a[bb]c");
+}

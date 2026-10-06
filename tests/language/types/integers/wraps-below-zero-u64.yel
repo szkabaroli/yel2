@@ -1,0 +1,11 @@
+// ---
+// description: u64 subtraction wraps from zero to its maximum
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: u64 = 0;
+    expect.equal(zero - 1, u64.MAX);
+    expect.equal(zero - 2, u64.MAX - 1);
+}

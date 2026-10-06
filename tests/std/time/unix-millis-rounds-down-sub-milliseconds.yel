@@ -1,0 +1,11 @@
+// ---
+// description: unix-millis drops the nanoseconds below a millisecond
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at: time.instant = { seconds: 2, nanoseconds: 1999999, };
+    expect.equal(time.unix-millis(at), 2001);
+}

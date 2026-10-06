@@ -1,0 +1,15 @@
+// ---
+// description: a block ending in a return is any type
+// features: [control]
+// ---
+from "std:testing" include expect;
+sign: func(x: s32) -> string {
+    if x < 0 { return "negative"; }
+    if x == 0 { return "zero"; }
+    return "positive";
+}
+main: func() {
+    expect.equal(sign(-3), "negative");
+    expect.equal(sign(0), "zero");
+    expect.equal(sign(8), "positive");
+}

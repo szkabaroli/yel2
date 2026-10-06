@@ -1,0 +1,9 @@
+// ---
+// description: parse-int takes leading zeros as part of a decimal number
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int("007"), some(7));
+}

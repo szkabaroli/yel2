@@ -1,7 +1,0 @@
-// error: 6:10: argument 1 of take: expected { x: s32, y: s32 }, found { x: an integer, y: an integer, z: an integer }
-type point = { x: s32, y: s32 };
-take: func(p: point) {}
-main: func() {
-    let p3 = { x: 1, y: 2, z: 3, };
-    take(p3);
-}

@@ -1,0 +1,13 @@
+// ---
+// description: a value can be a map
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let outer: map<string, map<string, s32>> = map.new();
+    let inner: map<string, s32> = map.new();
+    inner.set("x", 1);
+    outer.set("a", inner);
+    expect.equal(outer["a"]["x"], 1);
+}

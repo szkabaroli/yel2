@@ -1,0 +1,18 @@
+// ---
+// description: a loop that skips with continue and stops with break
+// features: [control]
+// ---
+from "std:testing" include expect;
+first-over: func(items: list<s32>, limit: s32) -> s32 {
+    let found = -1;
+    for item in items {
+        if item <= limit { continue; }
+        found = item;
+        break;
+    }
+    found
+}
+main: func() {
+    expect.equal(first-over([1, 5, 9, 12,], 6), 9);
+    expect.equal(first-over([1,], 6), -1);
+}

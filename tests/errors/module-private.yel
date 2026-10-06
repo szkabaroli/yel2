@@ -1,3 +1,0 @@
-// error: 3:23: module geometry has no func square
-from "../shapes" include geometry;
-main: func() -> s32 { geometry.square(2) }

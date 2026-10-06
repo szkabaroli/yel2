@@ -1,0 +1,13 @@
+// ---
+// description: dividing a smaller number by a larger one gives zero and the remainder is the number
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let three: s16 = 3;
+    expect.equal(three / 5, 0);
+    expect.equal(three % 5, 3);
+    expect.equal(three / 3, 1);
+    expect.equal(three % 3, 0);
+}

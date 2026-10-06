@@ -1,0 +1,12 @@
+// ---
+// description: push-char writes e-acute as two bytes
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push-char('é');
+    expect.equal(b.to-bytes(), [195, 169,]);
+    expect.equal(b.to-string(), "é");
+}

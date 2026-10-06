@@ -1,0 +1,11 @@
+// ---
+// description: add gives an instant a duration later
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let start = time.from-unix-millis(1000);
+    expect.equal(time.unix-millis(time.add(start, time.minutes(90))), 5401000);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a generic func taking a list returns its last item
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+last: func<T>(items: list<T>) -> option<T> {
+    if items.len() == 0 { none } else { some(items[items.len() - 1]) }
+}
+
+main: func() {
+    expect.equal(expect.some(last([1, 2, 3,])), 3);
+    expect.equal(expect.some(last(["a", "b",])), "b");
+    let empty: list<s32> = [];
+    expect.none(last(empty));
+}

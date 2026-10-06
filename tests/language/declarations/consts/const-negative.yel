@@ -1,0 +1,11 @@
+// ---
+// description: a const may be a negative number
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const LOW = -5;
+
+main: func() {
+    expect.equal(LOW, -5);
+}

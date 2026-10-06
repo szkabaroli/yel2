@@ -1,0 +1,17 @@
+// ---
+// description: two calls of a generator are independent
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+counting: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield x; }
+}
+
+main: func() {
+    let outer: list<s32> = [];
+    for left in counting(3) {
+        for right in counting(2) { outer.push(left * 10 + right); }
+    }
+    expect.equal(outer, [0, 1, 10, 11, 20, 21,]);
+}

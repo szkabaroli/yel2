@@ -1,0 +1,16 @@
+// ---
+// description: && and || on each pair
+// features: [types, bools]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(true && true, true);
+    expect.equal(true && false, false);
+    expect.equal(false && true, false);
+    expect.equal(false && false, false);
+    expect.equal(true || true, true);
+    expect.equal(true || false, true);
+    expect.equal(false || true, true);
+    expect.equal(false || false, false);
+}

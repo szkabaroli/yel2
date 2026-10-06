@@ -1,0 +1,9 @@
+// ---
+// description: split of an empty text is one empty piece
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/,/.split(""), ["",]);
+}

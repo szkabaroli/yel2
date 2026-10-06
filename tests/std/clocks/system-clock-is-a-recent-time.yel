@@ -1,0 +1,10 @@
+// ---
+// description: the system clock's seconds are past 2023
+// features: [clocks]
+// ---
+from "std:testing" include expect;
+from "std:clocks" include system-clock, monotonic-clock;
+
+main: func() {
+    expect.holds(system-clock.now().seconds > 1700000000);
+}

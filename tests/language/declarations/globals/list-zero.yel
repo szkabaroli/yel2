@@ -1,0 +1,11 @@
+// ---
+// description: a list global starts empty
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let seen: list<string>;
+
+main: func() {
+    expect.equal(seen.len(), 0);
+}

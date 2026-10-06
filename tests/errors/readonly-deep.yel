@@ -1,6 +1,0 @@
-// error: 5:5: argument 1 of push is readonly, and push writes it
-resource Team { name: string, members: list<string>, }
-main: func() {
-    let team: Team & readonly = { name: "core", members: ["ada",], };
-    team.members.push("grace");
-}

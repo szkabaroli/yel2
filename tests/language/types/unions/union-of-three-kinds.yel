@@ -1,0 +1,15 @@
+// ---
+// description: a union of s32, string and bool
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type value = s32 | string | bool;
+
+main: func() {
+    let values: list<value> = [1, "two", true,];
+    expect.equal(values.len(), 3);
+    expect.equal("{values[0]}", "1");
+    expect.equal("{values[1]}", "two");
+    expect.equal("{values[2]}", "true");
+}

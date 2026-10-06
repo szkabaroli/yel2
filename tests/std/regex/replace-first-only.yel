@@ -1,0 +1,9 @@
+// ---
+// description: replace changes only the first match
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/o/.replace("foo", "0"), "f0o");
+}

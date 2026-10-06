@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: a for over a seq binds each value as the seq's type
+// features: [generators]
+// negative: compile
+// error: 10:28: the value of text: expected string, found s32
+// ---
+numbers: func() -> seq<s32> { yield 1; }
+main: func() {
+    for number in numbers() {
+        let text: string = number;
+    }
+}

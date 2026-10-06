@@ -1,0 +1,18 @@
+// ---
+// description: && does not run its right side after false
+// features: [types, bools]
+// ---
+from "std:testing" include expect;
+
+let count: s32 = 0;
+
+touch: func() -> bool { count += 1; true }
+
+main: func() {
+    let result = false && touch();
+    expect.equal(result, false);
+    expect.equal(count, 0);
+    let both = true && touch();
+    expect.holds(both);
+    expect.equal(count, 1);
+}

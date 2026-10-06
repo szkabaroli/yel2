@@ -1,0 +1,19 @@
+// ---
+// description: after if m is "get" returns, m is the rest of the union
+// features: [types, sets, is]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post";
+
+describe: func(which: method) -> string {
+    if which is "get" { return "read"; }
+    match which {
+        "post" => "write",
+    }
+}
+
+main: func() {
+    expect.equal(describe("get"), "read");
+    expect.equal(describe("post"), "write");
+}

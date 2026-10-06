@@ -1,0 +1,12 @@
+// ---
+// description: as? to a range type gives some inside the range and none outside
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type percent = 0..=100;
+bump: func(p: percent) -> option<percent> { (p + 10) as? percent }
+main: func() {
+    let p: percent = 95;
+    expect.equal(bump(50), some(60));
+    expect.equal(bump(p), none);
+}

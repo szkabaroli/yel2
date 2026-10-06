@@ -1,0 +1,12 @@
+// ---
+// description: a map is lent to get-or, and what comes back is the caller's to write
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let total = 0;
+    let grid: map<string, list<list<s32>>> = map.new();
+    grid.set("g", [[1,], [2, 3,],]);
+    for line in grid.get-or("g", []) { line.push(9); total += line.len() as s32; }
+    expect.equal(total, 5);
+}

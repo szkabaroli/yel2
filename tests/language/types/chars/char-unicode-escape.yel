@@ -1,0 +1,11 @@
+// ---
+// description: '\u{...}' is the scalar value in braces
+// features: [types, chars]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('\u{41}', 'A');
+    expect.equal('\u{1F600}' as u32, 128512);
+    expect.equal('\u{10FFFF}' as u32, 1114111);
+}

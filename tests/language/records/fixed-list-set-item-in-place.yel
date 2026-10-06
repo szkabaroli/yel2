@@ -1,0 +1,12 @@
+// ---
+// description: a fixed-length list's item is set in place in a local
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names: list<string, ?> = ["ada", "grace", "barbara", "frances",];
+    for i in 0..4 { names[i] = "{names[i]}-{i}"; }
+    expect.equal(names[0], "ada-0");
+    expect.equal(names[3], "frances-3");
+}

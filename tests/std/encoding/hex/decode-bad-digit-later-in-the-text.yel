@@ -1,0 +1,10 @@
+// ---
+// description: hex.decode tells where a later bad digit is
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(expect.err(hex.decode("00ff1x")), "not a hex digit at byte 5");
+}

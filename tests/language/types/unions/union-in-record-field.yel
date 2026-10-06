@@ -1,0 +1,16 @@
+// ---
+// description: a union as a record field
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+resource Account { owner: id, }
+
+main: func() {
+    let account: Account = { owner: "ann", };
+    expect.holds(account.owner is string);
+    account.owner = 5;
+    expect.holds(account.owner is s32);
+}

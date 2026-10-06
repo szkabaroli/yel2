@@ -1,0 +1,13 @@
+// ---
+// description: a record literal evaluates its fields in the order written
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<string>;
+mark: func(label: string) -> string { trace.push(label); label }
+resource Pair { second: string, first: string, }
+main: func() {
+    let pair: Pair = { first: mark("a"), second: mark("b"), };
+    expect.equal(pair.first, "a");
+    expect.equal(trace, ["a", "b",]);
+}

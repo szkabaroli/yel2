@@ -1,0 +1,26 @@
+// ---
+// description: regex /(a)(b)?(c)/ on "ac abc": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /(a)(b)?(c)/;
+    let text = "ac abc";
+    expect.equal(shown(regex-under-test.find(text)), "\"ac\"@0-2[a,-,c]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\"ac\"@0-2[a,-,c] \"abc\"@3-6[a,b,c]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "<ac> <abc>");
+}

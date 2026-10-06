@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the left of ||: expected bool, found an integer
+// features: [control]
+// negative: compile
+// error: 8:13: the left of ||: expected bool, found an integer
+// ---
+main: func() {
+    let x = 1 || false;
+}

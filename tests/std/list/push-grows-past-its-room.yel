@@ -1,0 +1,14 @@
+// ---
+// description: push keeps every item as the list grows many times over
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs: list<s32> = [];
+    for index in 0..1000 { xs.push(index * 2); }
+    expect.equal(xs.len(), 1000);
+    expect.equal(xs[0], 0);
+    expect.equal(xs[499], 998);
+    expect.equal(xs[999], 1998);
+}

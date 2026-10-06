@@ -1,0 +1,11 @@
+// ---
+// description: is tests an integer against a range
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 50;
+    expect.holds(n is 0..=100);
+    expect.holds(!(n is 0..50));
+    expect.holds(n is 50..51);
+}

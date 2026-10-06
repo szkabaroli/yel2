@@ -1,0 +1,12 @@
+// ---
+// description: a u64 range across s64's greatest value counts each value
+// features: [memory, ranges]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let past: u64 = 9223372036854775810;
+    let high = 0;
+    for u in 9223372036854775800..past { high += 1; }
+    expect.equal(high, 10);
+}

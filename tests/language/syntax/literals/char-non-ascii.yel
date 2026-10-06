@@ -1,0 +1,11 @@
+// ---
+// description: a char literal may be a non-ASCII scalar written directly
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('é' as u32, 233);
+    expect.equal('€' as u32, 8364);
+    expect.equal('😀' as u32, 128512);
+}

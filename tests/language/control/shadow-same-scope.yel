@@ -1,0 +1,11 @@
+// ---
+// description: a second let of a name in one scope hides the first from then on
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let x = 1;
+    let x = x + 1;
+    let x = x * 10;
+    expect.equal(x, 20);
+}

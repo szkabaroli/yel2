@@ -1,0 +1,10 @@
+// ---
+// description: the bytes next to the letters are not changed
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("@[`\{".to-upper(), "@[`\{");
+    expect.equal("@[`\{".to-lower(), "@[`\{");
+}

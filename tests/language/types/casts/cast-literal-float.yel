@@ -1,0 +1,11 @@
+// ---
+// description: a float literal cast to f64 or an integer type
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(1.5 as f64, 1.5);
+    expect.equal(2.9 as s32, 2);
+    expect.equal(7 as f64, 7.0);
+}

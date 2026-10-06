@@ -1,0 +1,17 @@
+// ---
+// description: each evaluation of a constant list literal is a list of its own
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+numbers: func() -> list<s32> { [1, 2, 3,] }
+
+main: func() {
+    let first = numbers();
+    first.push(4);
+    first[0] = 99;
+    let again = numbers();
+    expect.equal(again.len(), 3);
+    expect.equal(again[0], 1);
+    expect.equal(first.len(), 4);
+}

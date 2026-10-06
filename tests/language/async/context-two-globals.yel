@@ -1,0 +1,22 @@
+// ---
+// description: two @(context) globals are each kept apart per task
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let user: string = "nobody";
+@(context) let attempts: s32 = 0;
+
+visit: async func(name: string, count: s32) -> string {
+    user = name;
+    attempts = count;
+    wait yield-turn();
+    "{user} {attempts}"
+}
+
+main: async func() {
+    let first = start visit("ada", 1);
+    let second = start visit("grace", 2);
+    expect.equal(wait first, "ada 1");
+    expect.equal(wait second, "grace 2");
+}

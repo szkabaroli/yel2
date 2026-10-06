@@ -1,0 +1,20 @@
+// ---
+// description: a closure sees a narrowed name as it was before the test
+// features: [funcs, closures, unions]
+// ---
+from "std:testing" include expect;
+
+type value = s32 | string;
+
+show: func(v: value) -> string {
+    if v is string { return "a string"; }
+    // v is an s32 here, but not in the closure (it may run later)
+    let doubled = v + v;
+    let later = { -> v is s32 };
+    "{doubled} {later()}"
+}
+
+main: func() {
+    expect.equal(show(4), "8 true");
+    expect.equal(show("x"), "a string");
+}

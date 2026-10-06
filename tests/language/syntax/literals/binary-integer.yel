@@ -1,0 +1,11 @@
+// ---
+// description: 0b starts a binary integer
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(0b1010, 10);
+    expect.equal(0b1, 1);
+    expect.equal(0b11111111, 255);
+}

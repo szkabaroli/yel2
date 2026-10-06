@@ -1,0 +1,15 @@
+// ---
+// description: a variable of a union type may hold another kind after assignment
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let who: id = 1;
+    expect.holds(who is s32);
+    who = "now text";
+    expect.holds(who is string);
+    expect.equal("{who}", "now text");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: #embed of an empty file is the empty string
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = #embed("empty.txt");
+    expect.equal(text.len(), 0);
+}

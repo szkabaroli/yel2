@@ -1,0 +1,10 @@
+// ---
+// description: a quoted char does not escape a double quote
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let quote = '"';
+    expect.equal("{quote:?}", "'\"'");
+}

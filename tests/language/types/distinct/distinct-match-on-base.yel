@@ -1,0 +1,16 @@
+// ---
+// description: a match on a distinct value's base
+// features: [types, distinct, match]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+main: func() {
+    let id = 4 as binding;
+    let word = match id as u32 {
+        4 => "four",
+        _ => "other",
+    };
+    expect.equal(word, "four");
+}

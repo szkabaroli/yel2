@@ -1,0 +1,14 @@
+// ---
+// description: a resource named record is a resource: shared on assignment
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+resource record { count: s64, }
+
+main: func() {
+    let shared: record = { count: 1, };
+    let other = shared;
+    other.count = 2;
+    expect.equal(shared.count, 2);
+}

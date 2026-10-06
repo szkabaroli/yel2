@@ -1,0 +1,11 @@
+// ---
+// description: a global may start as an integer literal of its type
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let start: u32 = 7;
+
+main: func() {
+    expect.equal(start, 7);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: a seq shows as <seq>, its values not yet made
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+counting: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield x; }
+}
+
+main: func() {
+    let lazy = counting(5);
+    expect.equal("{lazy}", "<seq>");
+}

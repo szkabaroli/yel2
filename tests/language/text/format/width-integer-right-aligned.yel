@@ -1,0 +1,12 @@
+// ---
+// description: an integer with a width is right-aligned by default
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 255;
+    expect.equal("[{value:8}]", "[     255]");
+    expect.equal("[{value:3}]", "[255]");
+    expect.equal("[{value:2}]", "[255]");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: exit can end the program from inside another func
+// features: [cli]
+// exit: 4
+// ---
+from "std:cli" include environment, exit;
+
+stop: func() -> never { exit.exit-with-code(4) }
+
+main: func() {
+    stop();
+}

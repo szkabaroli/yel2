@@ -1,0 +1,18 @@
+// ---
+// description: a resource kept in a map changes through the map
+// features: [types, maps]
+// ---
+from "std:testing" include expect;
+
+resource Pair { name: string, scores: list<s32>, }
+
+main: func() {
+    let first: Pair = { name: "a", scores: [1, 2,], };
+    let people = map.new();
+    people.set("ann", first);
+    people["ann"].scores.push(9);
+    expect.equal("{first.scores}", "[1, 2, 9]");
+    expect.equal("{people}", "map(1)");
+    expect.equal(people["ann"].name, "a");
+    expect.equal("{people["ann"].scores}", "[1, 2, 9]");
+}

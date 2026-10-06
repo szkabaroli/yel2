@@ -1,0 +1,9 @@
+// ---
+// description: split with a separator at the start begins with an empty piece
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(",a,b".split(","), ["", "a", "b",]);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: dividing by zero stops the program
+// features: [types, integers]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: s32 = 0;
+    let n: s32 = 5;
+    print("{n / zero}");
+}

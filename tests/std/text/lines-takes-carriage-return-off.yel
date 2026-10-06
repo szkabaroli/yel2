@@ -1,0 +1,9 @@
+// ---
+// description: lines drops a carriage return before a line feed
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("one\r\ntwo\r\nthree".lines(), ["one", "two", "three",]);
+}

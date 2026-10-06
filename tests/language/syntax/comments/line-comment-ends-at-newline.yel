@@ -1,0 +1,12 @@
+// ---
+// description: a // comment runs to the end of its line and no further
+// features: [syntax,comments]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = 1; // = 99;
+    expect.equal(value, 1);
+    // let value = 2;
+    expect.equal(value, 1);
+}

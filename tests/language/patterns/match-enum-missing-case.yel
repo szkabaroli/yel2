@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: the match has no arm for blue: add one, or a _ arm
+// features: [patterns]
+// negative: compile
+// error: 10:13: the match has no arm for blue: add one, or a _ arm
+// ---
+enum Color { red, green, blue, }
+main: func() {
+    let c = Color.red;
+    let n = match c { red => 1, green => 2, };
+}

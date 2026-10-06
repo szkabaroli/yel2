@@ -1,0 +1,11 @@
+// ---
+// description: \u{..} past 0x7FF is three bytes
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "\u{20AC}";
+    expect.equal(text, "€");
+    expect.equal(text.len(), 3);
+}

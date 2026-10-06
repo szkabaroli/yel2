@@ -1,0 +1,10 @@
+// ---
+// description: decode of text with no escapes is the text
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("plain-text_1"), ok("plain-text_1"));
+}

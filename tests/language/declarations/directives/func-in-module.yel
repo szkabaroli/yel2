@@ -1,0 +1,13 @@
+// ---
+// description: #func in a module's func names the func
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+module api {
+    where-am-i: func() -> string { #func }
+}
+
+main: func() {
+    expect.holds(api.where-am-i().ends-with("where-am-i"));
+}

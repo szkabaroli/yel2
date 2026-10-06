@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a generator is not an async func
+// features: [generators, async]
+// negative: compile
+// error: 7:1: numbers yields: a generator is not an async func
+// ---
+numbers: async func() -> seq<s32> {
+    yield 1;
+}
+main: func() {}

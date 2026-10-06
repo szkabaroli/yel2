@@ -1,0 +1,10 @@
+// ---
+// description: expect.none passes for none
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: option<s32> = none;
+    expect.none(nothing);
+}

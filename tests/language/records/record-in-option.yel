@@ -1,0 +1,15 @@
+// ---
+// description: a record in an option is a value
+// features: [records, options]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let found: option<Point> = some(a);
+    a.x = 9;
+    let got = expect.some(found);
+    expect.equal(got.x, 1);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: uuid.parse counts the length after the urn:uuid: prefix
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(expect.err(uuid.parse("urn:uuid:550e8400")), "a UUID is 36 characters, not 8");
+}

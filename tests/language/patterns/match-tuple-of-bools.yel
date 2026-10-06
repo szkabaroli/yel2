@@ -1,0 +1,19 @@
+// ---
+// description: a tuple of bools covered in all four combinations
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+combine: func(a: bool, b: bool) -> s32 {
+    match (a, b) {
+        (true, true) => 3,
+        (true, false) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+    }
+}
+main: func() {
+    expect.equal(combine(true, true), 3);
+    expect.equal(combine(true, false), 2);
+    expect.equal(combine(false, true), 1);
+    expect.equal(combine(false, false), 0);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: .name of a Team & readonly: a readonly value's fields are not assigned
+// features: [readonly]
+// negative: compile
+// error: 10:5: .name of a Team & readonly: a readonly value's fields are not assigned
+// ---
+resource Team { name: string, members: list<string>, }
+main: func() {
+    let team: Team & readonly = { name: "core", members: [], };
+    team.name = "other";
+}

@@ -1,0 +1,16 @@
+// ---
+// description: signed integers compare by value
+// features: [types, integers, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let negative: s32 = -1;
+    let positive: s32 = 1;
+    expect.holds(negative < positive);
+    expect.holds(negative <= positive);
+    expect.holds(positive > negative);
+    expect.holds(positive >= negative);
+    expect.holds(negative != positive);
+    expect.holds(!(negative == positive));
+}

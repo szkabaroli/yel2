@@ -1,0 +1,15 @@
+// ---
+// description: a func value is chosen at run time
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+inc: func(x: s32) -> s32 { x + 1 }
+square: func(x: s32) -> s32 { x * x }
+
+pick: func(use-square: bool) -> func(s32) -> s32 { if use-square { square } else { inc } }
+
+main: func() {
+    expect.equal(pick(true)(4), 16);
+    expect.equal(pick(false)(4), 5);
+}

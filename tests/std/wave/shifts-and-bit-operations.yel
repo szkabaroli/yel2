@@ -1,0 +1,8 @@
+// ---
+// description: shifts and bit operations show their value, and a shift past the width
+// features: [wave]
+// ---
+main: func() {
+    let mask: u32 = 1 << 31;
+    print("{mask} {mask >> 31} {0xf0 | 0x0f} {0xff & 0x0f} {6 ^ 3} {1 << 33}\n");
+}

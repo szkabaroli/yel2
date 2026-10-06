@@ -1,0 +1,25 @@
+// ---
+// description: a generator that reads another and yields its values
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+variant Tree { leaf(s32), node(list<Tree>), }
+
+values: func(tree: Tree) -> seq<s32> {
+    match tree {
+        leaf(n) => { yield n; }
+        node(kids) => {
+            for kid in kids {
+                for value in values(kid) { yield value; }
+            }
+        }
+    }
+}
+
+main: func() {
+    let tree = Tree.node([Tree.leaf(1), Tree.node([Tree.leaf(2), Tree.leaf(3),]), Tree.leaf(4),]);
+    let seen: list<s32> = [];
+    for value in values(tree) { seen.push(value); }
+    expect.equal(seen, [1, 2, 3, 4,]);
+}

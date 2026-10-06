@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of d: expected '0'..='9', found 'a'
+// features: [patterns]
+// negative: compile
+// error: 9:20: the value of d: expected '0'..='9', found 'a'
+// ---
+type digit = '0'..='9';
+main: func() {
+    let d: digit = 'a';
+}

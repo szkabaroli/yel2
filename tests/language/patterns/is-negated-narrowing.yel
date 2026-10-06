@@ -1,0 +1,14 @@
+// ---
+// description: if !(x is T) swaps the branches
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post";
+reads: func(m: "get") -> string { "read {m}" }
+run: func(m: method) -> string {
+    if !(m is "get") { "not a read" } else { reads(m) }
+}
+main: func() {
+    expect.equal(run("get"), "read get");
+    expect.equal(run("post"), "not a read");
+}

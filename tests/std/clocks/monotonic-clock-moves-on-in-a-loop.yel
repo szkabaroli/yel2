@@ -1,0 +1,14 @@
+// ---
+// description: the monotonic clock moves on while a program works
+// features: [clocks]
+// ---
+from "std:testing" include expect;
+from "std:clocks" include system-clock, monotonic-clock;
+
+main: func() {
+    let start = monotonic-clock.now();
+    let total = 0;
+    for index in 0..2000000 { total += index % 7; }
+    expect.holds(monotonic-clock.now() > start);
+    expect.holds(total > 0);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: two calls of now are in order, within a second
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let first = time.now();
+    let second = time.now();
+    expect.holds(!time.before(second, first) || time.between(second, first).nanoseconds < 1000000);
+}

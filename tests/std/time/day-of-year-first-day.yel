@@ -1,0 +1,10 @@
+// ---
+// description: day-of-year of 1 January is 1
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.day-of-year(expect.ok(time.parse-date-time("2026-01-01"))), 1);
+}

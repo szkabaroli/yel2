@@ -1,0 +1,18 @@
+// ---
+// description: yield-turn lets a ready task run before the yielder goes on
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+other: async func() { log.push("other"); }
+
+main: async func() {
+    let future = start other();
+    log.push("before");
+    wait yield-turn();
+    log.push("after");
+    expect.equal(log, ["before", "other", "after",]);
+    wait future;
+}

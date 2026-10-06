@@ -1,0 +1,9 @@
+// ---
+// description: split takes a separator of several bytes
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a--b--c".split("--"), ["a", "b", "c",]);
+}

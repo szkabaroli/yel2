@@ -1,0 +1,11 @@
+// ---
+// description: find gives the text of each group after the whole match's
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = expect.some(/(\d{4})-(\d\d)/.find("on 2026-10-05"));
+    expect.equal(found.text, "2026-10");
+    expect.equal(found.groups, [some("2026"), some("10"),]);
+}

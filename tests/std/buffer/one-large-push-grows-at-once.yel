@@ -1,0 +1,13 @@
+// ---
+// description: a push larger than the room makes room for it
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(1);
+    let big = "x".repeat(500);
+    b.push(big);
+    expect.equal(b.len(), 500);
+    expect.equal(b.to-string(), big);
+}

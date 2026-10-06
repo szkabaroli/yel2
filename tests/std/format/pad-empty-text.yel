@@ -1,0 +1,9 @@
+// ---
+// description: pad of empty text is only fill
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.pad("", 3, "-", "<"), "---");
+}

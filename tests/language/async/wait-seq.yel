@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: wait does not take a generator's seq
+// features: [async, generators]
+// negative: compile
+// error: 9:13: wait takes an async func's call or a future, found seq<s32>
+// ---
+numbers: func() -> seq<s32> { yield 1; }
+main: async func() {
+    let n = wait numbers();
+}

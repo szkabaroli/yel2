@@ -1,0 +1,10 @@
+// ---
+// description: starts-at is true where the text is at the byte
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("hello".starts-at(1, "ell"));
+    expect.holds(!"hello".starts-at(1, "elk"));
+}

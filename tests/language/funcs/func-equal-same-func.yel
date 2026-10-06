@@ -1,0 +1,14 @@
+// ---
+// description: func values are equal where they are the same func
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+inc: func(x: s32) -> s32 { x + 1 }
+square: func(x: s32) -> s32 { x * x }
+
+main: func() {
+    let f: func(s32) -> s32 = square;
+    expect.holds(f == square);
+    expect.holds(f != inc);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: origin of a URL with no host is null
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("mailto:a@b"));
+    expect.equal(url.origin(u), "null");
+}

@@ -1,0 +1,15 @@
+// ---
+// description: a closure returns a closure that keeps both environments
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+make: func(base: s32) -> func(s32) -> func(s32) -> s32 {
+    { first -> { second -> base + first + second } }
+}
+
+main: func() {
+    let step = make(100)(20);
+    expect.equal(step(3), 123);
+    expect.equal(step(4), 124);
+}

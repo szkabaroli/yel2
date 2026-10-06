@@ -1,0 +1,10 @@
+// ---
+// description: unwrap-or gives the other value for none
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: option<s32> = none;
+    expect.equal(nothing.unwrap-or(7), 7);
+}

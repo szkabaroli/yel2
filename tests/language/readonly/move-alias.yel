@@ -1,0 +1,16 @@
+// ---
+// description: does not compile: out is moved while also is another name for it (or holds it)
+// features: [readonly]
+// negative: compile
+// error: 14:43: out is moved while also is another name for it (or holds it)
+// note: also could still use it after the move
+// ---
+from "wasi:cli" include stdout;
+
+main: async func() {
+    let (out, w) = stream-pair(4);
+    let also = out;
+    w.close();
+    let written = stdout.write-via-stream(out);
+    wait written;
+}

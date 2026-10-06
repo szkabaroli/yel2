@@ -1,0 +1,11 @@
+// ---
+// description: add of a zero duration gives the same instant
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let start = time.from-unix-millis(123456);
+    expect.equal(time.add(start, time.nanoseconds(0)), start);
+}

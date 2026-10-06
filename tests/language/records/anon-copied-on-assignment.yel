@@ -1,0 +1,13 @@
+// ---
+// description: an anonymous record is a value, copied on assignment
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let a = { x: 1, y: 2, };
+    let b = a;
+    b = { x: 5, y: 6, };
+    expect.equal(a.x, 1);
+    expect.equal(b.x, 5);
+}

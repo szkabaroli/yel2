@@ -1,0 +1,12 @@
+// ---
+// description: a func with defaults is called with every argument through a value
+// features: [funcs, defaults]
+// ---
+from "std:testing" include expect;
+
+scale: func(value: s32, factor: s32 = 10) -> s32 { value * factor }
+
+main: func() {
+    let f: func(s32, s32) -> s32 = scale;
+    expect.equal(f(3, 4), 12);
+}

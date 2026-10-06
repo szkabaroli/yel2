@@ -1,0 +1,15 @@
+// ---
+// description: the guard of an arm whose pattern does not fit is never run
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+let calls: s32;
+check: func(value: bool) -> bool { calls += 1; value }
+main: func() {
+    let n = 5;
+    match n {
+        1 if check(true) => {}
+        _ => {}
+    }
+    expect.equal(calls, 0);
+}

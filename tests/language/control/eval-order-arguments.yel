@@ -1,0 +1,12 @@
+// ---
+// description: a call's arguments are evaluated left to right
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<s32>;
+mark: func(n: s32) -> s32 { trace.push(n); n }
+add3: func(a: s32, b: s32, c: s32) -> s32 { a + b + c }
+main: func() {
+    expect.equal(add3(mark(1), mark(2), mark(3)), 6);
+    expect.equal(trace, [1, 2, 3,]);
+}

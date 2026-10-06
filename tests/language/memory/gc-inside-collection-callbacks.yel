@@ -1,0 +1,15 @@
+// ---
+// description: closures given to filter and map allocate while the list being traversed is rooted
+// features: [memory, closures, gc]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let words: list<string> = [];
+    for i in 0..500 { words.push("word {i}"); }
+    let kept = words.filter({ word -> "{word}-{word}".len() > 16 });
+    let lengths = kept.map({ word -> "{word}/{word}/{word}".len() });
+    expect.equal(words.len(), 500);
+    expect.equal(kept.len(), 400);
+    expect.equal(lengths.len(), 400);
+}

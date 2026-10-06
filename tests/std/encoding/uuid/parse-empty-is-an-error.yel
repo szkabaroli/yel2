@@ -1,0 +1,10 @@
+// ---
+// description: uuid.parse refuses empty text
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(expect.err(uuid.parse("")), "a UUID is 36 characters, not 0");
+}

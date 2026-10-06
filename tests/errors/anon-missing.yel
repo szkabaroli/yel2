@@ -1,9 +1,0 @@
-// error: 5:5: the match has no arm for { x: 1, y: false }: add one, or a _ arm
-type point = { x: s32, y: bool };
-main: func() {
-    let p: point = { x: 1, y: true, };
-    match p {
-        { y: true } => {}
-        { x: 0, y: false } => {}
-    }
-}

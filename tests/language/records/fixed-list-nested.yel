@@ -1,0 +1,13 @@
+// ---
+// description: a fixed-length list of fixed-length lists
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let grid: list<list<u8, 2>, ?> = [[1, 2], [3, 4], [5, 6]];
+    expect.equal(grid.len(), 3);
+    expect.equal(grid[2][1], 6);
+    grid[0] = [9, 2];
+    expect.equal(grid[0][0], 9);
+}

@@ -1,0 +1,34 @@
+// ---
+// description: effects dirty at one flush run in the order they were made
+// features: [observable, reactive]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let profile = fresh();
+    let log: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ -> let _ = profile.id; log.push("first"); { -> } });
+        let _ = reactive.effect({ -> let _ = profile.id; log.push("second"); { -> } });
+    });
+    log = [];
+    profile.id = 2;
+    reactive.flush();
+    expect.equal(log, ["first", "second",]);
+    reactive.dispose(owner);
+}

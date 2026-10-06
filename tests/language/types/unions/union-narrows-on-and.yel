@@ -1,0 +1,15 @@
+// ---
+// description: the right side of && sees the narrowing
+// features: [types, unions, is]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+big: func(who: id) -> bool { who is s32 && who > 100 }
+
+main: func() {
+    expect.holds(big(200));
+    expect.holds(!big(5));
+    expect.holds(!big("x"));
+}

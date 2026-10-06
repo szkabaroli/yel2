@@ -1,0 +1,11 @@
+// ---
+// description: to-iso always writes three digits of milliseconds and a Z
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.to-iso(time.from-unix-millis(5000)), "1970-01-01T00:00:05.000Z");
+    expect.equal(time.to-iso(time.from-unix-millis(5007)), "1970-01-01T00:00:05.007Z");
+}

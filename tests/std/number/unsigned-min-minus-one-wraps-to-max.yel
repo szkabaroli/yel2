@@ -1,0 +1,10 @@
+// ---
+// description: subtracting 1 from u8.MIN wraps to u8.MAX
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let bottom: u8 = u8.MIN;
+    expect.equal(bottom - 1, u8.MAX);
+}

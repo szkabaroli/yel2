@@ -1,0 +1,12 @@
+// ---
+// description: pop can empty a list
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2,];
+    xs.pop();
+    xs.pop();
+    expect.equal(xs.len(), 0);
+}

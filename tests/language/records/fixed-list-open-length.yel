@@ -1,0 +1,11 @@
+// ---
+// description: list<T, ?> takes its length from the let's value
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names: list<string, ?> = ["ada", "grace", "barbara", "frances",];
+    expect.equal(names.len(), 4);
+    expect.equal(names[3], "frances");
+}

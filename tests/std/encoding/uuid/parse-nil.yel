@@ -1,0 +1,12 @@
+// ---
+// description: uuid.parse reads the nil UUID
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id = expect.ok(uuid.parse("00000000-0000-0000-0000-000000000000"));
+    expect.equal(id.high, 0);
+    expect.equal(id.low, 0);
+}

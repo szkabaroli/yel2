@@ -1,9 +1,0 @@
-// error: 6:24: label-view.Label takes props, not styles: style.pad goes on an element in it
-module page-view {
-    view Page {
-        VStack {
-            label-view.Label { title: "a" }
-            label-view.Label { style.pad: 8.0 }
-        }
-    }
-}

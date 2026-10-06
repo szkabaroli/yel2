@@ -1,0 +1,31 @@
+// ---
+// description: an effect runs again at a flush after what it read changed
+// features: [observable, reactive]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let profile = fresh();
+    let seen: list<u32> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { -> let _ = reactive.effect({ -> seen.push(profile.id); { -> } }); });
+    profile.id = 2;
+    expect.equal(seen, [1,]);
+    reactive.flush();
+    expect.equal(seen, [1, 2,]);
+    reactive.dispose(owner);
+}

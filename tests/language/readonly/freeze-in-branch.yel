@@ -1,0 +1,15 @@
+// ---
+// description: a local frozen in one branch of an if
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let words: list<string> = ["a",];
+    words.push("b");
+    let size = 0;
+    if words.len() > 1 {
+        let frozen: list<string> & readonly = words;
+        size = frozen.len() as s32;
+    }
+    expect.equal(size, 2);
+}

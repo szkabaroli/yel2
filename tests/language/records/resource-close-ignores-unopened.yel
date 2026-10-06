@@ -1,0 +1,24 @@
+// ---
+// description: a match on a resource's state that is not open leaves it
+// features: [resources, variants]
+// ---
+from "std:testing" include expect;
+
+variant State { idle, busy(string), }
+resource Machine { state: State, }
+
+finish: func(self: Machine) {
+    match self.state {
+        busy(job) => { self.state = State.idle; }
+        _ => {}
+    }
+}
+
+main: func() {
+    let machine: Machine = { state: State.idle, };
+    machine.finish();
+    expect.equal("{machine.state}", "idle");
+    machine.state = State.busy("work");
+    machine.finish();
+    expect.equal("{machine.state}", "idle");
+}

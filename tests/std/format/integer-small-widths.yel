@@ -1,0 +1,9 @@
+// ---
+// description: an interpolated s8 and u8 at their bounds
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{s8.MIN} {s8.MAX} {u8.MAX}", "-128 127 255");
+}

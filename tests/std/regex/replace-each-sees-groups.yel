@@ -1,0 +1,9 @@
+// ---
+// description: replace-each gives the func each match with its groups
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/(\w)(\d)/.replace-each("a1 b2", { m -> m.groups[1].unwrap-or("") + m.groups[0].unwrap-or("") }), "1a 2b");
+}

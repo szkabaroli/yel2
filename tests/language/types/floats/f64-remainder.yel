@@ -1,0 +1,12 @@
+// ---
+// description: % on floats has the dividend's sign
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 5.5;
+    expect.equal(value % 2.0, 1.5);
+    expect.equal(-value % 2.0, -1.5);
+    expect.equal(value % -2.0, 1.5);
+}

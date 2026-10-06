@@ -1,0 +1,9 @@
+// ---
+// description: main may give no result
+// features: [syntax,functions]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(true);
+}

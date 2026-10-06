@@ -1,0 +1,9 @@
+// ---
+// description: with the s flag a dot matches a line feed
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(/a.b/s.test("a\nb"));
+}

@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: argument 1 of push is readonly, and push writes it
+// features: [readonly]
+// negative: compile
+// error: 9:5: argument 1 of push is readonly, and push writes it
+// ---
+main: func() {
+    let fixed: list<string> & readonly = ["a",];
+    fixed.push("b");
+}

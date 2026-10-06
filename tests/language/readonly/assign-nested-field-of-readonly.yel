@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: .name of a Inner & readonly: a readonly value's fields are not assigned
+// features: [readonly]
+// negative: compile
+// error: 11:5: .name of a Inner & readonly: a readonly value's fields are not assigned
+// ---
+resource Inner { name: string, }
+resource Outer { inner: Inner, }
+main: func() {
+    let outer: Outer & readonly = { inner: { name: "a", }, };
+    outer.inner.name = "b";
+}

@@ -1,0 +1,16 @@
+// ---
+// description: two names of a resource are one object
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+main: func() {
+    let a: Counter = { value: 1, };
+    let same = a;
+    same.value = 5;
+    expect.equal(a.value, 5);
+    a.value += 1;
+    expect.equal(same.value, 6);
+}

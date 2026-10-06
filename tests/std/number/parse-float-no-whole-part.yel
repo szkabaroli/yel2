@@ -1,0 +1,9 @@
+// ---
+// description: parse-float reads a point with digits after it only
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float(".5"), some(0.5));
+}

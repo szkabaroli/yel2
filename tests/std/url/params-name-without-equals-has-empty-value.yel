@@ -1,0 +1,10 @@
+// ---
+// description: params gives an empty value to a name with no =
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("flag"), [("flag", ""),]);
+}

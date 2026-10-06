@@ -1,0 +1,18 @@
+// ---
+// description: a module's add and a set's add are both found by the receiver
+// features: [funcs, methods]
+// ---
+from "std:testing" include expect;
+
+module mine {
+    add: func(a: s32, b: s32) -> s32 { a + b }
+    run: func() {
+        let values: set<string> = set.new();
+        values.add("a");
+        set.add(values, "b");
+        expect.equal(add(1, 2), 3);
+        expect.equal(values.values(), ["a", "b",]);
+    }
+}
+
+main: func() { mine.run(); }

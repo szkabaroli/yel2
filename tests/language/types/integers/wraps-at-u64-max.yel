@@ -1,0 +1,11 @@
+// ---
+// description: u64 addition wraps from its maximum to its minimum
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: u64 = u64.MAX;
+    expect.equal(top + 1, u64.MIN);
+    expect.equal(top + 2, u64.MIN + 1);
+}

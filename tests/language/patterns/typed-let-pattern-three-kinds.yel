@@ -1,0 +1,17 @@
+// ---
+// description: a typed binding for each kind of a union of three
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(value: s32 | string | bool) -> string {
+    match value {
+        let n: s32 => "n",
+        let s: string => "s",
+        let b: bool => "b",
+    }
+}
+main: func() {
+    expect.equal(describe(1), "n");
+    expect.equal(describe("a"), "s");
+    expect.equal(describe(true), "b");
+}

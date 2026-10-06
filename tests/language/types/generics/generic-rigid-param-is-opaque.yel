@@ -1,0 +1,17 @@
+// ---
+// description: inside the func T is only T: it can be passed on, stored and returned
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+keep: func<T>(value: T) -> list<T> {
+    let items: list<T> = [];
+    items.push(value);
+    items.push(value);
+    items
+}
+
+main: func() {
+    expect.equal(keep("a").len(), 2);
+    expect.equal(keep(5)[1], 5);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: a mutable value only its owner has is given to a func that keeps it readonly
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Shelf { items: list<string> & readonly, }
+shelve: func(items: list<string> & readonly) -> Shelf { { items: items, } }
+main: func() {
+    let items = ["a",];
+    items.push("b");
+    let shelf = shelve(items);
+    expect.equal(shelf.items.len(), 2);
+}

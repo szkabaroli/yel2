@@ -1,0 +1,14 @@
+// ---
+// description: base64.encode uses all 64 characters of its alphabet
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    let bytes: list<u8> = [];
+    for value in 0..48 { bytes.push((value * 5 + 1) as u8); }
+    let text = base64.encode(bytes);
+    expect.equal(text.len(), 64);
+    expect.equal(expect.ok(base64.decode(text)), bytes);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: one slash divides, two start a comment
+// features: [syntax,comments]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let half = 8 / 2;
+    expect.equal(half, 4);
+    let spaced = 8 / 4 / 2;
+    expect.equal(spaced, 1);
+}

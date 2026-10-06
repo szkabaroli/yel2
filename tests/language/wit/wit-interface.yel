@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: WIT package wasi:cli has no interface nope
+// features: [wit]
+// negative: compile
+// error: 7:1: WIT package wasi:cli has no interface nope
+// ---
+from "wasi:cli" include nope;
+main: func() -> s32 { 0 }

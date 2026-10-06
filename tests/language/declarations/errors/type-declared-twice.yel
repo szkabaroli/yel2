@@ -1,0 +1,9 @@
+// ---
+// description: a type alias declared twice should be an error; accepted silently
+// features: [declarations]
+// negative: compile
+// error: type a is declared twice
+// ---
+type a = s32;
+type a = s64;
+main: func() {}

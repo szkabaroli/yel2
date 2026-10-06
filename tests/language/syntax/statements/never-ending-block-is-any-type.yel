@@ -1,0 +1,16 @@
+// ---
+// description: a block that ends in a break is any type, so a match arm may give a value or break
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let total = 0;
+    let steps = 0;
+    loop {
+        let value = match steps { 3 => { break; }, _ => steps, };
+        total += value;
+        steps += 1;
+    }
+    expect.equal(total, 3);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: the first argument is the program's name, not empty
+// features: [cli]
+// ---
+from "std:testing" include expect;
+from "std:cli" include environment, exit;
+
+main: func() {
+    expect.holds(environment.get-arguments()[0].len() > 0);
+}

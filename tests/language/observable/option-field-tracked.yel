@@ -1,0 +1,18 @@
+// ---
+// description: an option field is a field like any other: read and written whole
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Page { message: option<string>, }
+
+main: func() {
+    let page: Page = { message: none, };
+    let seen: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { -> let _ = reactive.effect({ -> seen.push(page.message.unwrap-or("no messages")); { -> } }); });
+    page.message = some("hello");
+    reactive.flush();
+    expect.equal(seen, ["no messages", "hello",]);
+    reactive.dispose(owner);
+}

@@ -1,0 +1,19 @@
+// ---
+// description: run-async runs the command in the directory given
+// features: [process, async]
+// ---
+from "std:testing" include expect;
+from "std:process" include process;
+
+// how a child ended: its code, or minus its signal
+status: func(ended: result<process.ended, string>) -> s64 {
+    match ended {
+        ok(code(number)) => number,
+        ok(signal(number)) => -number,
+        err(_) => -1000,
+    }
+}
+
+main: async func() {
+    expect.equal(status(wait process.run-async("test", ["-d", "usr",], "/", [], "")), 0);
+}

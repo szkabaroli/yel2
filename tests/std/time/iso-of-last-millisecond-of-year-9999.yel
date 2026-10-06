@@ -1,0 +1,12 @@
+// ---
+// description: time.to-iso and time.weekday of 253402300799999 milliseconds after the epoch
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at = time.from-unix-millis(253402300799999);
+    expect.equal(time.to-iso(at), "9999-12-31T23:59:59.999Z");
+    expect.equal(time.weekday(time.to-date-time(at)), 5);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: join puts the separator between each two strings
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(join(["a", "b", "c",], "-"), "a-b-c");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: is with a kind of a union narrows to it
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(value: s32 | string) -> string {
+    if value is s32 { "number {value + 1}" } else { "text {value}" }
+}
+main: func() {
+    expect.equal(describe(1), "number 2");
+    expect.equal(describe("a"), "text a");
+}

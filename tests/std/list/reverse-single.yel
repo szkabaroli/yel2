@@ -1,0 +1,9 @@
+// ---
+// description: reverse of one item is that item
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([7,].reverse(), [7,]);
+}

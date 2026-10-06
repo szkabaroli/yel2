@@ -1,0 +1,10 @@
+// ---
+// description: base32.encode-unpadded of five bytes is the same as encode
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    expect.equal(base32.encode-unpadded("fooba".bytes()), base32.encode("fooba".bytes()));
+}

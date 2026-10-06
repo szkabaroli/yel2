@@ -1,0 +1,17 @@
+// ---
+// description: & keeps shared flags and ^ toggles
+// features: [types, flags]
+// ---
+from "std:testing" include expect;
+
+flags Access { read, write, execute, }
+
+main: func() {
+    let granted = Access.read | Access.write;
+    let only-write = granted & Access.write;
+    expect.holds(only-write.write);
+    expect.holds(!only-write.read);
+    let toggled = granted ^ Access.read;
+    expect.holds(!toggled.read);
+    expect.holds(toggled.write);
+}

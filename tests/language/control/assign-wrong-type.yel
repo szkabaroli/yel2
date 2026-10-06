@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value given x: expected an integer, found string
+// features: [control]
+// negative: compile
+// error: 9:9: the value given x: expected an integer, found string
+// ---
+main: func() {
+    let x = 1;
+    x = "one";
+}

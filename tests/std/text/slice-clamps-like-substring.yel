@@ -1,0 +1,10 @@
+// ---
+// description: slice clamps its ends like substring
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".slice(-3, 2), "he");
+    expect.equal("hello".slice(3, 50), "lo");
+}

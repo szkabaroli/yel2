@@ -1,0 +1,17 @@
+// ---
+// description: a record kept past its loop's turn is its own for each turn
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Vec { x: s32, y: s32, }
+
+main: func() {
+    let last: Vec = { x: 0, y: 0, };
+    let first = last;
+    for i in 0..3 { last = { x: i, y: i * i, }; }
+    expect.equal(last.x, 2);
+    expect.equal(last.y, 4);
+    expect.equal(first.x, 0);
+    expect.equal(first.y, 0);
+}

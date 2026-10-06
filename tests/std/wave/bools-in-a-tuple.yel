@@ -1,0 +1,7 @@
+// ---
+// description: bools in a tuple show as true and false
+// features: [wave]
+// ---
+main: func() {
+    print("{(true, false)}\n");
+}

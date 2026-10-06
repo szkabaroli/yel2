@@ -1,0 +1,15 @@
+// ---
+// description: a func assigns a global and main reads it
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let count: s64;
+
+bump: func() { count += 1; }
+
+main: func() {
+    bump();
+    bump();
+    expect.equal(count, 2);
+}

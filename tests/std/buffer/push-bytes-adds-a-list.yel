@@ -1,0 +1,11 @@
+// ---
+// description: push-bytes puts the bytes of a list at the end
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(2);
+    b.push-bytes([104, 105, 33,]);
+    expect.equal(b.to-string(), "hi!");
+}

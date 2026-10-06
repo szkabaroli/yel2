@@ -1,0 +1,22 @@
+// ---
+// description: an infinite generator read only in part
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+naturals: func() -> seq<s32> {
+    let next = 0;
+    loop {
+        yield next;
+        next += 1;
+    }
+}
+
+main: func() {
+    let seen: list<s32> = [];
+    for value in naturals() {
+        if value == 5 { break; }
+        seen.push(value);
+    }
+    expect.equal(seen, [0, 1, 2, 3, 4,]);
+}

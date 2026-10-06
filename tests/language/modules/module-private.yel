@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: module geometry has no func square
+// features: [modules]
+// negative: compile
+// error: 8:23: module geometry has no func square
+// ---
+from "../../packages/shapes" include geometry;
+main: func() -> s32 { geometry.square(2) }

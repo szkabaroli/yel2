@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: as converts a number, a bool or a char, not string
+// features: [types, casts]
+// negative: compile
+// error: 7:24: as converts a number, a bool or a char, not string
+// ---
+main: func() { let a = "1" as s32; }

@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the range holds no value: its end is before its start
+// features: [patterns]
+// negative: compile
+// error: 8:23: the range holds no value: its end is before its start
+// ---
+main: func() {
+    let r = match 5 { 9..=1 => 1, _ => 0, };
+}

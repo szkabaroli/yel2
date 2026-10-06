@@ -1,0 +1,28 @@
+// ---
+// description: does not compile: pick is a callback (a func's type): declare it on.pick: func(…);
+// features: [views]
+// negative: compile
+// error: 16:9: pick is a callback (a func's type): declare it on.pick: func(…);
+// error: 17:12: on.count is a callback: give it a func's type (on.pick: func(string);)
+// error: 18:9: on-close: a callback is on.close
+// error: 19:9: title needs a value to start with: title: T = value;
+// error: 20:12: on.check gives a value: give it one to start with (on.check: func(…) -> T = { … };)
+// error: 24:17: on-press: a handler is on.press
+// ---
+// a view's callbacks: a func's type and on.name go together; one with no value to start with does
+// nothing (but one that gives a value); a handler is on.name
+module m {
+    view Bad {
+        pick: func(string);
+        on.count: s32 = 0;
+        on-close: s32 = 0;
+        title: string;
+        on.check: func(string) -> bool;
+
+        VStack {
+            Button {
+                on-press: { -> }
+            }
+        }
+    }
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a map shows as its length
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    m.set(1, 2);
+    expect.equal("{m}", "map(1)");
+}

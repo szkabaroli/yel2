@@ -1,0 +1,9 @@
+// ---
+// description: some of an empty string is some
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(some("").is-some());
+}

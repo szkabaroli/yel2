@@ -1,0 +1,11 @@
+// ---
+// description: a width counts characters, not bytes
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let word = "é";
+    expect.equal("[{word:3}]", "[é  ]");
+    expect.equal("[{word:>3}]", "[  é]");
+}

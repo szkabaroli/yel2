@@ -1,0 +1,9 @@
+// ---
+// description: pad-start puts the fill before the text up to the width
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("7".pad-start(3, "0"), "007");
+}

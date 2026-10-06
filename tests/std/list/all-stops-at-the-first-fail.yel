@@ -1,0 +1,12 @@
+// ---
+// description: all does not ask about the items after the first that fails
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let calls = 0;
+    let every = [1, 2, 3, 4,].all({ n -> calls += 1; n < 2 });
+    expect.holds(!every);
+    expect.equal(calls, 2);
+}

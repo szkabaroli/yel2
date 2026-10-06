@@ -1,0 +1,16 @@
+// ---
+// description: when the guard fails the next arm is tried
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+pick: func(n: s32) -> string {
+    match n {
+        1 if false => "never",
+        1 => "one",
+        _ => "other",
+    }
+}
+main: func() {
+    expect.equal(pick(1), "one");
+    expect.equal(pick(2), "other");
+}

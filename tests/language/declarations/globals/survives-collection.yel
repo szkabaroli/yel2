@@ -1,0 +1,49 @@
+// ---
+// description: what a global holds survives many allocations and collections
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+resource Node { value: s64, next: option<Node>, }
+
+let seen: list<string>;
+let ages: map<string, s64>;
+let tags: set<string>;
+let last: option<Node>;
+let count: s64;
+
+remember: func(text: string) {
+    count += 1;
+    seen.push(text);
+    ages.set(text, text.len());
+    tags.add(text);
+    last = some({ value: count, next: last, });
+}
+
+chain: func() -> s64 {
+    let total = 0;
+    let at = last;
+    loop {
+        match at {
+            some(node) => {
+                total += node.value;
+                at = node.next;
+            }
+            none => { break; }
+        }
+    }
+    total
+}
+
+main: func() {
+    for word in ["a", "bb", "a", "ccc",] { remember(word); }
+    expect.equal(seen.len(), 4);
+    expect.equal(ages["bb"], 2);
+    expect.equal(tags.len(), 3);
+    expect.equal(chain(), 10);
+    for index in 0..20000 { remember("w{index % 50}"); }
+    expect.equal(seen.len(), 20004);
+    expect.equal(ages.len(), 53);
+    expect.equal(tags.len(), 53);
+    expect.equal(chain() % 1000, 10);
+}

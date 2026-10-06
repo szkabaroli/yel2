@@ -1,0 +1,10 @@
+// ---
+// description: a duration under a minute shows seconds and a fraction
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.milliseconds(1500)}", "1.5s");
+}

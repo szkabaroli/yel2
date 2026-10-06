@@ -1,0 +1,30 @@
+// ---
+// description: a variant holding a list of itself, summed recursively
+// features: [types, variants]
+// ---
+from "std:testing" include expect;
+
+variant Tree {
+    leaf(s32),
+    node(list<Tree>),
+    empty,
+}
+
+sum: func(tree: Tree) -> s32 {
+    match tree {
+        leaf(n) => n,
+        node(kids) => {
+            let total = 0;
+            for kid in kids { total += sum(kid); }
+            total
+        }
+        empty => 0,
+    }
+}
+
+main: func() {
+    let tree = Tree.node([Tree.leaf(1), Tree.node([Tree.leaf(2), Tree.empty,]), Tree.leaf(3),]);
+    expect.equal(sum(tree), 6);
+    expect.equal("{tree}", "node([leaf(1), node([leaf(2), empty]), leaf(3)])");
+    expect.equal(to-string(Tree.leaf(7)), "leaf(7)");
+}

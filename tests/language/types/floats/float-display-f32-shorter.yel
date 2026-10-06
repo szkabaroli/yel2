@@ -1,0 +1,10 @@
+// ---
+// description: an f32 shows fewer digits than the same value as f64
+// features: [types, floats, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let single: f32 = 1.0 / 3.0;
+    expect.equal("{single}", "0.33333334");
+}

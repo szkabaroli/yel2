@@ -1,0 +1,9 @@
+// ---
+// description: replace of the whole string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".replace("abc", "z"), "z");
+}

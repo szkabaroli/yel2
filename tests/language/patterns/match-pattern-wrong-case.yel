@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: dot is not a case of an integer
+// features: [patterns]
+// negative: compile
+// error: 9:23: dot is not a case of an integer
+// ---
+variant Shape { dot, circle(s32), }
+main: func() {
+    let r = match 1 { dot => 1, _ => 0, };
+}

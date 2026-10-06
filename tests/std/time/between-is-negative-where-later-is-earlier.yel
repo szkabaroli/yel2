@@ -1,0 +1,12 @@
+// ---
+// description: between gives a negative duration where the second instant is earlier
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let start = time.from-unix-millis(1000);
+    let later = time.add(start, time.minutes(90));
+    expect.equal(time.between(later, start).nanoseconds, -5400000000000);
+}

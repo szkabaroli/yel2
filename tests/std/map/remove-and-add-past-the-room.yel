@@ -1,0 +1,17 @@
+// ---
+// description: removed entries are dropped when the map grows again
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    for key in 0..100 { m.set(key, key); }
+    for key in 0..90 { m.remove(key); }
+    for key in 100..200 { m.set(key, key); }
+    expect.equal(m.len(), 110);
+    expect.equal(m.keys()[0], 90);
+    expect.equal(m.keys()[10], 100);
+    expect.equal(m[150], 150);
+    expect.holds(!m.has(45));
+}

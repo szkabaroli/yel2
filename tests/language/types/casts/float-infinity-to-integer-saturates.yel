@@ -1,0 +1,14 @@
+// ---
+// description: an infinity cast to an integer saturates
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let high: f64 = inf;
+    let low: f64 = -inf;
+    expect.equal(high as s16, 32767);
+    expect.equal(low as s16, -32768);
+    expect.equal(high as u16, 65535);
+    expect.equal(low as u16, 0);
+}

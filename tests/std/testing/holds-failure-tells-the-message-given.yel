@@ -1,0 +1,10 @@
+// ---
+// description: expect.holds tells the message given when it fails
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(false, "it must hold");
+}

@@ -1,0 +1,14 @@
+// ---
+// description: variants are equal by case and payload
+// features: [types, variants]
+// ---
+from "std:testing" include expect;
+
+variant Shape { dot, circle(s32), }
+
+main: func() {
+    expect.holds(Shape.circle(1) == Shape.circle(1));
+    expect.holds(Shape.circle(1) != Shape.circle(2));
+    expect.holds(Shape.dot == Shape.dot);
+    expect.holds(Shape.dot != Shape.circle(0));
+}

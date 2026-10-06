@@ -1,0 +1,19 @@
+// ---
+// description: sort keeps the order of items that compare equal
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+resource person { name: string, age: s32, }
+
+main: func() {
+    let people: list<person> = [
+        { name: "ada", age: 36, },
+        { name: "grace", age: 85, },
+        { name: "alan", age: 41, },
+        { name: "joan", age: 36, },
+        { name: "edsger", age: 41, },
+    ];
+    people.sort({ a, b -> a.age < b.age });
+    expect.equal(people.map({ who -> who.name }), ["ada", "joan", "alan", "edsger", "grace",]);
+}

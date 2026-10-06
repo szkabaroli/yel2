@@ -1,0 +1,15 @@
+// ---
+// description: a closure sees the binding's declared type, not the narrowing
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post";
+main: func() {
+    let m: method = "get";
+    let later = "";
+    if m is "get" {
+        let f: func() -> string = { "{m} later" };
+        later = f();
+    }
+    expect.equal(later, "get later");
+}

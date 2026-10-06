@@ -1,0 +1,12 @@
+// ---
+// description: #location gathers the file, line, column and func
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let here = #location;
+    expect.equal(here.line, 8);
+    expect.equal(here.func, "main");
+    expect.holds(here.file.ends-with("location-fields.yel"));
+}

@@ -1,0 +1,9 @@
+// ---
+// description: split of just the separator gives two empty pieces
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(",".split(","), ["", "",]);
+}

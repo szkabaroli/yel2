@@ -1,0 +1,10 @@
+// ---
+// description: zero padding keeps the sign in front
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = -42;
+    expect.equal("[{value:06}]", "[-00042]");
+}

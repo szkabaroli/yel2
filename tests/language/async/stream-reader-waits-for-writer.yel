@@ -1,0 +1,25 @@
+// ---
+// description: a reader of an empty stream waits until a task writes
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+produce: async func(out: writer<string>) {
+    wait yield-turn();
+    wait yield-turn();
+    log.push("writing");
+    wait out.write("late");
+    out.close();
+}
+
+main: async func() {
+    let (items, out) = stream-pair(1);
+    let producer = start produce(out);
+    let item = wait items.read();
+    log.push("read");
+    expect.equal(expect.some(item), "late");
+    expect.equal(log, ["writing", "read",]);
+    wait producer;
+}

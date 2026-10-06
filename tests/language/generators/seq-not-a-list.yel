@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a seq is not a list
+// features: [generators]
+// negative: compile
+// error: 9:28: the value of items: expected list<s32>, found seq<s32>
+// ---
+numbers: func() -> seq<s32> { yield 1; }
+main: func() {
+    let items: list<s32> = numbers();
+}

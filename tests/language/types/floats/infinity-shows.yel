@@ -1,0 +1,11 @@
+// ---
+// description: infinities show as inf and -inf
+// features: [types, floats, infinity, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let high: f64 = inf;
+    expect.equal("{high}", "inf");
+    expect.equal("{-high}", "-inf");
+}

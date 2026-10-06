@@ -1,0 +1,29 @@
+// ---
+// description: what a child printed is written when it ends
+// features: [process]
+// ---
+from "std:testing" include expect;
+from "std:process" include process;
+
+// how a child ended: its code, or minus its signal
+status: func(ended: result<process.ended, string>) -> s64 {
+    match ended {
+        ok(code(number)) => number,
+        ok(signal(number)) => -number,
+        err(_) => -1000,
+    }
+}
+
+main: func() {
+    match process.fork() {
+        ok(none) => {
+            print("from the child\n");
+            process.end(0);
+        }
+        ok(some(child)) => {
+            expect.equal(status(process.wait(child)), 0);
+            print("from the parent\n");
+        }
+        err(problem) => expect.fail(problem),
+    }
+}

@@ -1,0 +1,9 @@
+// ---
+// description: lines keeps a carriage return that no line feed follows
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a\rb".lines(), ["a\rb",]);
+}

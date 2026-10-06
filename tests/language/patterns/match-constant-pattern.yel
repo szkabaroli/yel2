@@ -1,0 +1,19 @@
+// ---
+// description: a const as a pattern compares with its value
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+const LIMIT = 10;
+const NAME = "ada";
+size: func(n: s32) -> string {
+    match n { LIMIT => "limit", _ => "other", }
+}
+who: func(s: string) -> bool {
+    match s { NAME => true, _ => false, }
+}
+main: func() {
+    expect.equal(size(10), "limit");
+    expect.equal(size(9), "other");
+    expect.holds(who("ada"));
+    expect.holds(!who("bob"));
+}

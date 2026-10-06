@@ -1,0 +1,11 @@
+// ---
+// description: format writes Z for a zero offset
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when: time.date-time = { year: 2026, month: 10, day: 5, hour: 12, minute: 34, second: 56, nanosecond: 0, offset: 0, };
+    expect.equal(time.format(when), "2026-10-05T12:34:56Z");
+}

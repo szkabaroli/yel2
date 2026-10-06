@@ -1,0 +1,19 @@
+// ---
+// description: result<_, E> has no ok payload
+// features: [types, result]
+// ---
+from "std:testing" include expect;
+
+check: func(valid: bool) -> result<_, string> {
+    if valid { ok } else { err("invalid") }
+}
+
+main: func() {
+    let matched = false;
+    match check(true) {
+        ok => { matched = true; }
+        err(_) => {}
+    }
+    expect.holds(matched);
+    expect.equal(expect.err(check(false)), "invalid");
+}

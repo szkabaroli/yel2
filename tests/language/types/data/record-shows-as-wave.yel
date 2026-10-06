@@ -1,0 +1,13 @@
+// ---
+// description: a record shows as its fields in braces
+// features: [types, records, display]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+main: func() {
+    let point: Point = { x: 3, y: 4, };
+    expect.equal("{point}", "\{x: 3, y: 4\}");
+    expect.equal(point.x + point.y, 7);
+}

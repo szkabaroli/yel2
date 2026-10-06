@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: expected a name, found '}'
+// features: [syntax,statements]
+// negative: compile
+// error: 9:1: expected a name, found '}'
+// ---
+main: func() {
+}
+}

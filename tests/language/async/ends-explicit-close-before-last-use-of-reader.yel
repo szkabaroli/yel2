@@ -1,0 +1,22 @@
+// ---
+// description: an explicit close lets the reader finish while the writer's func goes on
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+drain: async func(items: stream<s32>) {
+    wait for x in items { log.push("item {x}"); }
+    log.push("end");
+}
+
+main: async func() {
+    let (items, out) = stream-pair(4);
+    let reader = start drain(items);
+    wait out.write(1);
+    out.close();
+    wait reader;
+    log.push("after");
+    expect.equal(log, ["item 1", "end", "after",]);
+}

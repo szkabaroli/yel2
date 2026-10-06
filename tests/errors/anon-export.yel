@@ -1,4 +1,0 @@
-// error: 3:5: { x: s32, y: s32 } crosses WIT as a record, which needs a name: type name = { x: s32, y: s32 };
-module api {
-    origin: func() -> { x: s32, y: s32 } { { x: 0, y: 0, } }
-}

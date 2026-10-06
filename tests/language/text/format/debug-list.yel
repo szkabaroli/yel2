@@ -1,0 +1,11 @@
+// ---
+// description: ? on a list quotes the strings in it
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{[1, 2]:?}", "[1, 2]");
+    let names = ["a", "b"];
+    expect.equal("{names:?}", "[\"a\", \"b\"]");
+}

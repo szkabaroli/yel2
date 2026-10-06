@@ -1,0 +1,10 @@
+// ---
+// description: > pads on the left
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    expect.equal("[{name:>6}]", "[   yel]");
+}

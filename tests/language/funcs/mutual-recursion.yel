@@ -1,0 +1,15 @@
+// ---
+// description: two funcs call each other
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+is-even: func(n: s32) -> bool { if n == 0 { true } else { is-odd(n - 1) } }
+
+is-odd: func(n: s32) -> bool { if n == 0 { false } else { is-even(n - 1) } }
+
+main: func() {
+    expect.holds(is-even(10));
+    expect.holds(!is-even(7));
+    expect.holds(is-odd(7));
+}

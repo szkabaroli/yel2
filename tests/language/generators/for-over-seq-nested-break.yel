@@ -1,0 +1,20 @@
+// ---
+// description: break in an inner for over a seq leaves only the inner one
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+counting: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield x; }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for outer in counting(3) {
+        for inner in counting(10) {
+            if inner > outer { break; }
+            seen.push("{outer}{inner}");
+        }
+    }
+    expect.equal(seen, ["00", "10", "11", "20", "21", "22",]);
+}

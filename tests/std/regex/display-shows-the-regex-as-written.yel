@@ -1,0 +1,10 @@
+// ---
+// description: a regex shows as /pattern/flags
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{/a+b/i}", "/a+b/i");
+    expect.equal("{/x/}", "/x/");
+}

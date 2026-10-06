@@ -1,0 +1,15 @@
+// ---
+// description: a for loop walks a fixed-length list's items
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+total: func(v: list<s32, 3>) -> s32 {
+    let sum = 0;
+    for x in v { sum += x; }
+    sum
+}
+
+main: func() {
+    expect.equal(total([10, 20, 30]), 60);
+}

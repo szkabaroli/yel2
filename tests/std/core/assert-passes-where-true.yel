@@ -1,0 +1,9 @@
+// ---
+// description: assert does nothing for a condition that holds
+// features: [core]
+// ---
+main: func() {
+    assert(1 + 1 == 2);
+    assert(true);
+    assert("a" == "a", "never shown");
+}

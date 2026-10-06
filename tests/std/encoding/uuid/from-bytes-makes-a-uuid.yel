@@ -1,0 +1,11 @@
+// ---
+// description: uuid.from-bytes makes a UUID of 16 bytes
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let bytes: list<u8> = [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255,];
+    expect.equal(uuid.to-string(expect.ok(uuid.from-bytes(bytes))), "00112233-4455-6677-8899-aabbccddeeff");
+}

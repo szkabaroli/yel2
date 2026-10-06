@@ -1,0 +1,26 @@
+// ---
+// description: regex /(?:ab)+/ on "ababab x ab": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /(?:ab)+/;
+    let text = "ababab x ab";
+    expect.equal(shown(regex-under-test.find(text)), "\"ababab\"@0-6[]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\"ababab\"@0-6[] \"ab\"@9-11[]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "<ababab> x <ab>");
+}

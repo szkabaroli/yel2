@@ -1,0 +1,9 @@
+// ---
+// description: replace keeps a $< with no > as it is
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/a/.replace("a", "$<x"), "$<x");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: parse-int refuses a letter after the digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int("12a"));
+    expect.none(number.parse-int("abc"));
+}

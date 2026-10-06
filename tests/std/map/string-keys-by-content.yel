@@ -1,0 +1,12 @@
+// ---
+// description: string keys are the same where their bytes are
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("ab" + "c", 1);
+    expect.equal(m["a" + "bc"], 1);
+    expect.equal(m.len(), 1);
+}

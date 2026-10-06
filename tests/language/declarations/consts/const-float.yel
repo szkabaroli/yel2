@@ -1,0 +1,11 @@
+// ---
+// description: a const may be a float
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const HALF: f64 = 0.5;
+
+main: func() {
+    expect.equal(HALF * 4.0, 2.0);
+}

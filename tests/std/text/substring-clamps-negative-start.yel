@@ -1,0 +1,9 @@
+// ---
+// description: substring takes a negative start as 0
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".substring(-5, 2), "he");
+}

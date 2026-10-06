@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: the match has no arm for none: add one, or a _ arm
+// features: [types, option]
+// negative: compile
+// error: 9:5: the match has no arm for none: add one, or a _ arm
+// ---
+main: func() {
+    let a: option<s32> = some(1);
+    match a {
+        some(v) => {}
+    }
+}

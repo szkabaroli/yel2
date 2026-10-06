@@ -1,0 +1,13 @@
+// ---
+// description: a == (a / b) * b + a % b for each sign combination
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    for dividend in [17, -17,] {
+        for divisor in [5, -5,] {
+            expect.equal((dividend / divisor) * divisor + dividend % divisor, dividend);
+        }
+    }
+}

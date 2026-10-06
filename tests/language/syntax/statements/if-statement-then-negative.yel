@@ -1,0 +1,15 @@
+// ---
+// description: an if that starts a statement is the statement: a following -1 is its own statement
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+value: func(flag: bool) -> s32 {
+    if flag { expect.holds(flag); }
+    -64
+}
+
+main: func() {
+    expect.equal(value(true), -64);
+    expect.equal(value(false), -64);
+}

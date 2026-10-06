@@ -1,0 +1,15 @@
+// ---
+// description: the err side of result<_, string> carries its message
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+run: func(fails: bool) -> result<(), string> {
+    if fails { return err("negative"); }
+    ok(())
+}
+
+main: func() {
+    expect.equal(expect.err(run(true)), "negative");
+    expect.ok(run(false));
+}

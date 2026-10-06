@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: the right of +: expected an integer, found string
+// features: [text]
+// negative: compile
+// error: 11:12: the right of +: expected an integer, found string
+// ---
+main: func() -> s32 {
+    let n = 1;
+    // the error is inside an interpolation, on its second line
+    print("a {n}
+    b {n + "x"}");
+    0
+}

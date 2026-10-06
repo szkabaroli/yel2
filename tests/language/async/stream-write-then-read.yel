@@ -1,0 +1,12 @@
+// ---
+// description: an item written is read back
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(4);
+    wait out.write(7);
+    expect.equal(expect.some(wait items.read()), 7);
+    out.close();
+}

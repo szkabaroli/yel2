@@ -1,0 +1,14 @@
+// ---
+// description: an unsigned integer cast to the signed type of its width wraps
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let high: u8 = 255;
+    expect.equal(high as s8, -1);
+    let top: u32 = 4294967295;
+    expect.equal(top as s32, -1);
+    let half: u64 = 9223372036854775808;
+    expect.equal(half as s64, s64.MIN);
+}

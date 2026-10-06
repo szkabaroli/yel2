@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: totl is not declared
+// features: [funcs]
+// negative: compile
+// error: 11:13: totl is not declared
+// help: did you mean total?
+// ---
+main: func() {
+    let total = 0;
+    for x in [1, 2,] { total += x; }
+    print("{totl}\n");
+}

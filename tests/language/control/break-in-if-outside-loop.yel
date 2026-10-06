@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: break outside a loop
+// features: [control]
+// negative: compile
+// error: 8:15: break outside a loop
+// ---
+main: func() {
+    if true { break; }
+}

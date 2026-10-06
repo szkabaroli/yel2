@@ -1,0 +1,13 @@
+// ---
+// description: len counts bytes of a string, items of a list and bytes of a buffer
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push("abc");
+    expect.equal("héllo".len(), 6);
+    expect.equal([1, 2, 3,].len(), 3);
+    expect.equal(b.len(), 3);
+}

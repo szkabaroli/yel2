@@ -1,0 +1,19 @@
+// ---
+// description: reactive.on-cleanup adds a cleanup to the owner
+// features: [reactive]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let log: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        reactive.on-cleanup({ -> log.push("one"); });
+        reactive.on-cleanup({ -> log.push("two"); });
+    });
+    expect.equal(log.len(), 0);
+    reactive.dispose(owner);
+    expect.equal(log.len(), 2);
+    expect.contains(log, "one");
+    expect.contains(log, "two");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a func held in a record shows as <func> where the record is printed
+// features: [funcs, records]
+// ---
+inc: func(x: s32) -> s32 { x + 1 }
+
+resource Op { label: string, run: func(s32) -> s32, }
+
+main: func() {
+    let op: Op = { label: "inc", run: inc, };
+    print("{op}\n");
+}

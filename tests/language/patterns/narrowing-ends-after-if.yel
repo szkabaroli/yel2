@@ -1,0 +1,12 @@
+// ---
+// description: after an if without a leave the name is the declared type again
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post";
+describe: func(m: method) -> string { "m is {m}" }
+main: func() {
+    let m: method = "post";
+    if m is "get" { }
+    expect.equal(describe(m), "m is post");
+}

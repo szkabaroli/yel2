@@ -1,0 +1,11 @@
+// ---
+// description: an argument given for #caller-expression is used
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+text-of: func(value: s32, written: string = #caller-expression(value)) -> string { written }
+
+main: func() {
+    expect.equal(text-of(1, "custom"), "custom");
+}

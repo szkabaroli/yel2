@@ -1,0 +1,16 @@
+// ---
+// description: a case declared with a () payload is matched with ()
+// features: [types, unit, match]
+// ---
+from "std:testing" include expect;
+
+variant Signal { idle, ping(()), level(u32), }
+
+main: func() {
+    let matched = false;
+    match Signal.ping {
+        ping(()) => { matched = true; }
+        _ => {}
+    }
+    expect.holds(matched);
+}

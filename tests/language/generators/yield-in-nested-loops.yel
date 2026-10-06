@@ -1,0 +1,20 @@
+// ---
+// description: yields in nested loops come in nesting order
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+pairs: func(size: s32) -> seq<string> {
+    for row in 0..size {
+        for column in 0..size {
+            if column > row { break; }
+            yield "{row}{column}";
+        }
+    }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for item in pairs(3) { seen.push(item); }
+    expect.equal(seen, ["00", "10", "11", "20", "21", "22",]);
+}

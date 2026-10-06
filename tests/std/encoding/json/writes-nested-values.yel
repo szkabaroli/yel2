@@ -1,0 +1,20 @@
+// ---
+// description: json.write writes values inside values
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let inner = json.object([("list", json.value.array([json.value.array([]),])),]);
+    let item = json.object([("inner", inner),]);
+    expect.equal(json.write(item), "\{\"inner\":\{\"list\":[[]]\}\}");
+}

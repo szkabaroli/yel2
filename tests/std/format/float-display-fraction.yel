@@ -1,0 +1,9 @@
+// ---
+// description: a float shows the shortest digits that read back
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{0.5} {2.25} {-0.125}", "0.5 2.25 -0.125");
+}

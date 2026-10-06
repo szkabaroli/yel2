@@ -1,0 +1,17 @@
+// ---
+// description: version 7 UUIDs stay in order when many are made in a millisecond
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let previous = uuid.time-ordered();
+    for index in 0..6000 {
+        let next = uuid.time-ordered();
+        let before = (previous.high >> 16) * 4096 + (previous.high & 4095);
+        let after = (next.high >> 16) * 4096 + (next.high & 4095);
+        expect.holds(after > before);
+        previous = next;
+    }
+}

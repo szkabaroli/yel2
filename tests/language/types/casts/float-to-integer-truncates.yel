@@ -1,0 +1,12 @@
+// ---
+// description: a float cast to an integer drops the fraction toward zero
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let positive: f64 = 2.9;
+    let negative: f64 = -2.9;
+    expect.equal(positive as s32, 2);
+    expect.equal(negative as s32, -2);
+}

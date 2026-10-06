@@ -1,0 +1,16 @@
+// ---
+// description: a fixed-length list parameter is the callee's copy
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+zero-first: func(v: list<s32, 3>) -> s32 {
+    v[0] = 0;
+    v[0] + v[1]
+}
+
+main: func() {
+    let v: list<s32, 3> = [1, 2, 3];
+    expect.equal(zero-first(v), 2);
+    expect.equal(v[0], 1);
+}

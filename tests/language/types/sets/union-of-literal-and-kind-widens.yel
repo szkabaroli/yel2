@@ -1,0 +1,14 @@
+// ---
+// description: a literal type is assignable to a union of its kind and other things
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type reply = "yes" | "no" | s32;
+
+main: func() {
+    let one: reply = "yes";
+    let other: reply = 7;
+    expect.holds(one == "yes");
+    expect.holds(other == 7);
+}

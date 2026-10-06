@@ -1,0 +1,22 @@
+// ---
+// description: alternatives together may cover a type
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+name: func(flag: bool) -> string {
+    match flag {
+        true => "yes",
+        false => "no",
+    }
+}
+sign: func(n: s8) -> string {
+    match n {
+        -128..=-1 | 0 => "not positive",
+        1..=127 => "positive",
+    }
+}
+main: func() {
+    expect.equal(name(true), "yes");
+    expect.equal(sign(0), "not positive");
+    expect.equal(sign(1), "positive");
+}

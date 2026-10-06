@@ -1,0 +1,18 @@
+// ---
+// description: a case with a list payload compares the list by identity
+// features: [types, variants]
+// ---
+from "std:testing" include expect;
+
+variant Tree {
+    leaf(s32),
+    node(list<Tree>),
+    empty,
+}
+
+main: func() {
+    expect.holds(Tree.node([Tree.leaf(1),]) != Tree.node([Tree.leaf(1),]));
+    expect.holds(Tree.empty == Tree.empty);
+    let kids = [Tree.leaf(1),];
+    expect.holds(Tree.node(kids) == Tree.node(kids));
+}

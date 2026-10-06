@@ -1,0 +1,30 @@
+// ---
+// description: observe.rearm watches again after a change
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let profile = fresh();
+    let told = 0;
+    let watch = observe.track({ -> let _ = profile.id; }, { -> told += 1; });
+    profile.id = 2;
+    expect.equal(told, 1);
+    observe.rearm(watch);
+    profile.id = 3;
+    expect.equal(told, 2);
+}

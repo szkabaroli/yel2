@@ -1,0 +1,12 @@
+// ---
+// description: a fixed-length list is indexed by a variable
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let v: list<s32, 4> = [10, 20, 30, 40];
+    let sum = 0;
+    for i in 0..4 { sum += v[i] * (i as s32); }
+    expect.equal(sum, 200);
+}

@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: an if's condition: expected bool, found an integer
+// features: [control]
+// negative: compile
+// error: 7:26: an if's condition: expected bool, found an integer
+// ---
+main: func() -> s32 { if 1 { 0 } else { 1 } }

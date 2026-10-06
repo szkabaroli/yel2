@@ -1,0 +1,9 @@
+// ---
+// description: join with an empty separator just concatenates
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(join(["a", "b", "c",], ""), "abc");
+}

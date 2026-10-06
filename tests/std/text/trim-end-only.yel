@@ -1,0 +1,9 @@
+// ---
+// description: trim-end takes spaces off the end only
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("  hi  ".trim-end(), "  hi");
+}

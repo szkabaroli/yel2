@@ -1,0 +1,19 @@
+// ---
+// description: json.object keeps the last value of a name given twice
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let item = json.object([("a", json.value.number("1")), ("a", json.value.number("2")),]);
+    expect.equal(json.write(item), "\{\"a\":2\}");
+}

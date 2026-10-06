@@ -1,0 +1,12 @@
+// ---
+// description: none is not some of unit
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let present: option<()> = some(());
+    let absent: option<()> = none;
+    expect.holds(present.is-some());
+    expect.holds(absent.is-none());
+}

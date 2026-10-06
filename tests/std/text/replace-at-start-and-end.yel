@@ -1,0 +1,9 @@
+// ---
+// description: replace changes matches at both ends
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("xabx".replace("x", "_"), "_ab_");
+}

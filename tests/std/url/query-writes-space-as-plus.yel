@@ -1,0 +1,10 @@
+// ---
+// description: query writes a space as +
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.query([("q", "a b"),]), "q=a+b");
+}

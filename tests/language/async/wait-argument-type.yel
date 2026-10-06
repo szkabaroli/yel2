@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a waited call's arguments are checked as any call's
+// features: [async]
+// negative: compile
+// error: 9:23: argument 1 of work: expected s32, found string
+// ---
+work: async func(x: s32) -> s32 { x }
+main: async func() {
+    let n = wait work("a");
+}

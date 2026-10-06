@@ -1,0 +1,15 @@
+// ---
+// description: a union shows as the value of its kind
+// features: [types, unions, display]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let number: id = 3;
+    let text: id = "x";
+    expect.equal("{number}", "3");
+    expect.equal("{text}", "x");
+    expect.equal("{text:?}", "\"x\"");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: u64.MIN and u64.MAX are the least and greatest u64
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(u64.MIN, 0);
+    expect.equal(u64.MAX, 18446744073709551615);
+}

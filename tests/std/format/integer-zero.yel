@@ -1,0 +1,9 @@
+// ---
+// description: an interpolated zero is 0
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{0}", "0");
+}

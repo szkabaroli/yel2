@@ -1,0 +1,10 @@
+// ---
+// description: base64.decode refuses = before the end
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    expect.equal(expect.err(base64.decode("Zg==Zg==")), "not a base64 character at byte 2");
+}

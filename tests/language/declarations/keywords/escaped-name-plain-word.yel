@@ -1,0 +1,10 @@
+// ---
+// description: a percent sign before a plain word names the same thing
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let total = 5;
+    expect.equal(%total, 5);
+}

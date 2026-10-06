@@ -1,0 +1,9 @@
+// ---
+// description: ? on a tuple quotes its strings and chars
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{(1, "a", 'z'):?}", "(1, \"a\", 'z')");
+}

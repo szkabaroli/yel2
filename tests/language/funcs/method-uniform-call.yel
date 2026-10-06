@@ -1,0 +1,13 @@
+// ---
+// description: x.f(y) is the same call as f(x, y)
+// features: [funcs, methods]
+// ---
+from "std:testing" include expect;
+
+add: func(a: s32, b: s32) -> s32 { a + b }
+
+main: func() {
+    let x = 4;
+    expect.equal(x.add(3), add(x, 3));
+    expect.equal(x.add(3), 7);
+}

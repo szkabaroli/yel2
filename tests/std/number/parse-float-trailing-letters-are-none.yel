@@ -1,0 +1,9 @@
+// ---
+// description: parse-float refuses letters after the number
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("12abc"));
+}

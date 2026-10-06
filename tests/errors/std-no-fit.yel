@@ -1,4 +1,0 @@
-// error: 3:13: contains: none takes this first argument (an integer); one takes each of list<T>, string
-main: func() {
-    print("{contains(5, 1)}\n");
-}

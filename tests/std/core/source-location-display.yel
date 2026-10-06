@@ -1,0 +1,10 @@
+// ---
+// description: display of a source-location gives file:line:column
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let place: source-location = { file: "a.yel", line: 3, column: 9, func: "main", };
+    expect.equal(display(place), "a.yel:3:9");
+}

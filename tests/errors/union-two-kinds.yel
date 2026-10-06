@@ -1,9 +1,0 @@
-// error: 6:9: the pattern fits more than one kind of option<s32> | option<string>: match its type first (let x: T)
-type either = option<s32> | option<string>;
-main: func() {
-    let e: either = some(1);
-    match e {
-        some(x) => {}
-        none => {}
-    }
-}

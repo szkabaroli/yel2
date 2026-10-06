@@ -1,0 +1,9 @@
+// ---
+// description: find-all moves on one character past an empty match
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/x*/.find-all("ab").map({ m -> m.start }), [0, 1, 2,]);
+}

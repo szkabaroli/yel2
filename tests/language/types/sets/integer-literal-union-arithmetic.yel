@@ -1,0 +1,12 @@
+// ---
+// description: a literal-union value does arithmetic as its base, leaving the union
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type level = 1 | 2 | 3;
+
+main: func() {
+    let which: level = 2;
+    expect.equal(which + 10, 12);
+}

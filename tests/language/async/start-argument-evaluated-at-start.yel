@@ -1,0 +1,17 @@
+// ---
+// description: a started call takes its arguments as they are when it starts
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+echo: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x
+}
+
+main: async func() {
+    let x = 1;
+    let future = start echo(x);
+    x = 2;
+    expect.equal(wait future, 1);
+}

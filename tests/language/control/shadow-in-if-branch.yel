@@ -1,0 +1,13 @@
+// ---
+// description: a let in a branch is gone after the branch
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let x = "outer";
+    if true {
+        let x = "inner";
+        expect.equal(x, "inner");
+    }
+    expect.equal(x, "outer");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: split gives the whole text where nothing matches
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/x/.split("abc"), ["abc",]);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: a string with #embed text in an interpolation shows it
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = #embed("motd.txt");
+    expect.equal("[{text}]", "[hello embed\n]");
+}

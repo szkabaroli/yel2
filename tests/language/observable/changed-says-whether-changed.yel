@@ -1,0 +1,27 @@
+// ---
+// description: observe.changed says whether any of what was read changed since
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let profile = fresh();
+    let watch = observe.track({ -> let _ = profile.id; }, { -> });
+    expect.equal(observe.changed(watch), false);
+    profile.id += 1;
+    expect.equal(observe.changed(watch), true);
+}

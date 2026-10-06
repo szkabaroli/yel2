@@ -1,0 +1,12 @@
+// ---
+// description: a char's unicode escape names a scalar value
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('\u{41}' as u32, 65);
+    expect.equal('\u{1F600}' as u32, 128512);
+    expect.equal('\u{10FFFF}' as u32, 1114111);
+    expect.equal('\u{0}' as u32, 0);
+}

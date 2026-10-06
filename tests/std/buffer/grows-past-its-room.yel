@@ -1,0 +1,14 @@
+// ---
+// description: a buffer keeps its bytes as it grows many times over
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(0);
+    for index in 0..1000 { b.push-byte(97 + index % 26); }
+    expect.equal(b.len(), 1000);
+    let text = b.to-string();
+    expect.equal(text.byte-at(0), 97);
+    expect.equal(text.byte-at(999), 97 + 999 % 26);
+}

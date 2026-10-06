@@ -1,0 +1,12 @@
+// ---
+// description: a func of the program with a std name is the one called
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+// a program's own func of a std name is the one it calls
+repeat: func(s: string, n: s32) -> string { "(own repeat)" }
+
+main: func() {
+    expect.equal(repeat("ab", 3), "(own repeat)");
+}

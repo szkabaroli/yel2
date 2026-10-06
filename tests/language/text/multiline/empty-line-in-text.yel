@@ -1,0 +1,14 @@
+// ---
+// description: an empty line inside needs no spaces and stays empty
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        before
+
+        after
+        """;
+    expect.equal(text, "before\n\nafter");
+}

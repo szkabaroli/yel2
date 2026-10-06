@@ -1,0 +1,9 @@
+// ---
+// description: char-count counts the characters of ASCII text
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.char-count("hello"), 5);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: split on the empty text gives one piece per byte
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".split(""), ["a", "b", "c",]);
+}

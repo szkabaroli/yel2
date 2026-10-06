@@ -1,0 +1,22 @@
+// ---
+// description: a number's value is its text as written
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let item = expect.ok(json.parse("1.50"));
+    match item {
+        number(digits) => expect.equal(digits, "1.50"),
+        _ => expect.fail("not a number"),
+    }
+}

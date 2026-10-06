@@ -1,0 +1,12 @@
+// ---
+// description: a func without -> returns unit, usable as a value
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+nothing: func() -> () { () }
+
+main: func() {
+    let value: () = nothing();
+    expect.holds(value == ());
+}

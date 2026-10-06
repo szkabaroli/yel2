@@ -1,0 +1,16 @@
+// ---
+// description: the minimum divided by -1 wraps to the minimum, its remainder is 0
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let low: s32 = s32.MIN;
+    expect.equal(low / -1, s32.MIN);
+    expect.equal(low % -1, 0);
+    let narrow: s8 = s8.MIN;
+    expect.equal(narrow / -1, s8.MIN);
+    let wide: s64 = s64.MIN;
+    expect.equal(wide / -1, s64.MIN);
+    expect.equal(wide % -1, 0);
+}

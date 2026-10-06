@@ -1,0 +1,12 @@
+// ---
+// description: remove gives false for a key the map has not
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    expect.holds(!m.remove("b"));
+    expect.equal(m.len(), 1);
+}

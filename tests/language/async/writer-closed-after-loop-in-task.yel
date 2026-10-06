@@ -1,0 +1,18 @@
+// ---
+// description: a task that writes in a loop and returns closes its writer at the end
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+produce: async func(out: writer<s32>) {
+    for x in 0..3 { wait out.write(x); }
+}
+
+main: async func() {
+    let (items, out) = stream-pair(1);
+    let producer = start produce(out);
+    let seen: list<s32> = [];
+    wait for x in items { seen.push(x); }
+    expect.equal(seen, [0, 1, 2,]);
+    wait producer;
+}

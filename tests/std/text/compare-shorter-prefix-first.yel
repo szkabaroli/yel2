@@ -1,0 +1,12 @@
+// ---
+// description: compare puts a string that starts another first
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(compare("ab", "abc") < 0);
+    expect.holds(compare("abc", "ab") > 0);
+    expect.holds(compare("", "a") < 0);
+    expect.equal(compare("", ""), 0);
+}

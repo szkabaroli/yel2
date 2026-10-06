@@ -1,0 +1,10 @@
+// ---
+// description: encode escapes a % so it decodes back
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.encode("50%"), "50%25");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a method takes a closure after the receiver
+// features: [funcs, methods, closures]
+// ---
+from "std:testing" include expect;
+
+apply: func(value: s32, f: func(s32) -> s32) -> s32 { f(value) }
+
+main: func() {
+    expect.equal(3.apply({ x -> x * x }), 9);
+}

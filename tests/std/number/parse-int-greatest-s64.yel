@@ -1,0 +1,9 @@
+// ---
+// description: parse-int reads the greatest s64
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int("9223372036854775807"), some(s64.MAX));
+}

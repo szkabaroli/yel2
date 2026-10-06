@@ -1,0 +1,20 @@
+// ---
+// description: a closure's parameter is typed from the func wanted
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+resource Person { name: string, age: s32, }
+
+main: func() {
+    let people: list<Person> = [
+        { name: "grace", age: 85, },
+        { name: "ada", age: 36, },
+        { name: "alan", age: 41, },
+    ];
+    let limit = 40;
+    let names = people.filter({ p -> p.age > limit }).map({ p -> p.name });
+    expect.equal(names.len(), 2);
+    expect.equal(names[0], "grace");
+    expect.equal(names[1], "alan");
+}

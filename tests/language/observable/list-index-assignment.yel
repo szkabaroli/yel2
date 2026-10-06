@@ -1,0 +1,29 @@
+// ---
+// description: assigning an item of a list in a field is a write
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let profile = fresh();
+    profile.items.push("one");
+    let told = 0;
+    let watch = observe.track({ -> let _ = profile.items; }, { -> told += 1; });
+    profile.items[0] = "uno";
+    expect.equal(told, 1);
+    expect.equal(profile.items, ["uno",]);
+}

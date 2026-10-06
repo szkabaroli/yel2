@@ -1,0 +1,19 @@
+// ---
+// description: a union of a float and an integer
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type amount = s32 | f64;
+
+show: func(value: amount) -> string {
+    match value {
+        let whole: s32 => "whole {whole}",
+        let part: f64 => "part {part}",
+    }
+}
+
+main: func() {
+    expect.equal(show(3), "whole 3");
+    expect.equal(show(2.5 as f64), "part 2.5");
+}

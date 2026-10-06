@@ -1,0 +1,16 @@
+// ---
+// description: hex.digit gives a hex digit's value and -1 for others
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(hex.digit(48), 0);
+    expect.equal(hex.digit(57), 9);
+    expect.equal(hex.digit(97), 10);
+    expect.equal(hex.digit(70), 15);
+    expect.equal(hex.digit(103), -1);
+    expect.equal(hex.digit(71), -1);
+    expect.equal(hex.digit(47), -1);
+}

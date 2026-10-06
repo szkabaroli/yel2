@@ -1,0 +1,9 @@
+// ---
+// description: replace takes a group that took no part as empty text
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/(a)|(b)/.replace("b", "[$1][$2]"), "[][b]");
+}

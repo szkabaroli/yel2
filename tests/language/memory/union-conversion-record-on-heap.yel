@@ -1,0 +1,30 @@
+// ---
+// description: a record made in a func and given back as a union lives on the heap
+// features: [memory]
+// ---
+from "std:testing" include expect;
+
+resource P { name: string, n: s32, }
+type mix = s32 | P;
+
+pick: func(i: s32) -> mix {
+    let p: P = { name: "p{i}", n: i, };
+    let m: mix = p;
+    m
+}
+
+name-of-member: func(m: mix) -> string {
+    match m {
+        let p: P => p.name,
+        let n: s32 => "number",
+    }
+}
+
+main: func() {
+    let first = pick(1);
+    let second = pick(2);
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    expect.equal(name-of-member(first), "p1");
+    expect.equal(name-of-member(second), "p2");
+}

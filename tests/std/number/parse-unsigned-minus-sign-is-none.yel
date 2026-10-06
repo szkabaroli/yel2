@@ -1,0 +1,10 @@
+// ---
+// description: parse-unsigned refuses a minus sign
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned("-1"));
+    expect.none(number.parse-unsigned("-0"));
+}

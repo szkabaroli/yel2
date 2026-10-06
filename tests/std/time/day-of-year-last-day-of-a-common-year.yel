@@ -1,0 +1,10 @@
+// ---
+// description: day-of-year of 31 December is 365 in a common year
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.day-of-year(expect.ok(time.parse-date-time("2026-12-31"))), 365);
+}

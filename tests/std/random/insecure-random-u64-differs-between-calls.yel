@@ -1,0 +1,10 @@
+// ---
+// description: two calls of get-insecure-random-u64 differ
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include insecure;
+
+main: func() {
+    expect.not-equal(insecure.get-insecure-random-u64(), insecure.get-insecure-random-u64());
+}

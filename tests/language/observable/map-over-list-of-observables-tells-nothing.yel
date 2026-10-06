@@ -1,0 +1,19 @@
+// ---
+// description: a read-only map over a list of observable resources writes nothing
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Cell { value: s32, }
+@(observable) resource Sheet { cells: list<Cell>, }
+
+main: func() {
+    let first: Cell = { value: 1, };
+    let second: Cell = { value: 2, };
+    let sheet: Sheet = { cells: [first, second,], };
+    let told = 0;
+    let watch = observe.track({ -> let _ = sheet.cells; }, { -> told += 1; });
+    let values = sheet.cells.map({ cell -> cell.value });
+    expect.equal(values, [1, 2,]);
+    expect.equal(told, 0);
+}

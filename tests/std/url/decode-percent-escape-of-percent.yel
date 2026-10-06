@@ -1,0 +1,10 @@
+// ---
+// description: decode turns %25 into a % that is not read again
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("%2541"), ok("%41"));
+}

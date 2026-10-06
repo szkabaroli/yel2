@@ -1,0 +1,9 @@
+// ---
+// description: replace-all puts the text at each empty match
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/x*/.replace-all("ab", "-"), "-a-b-");
+}

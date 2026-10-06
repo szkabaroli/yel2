@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: no func double
+// features: [funcs]
+// negative: compile
+// error: 9:5: no func double
+// ---
+main: func() {
+    let x = 1;
+    x.double();
+}

@@ -1,0 +1,11 @@
+// ---
+// description: what was printed with no line end is written before the program stops
+// features: [cli]
+// exit: 1
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    print("stopping");
+    exit.exit(err(()));
+}

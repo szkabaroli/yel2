@@ -1,0 +1,10 @@
+// ---
+// description: an interpolated u64 above s64's greatest
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let past: u64 = 9223372036854775808;
+    expect.equal("{past}", "9223372036854775808");
+}

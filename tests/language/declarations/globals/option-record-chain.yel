@@ -1,0 +1,24 @@
+// ---
+// description: a record global is held in an option and chained through it
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+resource Node { value: s64, next: option<Node>, }
+
+let last: option<Node>;
+
+push: func(value: s64) {
+    last = some({ value: value, next: last, });
+}
+
+main: func() {
+    expect.none(last);
+    push(1);
+    push(2);
+    let top = expect.some(last);
+    expect.equal(top.value, 2);
+    let below = expect.some(top.next);
+    expect.equal(below.value, 1);
+    expect.none(below.next);
+}

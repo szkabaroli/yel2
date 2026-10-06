@@ -1,0 +1,9 @@
+// ---
+// description: a variant shows its case with its payload
+// features: [wave]
+// ---
+variant Shape { circle(f64), dot, }
+
+main: func() {
+    print("{Shape.circle(1.5)} {Shape.dot}\n");
+}

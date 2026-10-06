@@ -1,0 +1,11 @@
+// ---
+// description: expect.some stops the program for none
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: option<s32> = none;
+    expect.some(nothing);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: a distinct type over bool
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type enabled = distinct bool;
+
+main: func() {
+    let on = true as enabled;
+    expect.holds(on as bool);
+    expect.holds(on == true as enabled);
+}

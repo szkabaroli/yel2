@@ -1,0 +1,21 @@
+// ---
+// description: a generator sees the value a global has when it is stepped
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+let limit: s32 = 0;
+
+below: func() -> seq<s32> {
+    for x in 0..10 {
+        if x >= limit { return; }
+        yield x;
+    }
+}
+
+main: func() {
+    limit = 3;
+    let seen: list<s32> = [];
+    for value in below() { seen.push(value); }
+    expect.equal(seen, [0, 1, 2,]);
+}

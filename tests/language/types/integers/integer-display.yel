@@ -1,0 +1,13 @@
+// ---
+// description: integers show in decimal, with a sign where negative
+// features: [types, integers, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let small: s8 = -5;
+    let wide: u64 = 18446744073709551615;
+    expect.equal("{small}", "-5");
+    expect.equal("{wide}", "18446744073709551615");
+    expect.equal("{0}", "0");
+}

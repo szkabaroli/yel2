@@ -1,0 +1,13 @@
+// ---
+// description: each turn of a range loop gives a closure its own index
+// features: [funcs, closures, loops]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let greets: list<func() -> string> = [];
+    for turn in 0..3 { greets.push({ "turn {turn}" }); }
+    expect.equal(greets[0](), "turn 0");
+    expect.equal(greets[1](), "turn 1");
+    expect.equal(greets[2](), "turn 2");
+}

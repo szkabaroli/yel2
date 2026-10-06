@@ -1,0 +1,18 @@
+// ---
+// description: a flag set before an inner break lets the outer loop break too
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let found = false;
+    let visited = 0;
+    for i in 0..5 {
+        for j in 0..5 {
+            visited += 1;
+            if i * j == 6 { found = true; break; }
+        }
+        if found { break; }
+    }
+    expect.holds(found);
+    expect.equal(visited, 14);
+}

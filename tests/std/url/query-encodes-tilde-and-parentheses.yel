@@ -1,0 +1,10 @@
+// ---
+// description: query percent-encodes ~ and parentheses, as forms do
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.query([("k", "~()"),]), "k=%7E%28%29");
+}

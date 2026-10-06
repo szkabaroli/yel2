@@ -1,0 +1,19 @@
+// ---
+// description: a future of an async func with no result is waited for
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let done: bool = false;
+
+work: async func() {
+    wait yield-turn();
+    done = true;
+}
+
+main: async func() {
+    let future = start work();
+    expect.holds(!done);
+    wait future;
+    expect.holds(done);
+}

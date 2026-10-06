@@ -1,0 +1,9 @@
+// ---
+// description: the empty string as a pattern
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let s = "";
+    expect.equal(match s { "" => "empty", _ => "full", }, "empty");
+}

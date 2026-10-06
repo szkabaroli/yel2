@@ -1,0 +1,11 @@
+// ---
+// description: origin is the scheme, host and port
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://h:8443/a?b#c"));
+    expect.equal(url.origin(u), "https://h:8443");
+}

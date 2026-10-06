@@ -1,0 +1,11 @@
+// ---
+// description: a func named in kebab-case is called by that name
+// features: [syntax,names]
+// ---
+from "std:testing" include expect;
+
+add-two-numbers: func(left: s32, right: s32) -> s32 { left + right }
+
+main: func() {
+    expect.equal(add-two-numbers(1, 2), 3);
+}

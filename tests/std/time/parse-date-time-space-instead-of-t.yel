@@ -1,0 +1,11 @@
+// ---
+// description: parse-date-time reads a space between date and time
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = expect.ok(time.parse-date-time("2026-10-05 12:34"));
+    expect.equal((when.hour, when.minute), (12, 34));
+}

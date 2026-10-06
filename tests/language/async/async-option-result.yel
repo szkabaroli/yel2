@@ -1,0 +1,15 @@
+// ---
+// description: an async func may give an option
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+find: async func(wanted: s32) -> option<s32> {
+    wait yield-turn();
+    if wanted > 0 { some(wanted) } else { none }
+}
+
+main: async func() {
+    expect.equal(expect.some(wait find(3)), 3);
+    expect.none(wait find(0));
+}

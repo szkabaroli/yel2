@@ -1,0 +1,10 @@
+// ---
+// description: an integer literal with nothing to say otherwise is an s32
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = 2147483647;
+    expect.equal(value + 1, s32.MIN);
+}

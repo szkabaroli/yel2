@@ -1,0 +1,10 @@
+// ---
+// description: an underscore in a name is part of it
+// features: [syntax,names]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let snake_case = 4;
+    expect.equal(snake_case, 4);
+}

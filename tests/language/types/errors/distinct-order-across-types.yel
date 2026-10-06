@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the right of <: expected binding, found local
+// features: [types, distinct]
+// negative: compile
+// error: 9:70: the right of <: expected binding, found local
+// ---
+type binding = distinct u32;
+type local = distinct u32;
+main: func() { let a = 3 as binding; let b = 3 as local; let c = a < b; }

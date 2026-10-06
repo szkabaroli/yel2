@@ -1,0 +1,16 @@
+// ---
+// description: readonly lists are covariant where items are held one way
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+initials: func() -> list<"a" | "b"> & readonly { ["a", "b", "a",] }
+longest: func(xs: list<string>) -> string {
+    let best = "";
+    for x in xs { if x.len() > best.len() { best = x; } }
+    best
+}
+main: func() {
+    let wide: list<string> & readonly = initials();
+    expect.equal(wide, ["a", "b", "a",]);
+    expect.equal(longest(wide), "a");
+}

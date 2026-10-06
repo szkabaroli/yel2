@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: wait is only in an async func: make main async (name: async func(…))
+// features: [async]
+// negative: compile
+// error: 9:13: wait is only in an async func: make main async (name: async func(…))
+// ---
+work: async func() -> s32 { 1 }
+main: func() {
+    let n = wait work();
+}

@@ -1,0 +1,14 @@
+// ---
+// description: as? string on a union holding a string
+// features: [types, unions, as]
+// ---
+from "std:testing" include expect;
+
+type value = s32 | string | bool;
+
+main: func() {
+    let item: value = "two";
+    expect.equal(expect.some(item as? string), "two");
+    expect.none(item as? bool);
+    expect.none(item as? s32);
+}

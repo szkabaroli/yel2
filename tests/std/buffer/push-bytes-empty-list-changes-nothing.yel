@@ -1,0 +1,12 @@
+// ---
+// description: pushing an empty list of bytes changes nothing
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(2);
+    let nothing: list<u8> = [];
+    b.push-bytes(nothing);
+    expect.equal(b.len(), 0);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: an integer past 2^53 does not survive f64
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s64 = 9007199254740993;
+    expect.holds(value as f64 as s64 != value);
+    let small: s64 = 9007199254740992;
+    expect.equal(small as f64 as s64, small);
+}

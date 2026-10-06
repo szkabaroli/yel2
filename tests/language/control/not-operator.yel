@@ -1,0 +1,10 @@
+// ---
+// description: ! negates a bool and nests
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    expect.holds(!false);
+    expect.holds(!!true);
+    expect.holds(!(1 > 2));
+}

@@ -1,0 +1,8 @@
+// ---
+// description: a #caller-location default's type is told once, where it is written
+// features: [errors]
+// negative: compile
+// error: 7:22: the default of at: expected string, found { column: an integer, file: string, func: string, line: an integer }
+// ---
+f: func(at: string = #caller-location) -> s32 { 1 }
+main: func() { f(); }

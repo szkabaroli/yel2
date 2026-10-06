@@ -1,0 +1,12 @@
+// ---
+// description: hex, octal of a u32 with its top bit set show its digits
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let big: u32 = 4000000000;
+    expect.equal("{big:x}", "ee6b2800");
+    expect.equal("{big:X}", "EE6B2800");
+    expect.equal("{big:o}", "35632624000");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned-radix reads base 36
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-unsigned-radix("zz", 36), some(1295));
+}

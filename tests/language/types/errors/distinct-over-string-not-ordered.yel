@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: <: a string is not ordered
+// features: [types, distinct]
+// negative: compile
+// error: 8:66: <: a string is not ordered
+// ---
+type name = distinct string;
+main: func() { let a = "a" as name; let b = "b" as name; let c = a < b; }

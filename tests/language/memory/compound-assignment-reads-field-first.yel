@@ -1,0 +1,14 @@
+// ---
+// description: x op= v reads the field before it evaluates v: a resource's field
+// features: [memory]
+// ---
+from "std:testing" include expect;
+
+resource Counter { n: s32, }
+
+main: func() {
+    let counter: Counter = { n: 10, };
+    let poke = { -> counter.n = 20; 2 };
+    counter.n += poke();
+    expect.equal(counter.n, 12);
+}

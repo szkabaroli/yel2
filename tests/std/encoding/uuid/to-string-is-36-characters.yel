@@ -1,0 +1,12 @@
+// ---
+// description: uuid.to-string is 36 characters with four dashes
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let text = uuid.to-string(uuid.random());
+    expect.equal(text.len(), 36);
+    expect.equal(text.split("-").len(), 5);
+}

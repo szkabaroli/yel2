@@ -1,0 +1,21 @@
+// ---
+// description: alternatives that bind the same name in records of different types
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+resource For { name: string, body: list<string>, }
+resource Loop { body: list<string>, }
+variant Stmt { for-stmt(For), loop-stmt(Loop), ret(s32), stop, }
+body-len: func(s: Stmt) -> s64 {
+    match s {
+        for-stmt(x) | loop-stmt(x) => x.body.len(),
+        ret(n) if n > 0 => n as s64,
+        _ => 0,
+    }
+}
+main: func() {
+    expect.equal(body-len(Stmt.for-stmt({ name: "i", body: ["a", "b",], })), 2);
+    expect.equal(body-len(Stmt.loop-stmt({ body: ["c",], })), 1);
+    expect.equal(body-len(Stmt.ret(7)), 7);
+    expect.equal(body-len(Stmt.stop), 0);
+}

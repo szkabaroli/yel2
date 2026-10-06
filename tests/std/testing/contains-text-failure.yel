@@ -1,0 +1,10 @@
+// ---
+// description: expect.contains-text stops the program where the part is not there
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.contains-text("hello", "xyz");
+}

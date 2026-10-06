@@ -1,0 +1,10 @@
+// ---
+// description: expect.fail is a call of type never
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = if true { 5 } else { expect.fail("not reached") };
+    expect.equal(value, 5);
+}

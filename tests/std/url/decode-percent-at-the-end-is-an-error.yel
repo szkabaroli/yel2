@@ -1,0 +1,10 @@
+// ---
+// description: decode refuses a % with no digits after it
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("50%"), err("a % at 2 without two hex digits"));
+}

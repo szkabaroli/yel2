@@ -1,0 +1,11 @@
+// ---
+// description: a closure recurses through a variable it captures
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let fact: func(s32) -> s32 = { n -> 0 };
+    fact = { n -> if n < 2 { 1 } else { n * fact(n - 1) } };
+    expect.equal(fact(10), 3628800);
+}

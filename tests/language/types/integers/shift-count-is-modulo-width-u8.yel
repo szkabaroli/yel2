@@ -1,0 +1,14 @@
+// ---
+// description: an 8-bit shift takes its count modulo 8
+// features: [types, integers, shifts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let one: u8 = 1;
+    expect.equal(one << 8, 1);
+    expect.equal(one << 9, 2);
+    let top: u8 = 128;
+    expect.equal(top >> 8, 128);
+    expect.equal(top >> 9, 64);
+}

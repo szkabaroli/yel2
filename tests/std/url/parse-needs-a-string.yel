@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: url.parse takes a string, not a number
+// features: [url]
+// negative: compile
+// error: 10:28: argument 1 of std:url/url.parse: expected string, found an integer
+// ---
+from "std:url" include url;
+
+main: func() {
+    let parsed = url.parse(1);
+}

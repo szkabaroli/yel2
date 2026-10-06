@@ -1,0 +1,11 @@
+// ---
+// description: exit of err ends the program with 1
+// features: [cli]
+// exit: 1
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    print("before\n");
+    exit.exit(err(()));
+}

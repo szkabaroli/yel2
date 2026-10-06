@@ -1,0 +1,22 @@
+// ---
+// description: a stream with room for one hands items over one at a time
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+produce: async func(out: writer<s32>) {
+    for x in 0..20 { wait out.write(x); }
+    out.close();
+}
+
+main: async func() {
+    let (items, out) = stream-pair(1);
+    let producer = start produce(out);
+    let expected = 0;
+    wait for x in items {
+        expect.equal(x, expected);
+        expected += 1;
+    }
+    expect.equal(expected, 20);
+    wait producer;
+}

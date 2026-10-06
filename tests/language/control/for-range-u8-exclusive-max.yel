@@ -1,0 +1,12 @@
+// ---
+// description: an exclusive range of u8 up to 255 stops before it
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let low: u8 = 253;
+    let high: u8 = 255;
+    let last: u8 = 0;
+    for i in low..high { last = i; }
+    expect.equal(last, 254);
+}

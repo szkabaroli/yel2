@@ -1,0 +1,19 @@
+// ---
+// description: result<T, _> has no err payload
+// features: [types, result]
+// ---
+from "std:testing" include expect;
+
+parse: func(text: string) -> result<s32, _> {
+    if text == "1" { ok(1) } else { err }
+}
+
+main: func() {
+    expect.equal(expect.ok(parse("1")), 1);
+    let failed = false;
+    match parse("x") {
+        ok(_) => {}
+        err => { failed = true; }
+    }
+    expect.holds(failed);
+}

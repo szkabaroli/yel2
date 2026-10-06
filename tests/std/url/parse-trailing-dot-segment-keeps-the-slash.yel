@@ -1,0 +1,27 @@
+// ---
+// description: url.parse of "http://h/a/./"
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+prefixed: func(part: option<string>, mark: string) -> string {
+    match part {
+        some(text) => if text == "" { "" } else { mark + text },
+        none => "",
+    }
+}
+
+shown: func(parsed: result<url.parts, string>) -> string {
+    match parsed {
+        ok(u) => {
+            let port = match u.port { some(number) => "{number}", none => "", };
+            "{url.write(u)} | {u.scheme}: | {u.username} | {u.password} | {u.host.unwrap-or("")} | {port} | {u.path} | {prefixed(u.query, "?")} | {prefixed(u.fragment, "#")}"
+        }
+        err(_) => "invalid",
+    }
+}
+
+main: func() {
+    expect.equal(shown(url.parse("http://h/a/./")), "http://h/a/ | http: |  |  | h |  | /a/ |  | ");
+}

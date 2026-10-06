@@ -1,0 +1,13 @@
+// ---
+// description: ...rest of a resource's fields
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+resource Config { host: string, port: s32, secure: bool, }
+main: func() {
+    let config: Config = { host: "h", port: 80, secure: false, };
+    let { host, ...options } = config;
+    expect.equal(host, "h");
+    expect.equal(options.port, 80);
+    expect.holds(!options.secure);
+}

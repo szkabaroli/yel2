@@ -1,0 +1,12 @@
+// ---
+// description: pushing to a list before the loop is seen by the loop
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let items = [1,];
+    items.push(2);
+    let sum = 0;
+    for item in items { sum += item; }
+    expect.equal(sum, 3);
+}

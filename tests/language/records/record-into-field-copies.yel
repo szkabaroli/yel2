@@ -1,0 +1,20 @@
+// ---
+// description: a record put into another record's field is copied
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+record Line { from: Point, to: Point, }
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let b: Point = { x: 3, y: 4, };
+    let line: Line = { from: a, to: b, };
+    line.to.y = 20;
+    line.from.x = 9;
+    expect.equal(line.to.y, 20);
+    expect.equal(line.from.x, 9);
+    expect.equal(a.x, 1);
+    expect.equal(b.y, 4);
+}

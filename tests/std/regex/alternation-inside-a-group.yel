@@ -1,0 +1,9 @@
+// ---
+// description: alternation inside a group is limited to the group
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(/gr(a|e)y/.find("grey")).text, "grey");
+}

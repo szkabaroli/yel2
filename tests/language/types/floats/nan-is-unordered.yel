@@ -1,0 +1,13 @@
+// ---
+// description: no ordering comparison with NaN holds
+// features: [types, floats, nan]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = nan;
+    expect.holds(!(value < 1.0));
+    expect.holds(!(value > 1.0));
+    expect.holds(!(1.0 < value));
+    expect.holds(!(1.0 > value));
+}

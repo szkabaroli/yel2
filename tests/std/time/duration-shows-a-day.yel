@@ -1,0 +1,10 @@
+// ---
+// description: a duration of a day shows as 24 hours
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.days(1)}", "24h0m0s");
+}

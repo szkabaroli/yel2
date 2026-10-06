@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: bool as f64: as gives a char only from an integer, and a float only from a number
+// features: [types, casts]
+// negative: compile
+// error: 7:24: bool as f64: as gives a char only from an integer, and a float only from a number
+// ---
+main: func() { let a = true as f64; }

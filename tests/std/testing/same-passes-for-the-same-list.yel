@@ -1,0 +1,11 @@
+// ---
+// description: expect.same passes for a list and itself
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2,];
+    let alias = xs;
+    expect.same(xs, alias);
+}

@@ -1,0 +1,18 @@
+// ---
+// description: an observable resource in another tells of its own fields
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Cell { value: s32, }
+@(observable) resource Sheet { name: string, cell: Cell, }
+
+main: func() {
+    let sheet: Sheet = { name: "one", cell: { value: 1, }, };
+    let told = 0;
+    let watch = observe.track({ -> let _ = sheet.cell.value; }, { -> told += 1; });
+    sheet.name = "two";
+    expect.equal(told, 0);
+    sheet.cell.value = 2;
+    expect.equal(told, 1);
+}

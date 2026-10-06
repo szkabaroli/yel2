@@ -1,0 +1,12 @@
+// ---
+// description: a float literal's type follows its value among the literal types
+// features: [memory, types]
+// ---
+from "std:testing" include expect;
+
+type half = 0.5 | 1.0;
+
+main: func() {
+    let h: half = 1.00;
+    expect.equal(h == 1.0, true);
+}

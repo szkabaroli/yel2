@@ -1,0 +1,12 @@
+// ---
+// description: casting a signed integer to a wider signed type keeps its value
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let negative: s8 = -5;
+    expect.equal(negative as s16, -5);
+    expect.equal(negative as s32, -5);
+    expect.equal(negative as s64, -5);
+}

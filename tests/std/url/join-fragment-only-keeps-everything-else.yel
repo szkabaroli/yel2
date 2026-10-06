@@ -1,0 +1,12 @@
+// ---
+// description: join of a fragment alone changes only the fragment
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let base = expect.ok(url.parse("https://h/a?b#old"));
+    let joined = expect.ok(url.join(base, "#new"));
+    expect.equal(url.write(joined), "https://h/a?b#new");
+}

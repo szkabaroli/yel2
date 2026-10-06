@@ -1,0 +1,10 @@
+// ---
+// description: a duration shows as hours, minutes and seconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.nanoseconds(3723500000000)}", "1h2m3.5s");
+}

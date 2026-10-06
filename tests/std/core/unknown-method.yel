@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a string has no func named nope
+// features: [std]
+// negative: compile
+// error: 8:17: no func nope
+// ---
+main: func() {
+    let found = "a".nope();
+}

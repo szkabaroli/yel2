@@ -1,0 +1,9 @@
+// ---
+// description: find-byte finds a byte of a multibyte character
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("aé".find-byte(169), some(2));
+}

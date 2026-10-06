@@ -1,5 +1,0 @@
-// error: 4:5: argument 1 of push is readonly, and push writes it
-main: func() {
-    let fixed: list<string> & readonly = ["a",];
-    fixed.push("b");
-}

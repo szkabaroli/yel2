@@ -1,0 +1,20 @@
+// ---
+// description: yields and the reader's work interleave in order
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+producer: func() -> seq<string> {
+    log.push("p1");
+    yield "a";
+    log.push("p2");
+    yield "b";
+    log.push("p3");
+}
+
+main: func() {
+    for item in producer() { log.push("c:{item}"); }
+    expect.equal(log, ["p1", "c:a", "p2", "c:b", "p3",]);
+}

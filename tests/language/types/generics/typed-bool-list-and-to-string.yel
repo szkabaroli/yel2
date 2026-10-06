@@ -1,0 +1,10 @@
+// ---
+// description: bool lists show and to-string makes a string of a number
+// features: [types, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{[true, false,]}", "[true, false]");
+    expect.equal(to-string(12), "12");
+}

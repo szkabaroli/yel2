@@ -1,0 +1,15 @@
+// ---
+// description: a record read out of a resource is a copy
+// features: [records, resources]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+resource Canvas { cursor: Point, }
+
+main: func() {
+    let canvas: Canvas = { cursor: { x: 1, y: 1, }, };
+    let held = canvas.cursor;
+    held.x = 50;
+    expect.equal(canvas.cursor.x, 1);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: to-lower makes ASCII letters lower case
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("Mixed CASE 9".to-lower(), "mixed case 9");
+}

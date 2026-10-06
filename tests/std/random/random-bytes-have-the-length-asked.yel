@@ -1,0 +1,12 @@
+// ---
+// description: get-random-bytes gives that many bytes
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include random;
+
+main: func() {
+    expect.equal(random.get-random-bytes(16).len(), 16);
+    expect.equal(random.get-random-bytes(1).len(), 1);
+    expect.equal(random.get-random-bytes(1000).len(), 1000);
+}

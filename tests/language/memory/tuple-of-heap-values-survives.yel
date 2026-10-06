@@ -1,0 +1,14 @@
+// ---
+// description: a tuple holding a string and a list keeps both across collections
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+make: func(i: s32) -> tuple<string, list<s32>> { ("name {i}", [i, i * 2,]) }
+
+main: func() {
+    let (name, items) = make(21);
+    for i in 0..30000 { let junk = "junk {i}"; }
+    expect.equal(name, "name 21");
+    expect.equal(items, [21, 42,]);
+}

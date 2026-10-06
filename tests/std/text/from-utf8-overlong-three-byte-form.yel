@@ -1,0 +1,9 @@
+// ---
+// description: from-utf8 refuses an overlong three byte form
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([224, 128, 128,]), err(0));
+}

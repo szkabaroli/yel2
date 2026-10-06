@@ -1,0 +1,10 @@
+// ---
+// description: time.parse refuses 31 April
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(expect.err(time.parse("2026-04-31")), "no day 31 in 2026-04");
+}

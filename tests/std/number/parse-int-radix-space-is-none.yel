@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix refuses a space
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int-radix(" ff", 16));
+}

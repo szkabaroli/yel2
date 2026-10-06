@@ -1,9 +1,0 @@
-// error: 4:5: a func whose result is never gets to its end: end it with a call that never returns (panic, exit)
-// a func whose result is never must not get to its end
-quit: func(code: s32) -> never {
-    print("quitting {code}\n");
-}
-
-main: func() {
-    quit(1);
-}

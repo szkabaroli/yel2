@@ -1,0 +1,20 @@
+// ---
+// description: a record parameter is the callee's own copy
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+nudge: func(p: Point) -> Point {
+    p.x += 1;
+    p
+}
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let moved = nudge(a);
+    expect.equal(a.x, 1);
+    expect.equal(moved.x, 2);
+    expect.equal(moved.y, 2);
+}

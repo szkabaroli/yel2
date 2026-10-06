@@ -1,0 +1,14 @@
+// ---
+// description: a const names a number, typed where it is used
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const LIMIT = 10;
+
+main: func() {
+    let small: u8 = LIMIT;
+    let wide: s64 = LIMIT;
+    expect.equal(small as s32, 10);
+    expect.equal(wide, 10);
+}

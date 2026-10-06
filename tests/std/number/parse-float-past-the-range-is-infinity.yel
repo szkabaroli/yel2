@@ -1,0 +1,9 @@
+// ---
+// description: parse-float gives infinity for a number past f64's range
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("1e400"), some(inf));
+}

@@ -1,0 +1,21 @@
+// ---
+// description: type methods chain
+// features: [types, type-methods]
+// ---
+from "std:testing" include expect;
+
+module shapes {
+    resource square { side: s64, }
+
+    made: func(side: s64) -> square { { side: side, } }
+
+    area: func(shape: square) -> s64 { shape.side * shape.side }
+
+    grown: func(shape: square, by: s64) -> square { { side: shape.side + by, } }
+}
+
+main: func() {
+    let shape = shapes.made(3);
+    expect.equal(shape.grown(2).area(), 25);
+    expect.equal(shape.grown(1).grown(1).area(), 25);
+}

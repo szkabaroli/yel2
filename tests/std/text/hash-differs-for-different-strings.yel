@@ -1,0 +1,11 @@
+// ---
+// description: different strings hash differently
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.not-equal(hash("a"), hash("b"));
+    expect.not-equal(hash("ab"), hash("ba"));
+    expect.not-equal(hash(""), hash("a"));
+}

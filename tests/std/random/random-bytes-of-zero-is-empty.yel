@@ -1,0 +1,10 @@
+// ---
+// description: get-random-bytes of 0 is empty
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include random;
+
+main: func() {
+    expect.equal(random.get-random-bytes(0).len(), 0);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: base64.decode does not skip whitespace
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    expect.equal(expect.err(base64.decode("Zm9v\n")), "a length no base64 has (5)");
+}

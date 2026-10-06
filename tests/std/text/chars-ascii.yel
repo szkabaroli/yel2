@@ -1,0 +1,9 @@
+// ---
+// description: chars lists the characters of ASCII text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".chars(), ['a', 'b', 'c',]);
+}

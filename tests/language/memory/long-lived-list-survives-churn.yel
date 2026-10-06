@@ -1,0 +1,14 @@
+// ---
+// description: a list built first survives a loop that makes lots of short-lived garbage
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let kept: list<string> = [];
+    for i in 0..50 { kept.push("kept {i}"); }
+    for i in 0..100000 { let junk = "junk {i} junk"; }
+    expect.equal(kept.len(), 50);
+    expect.equal(kept[0], "kept 0");
+    expect.equal(kept[49], "kept 49");
+}

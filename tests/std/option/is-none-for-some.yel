@@ -1,0 +1,9 @@
+// ---
+// description: is-none is false for some
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!some(1).is-none());
+}

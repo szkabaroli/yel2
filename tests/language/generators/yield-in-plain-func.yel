@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: yield is in a func that gives back a seq
+// features: [generators]
+// negative: compile
+// error: 7:1: main yields: it gives back a seq<T> (its values T)
+// ---
+main: func() {
+    yield 1;
+}

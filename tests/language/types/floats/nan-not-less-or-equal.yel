@@ -1,0 +1,13 @@
+// ---
+// description: <= and >= with NaN do not hold, not even NaN against NaN
+// features: [types, floats, nan]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = nan;
+    expect.holds(!(value <= value));
+    expect.holds(!(value >= value));
+    expect.holds(!(value <= 1.0));
+    expect.holds(!(1.0 >= value));
+}

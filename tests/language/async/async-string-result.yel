@@ -1,0 +1,14 @@
+// ---
+// description: an async func may give a string
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+greet: async func(name: string) -> string {
+    wait yield-turn();
+    "hello {name}"
+}
+
+main: async func() {
+    expect.equal(wait greet("ada"), "hello ada");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: uuid.parse reads all f digits
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id = expect.ok(uuid.parse("ffffffff-ffff-ffff-ffff-ffffffffffff"));
+    expect.equal(id.high, u64.MAX);
+    expect.equal(id.low, u64.MAX);
+}

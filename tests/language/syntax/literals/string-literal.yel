@@ -1,0 +1,11 @@
+// ---
+// description: a string literal has its bytes as length
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("yel".len(), 3);
+    expect.equal("".len(), 0);
+    expect.equal("a b".len(), 3);
+}

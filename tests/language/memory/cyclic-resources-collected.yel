@@ -1,0 +1,22 @@
+// ---
+// description: resources that point at each other are collected as garbage and the survivors kept
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+resource Peer { id: s32, other: option<Peer>, }
+
+main: func() {
+    let survivor: Peer = { id: -1, other: none, };
+    for i in 0..20000 {
+        let first: Peer = { id: i, other: none, };
+        let second: Peer = { id: i + 1, other: some(first), };
+        first.other = some(second);
+    }
+    let partner: Peer = { id: -2, other: none, };
+    survivor.other = some(partner);
+    partner.other = some(survivor);
+    for i in 0..20000 { let junk = "junk {i}"; }
+    expect.equal(expect.some(survivor.other).id, -2);
+    expect.equal(expect.some(expect.some(survivor.other).other).id, -1);
+}

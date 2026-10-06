@@ -1,0 +1,11 @@
+// ---
+// description: none takes its type from how it is used
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = none;
+    found = some(3);
+    expect.equal(expect.some(found), 3);
+}

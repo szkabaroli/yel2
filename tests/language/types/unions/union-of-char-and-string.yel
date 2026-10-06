@@ -1,0 +1,15 @@
+// ---
+// description: a union of char and string
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type symbol = char | string;
+
+main: func() {
+    let one: symbol = 'a';
+    let many: symbol = "abc";
+    expect.holds(one is char);
+    expect.holds(many is string);
+    expect.equal("{one}{many}", "aabc");
+}

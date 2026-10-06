@@ -1,0 +1,16 @@
+// ---
+// description: return in an async func gives the result at once
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+pick: async func(flag: bool) -> s32 {
+    if flag { return 1; }
+    wait yield-turn();
+    2
+}
+
+main: async func() {
+    expect.equal(wait pick(true), 1);
+    expect.equal(wait pick(false), 2);
+}

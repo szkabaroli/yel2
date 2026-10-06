@@ -1,0 +1,9 @@
+// ---
+// description: a regex with no groups has an empty group list
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(/abc/.find("abc")).groups.len(), 0);
+}

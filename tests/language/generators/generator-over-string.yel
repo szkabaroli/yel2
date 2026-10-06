@@ -1,0 +1,25 @@
+// ---
+// description: a generator over the bytes of a string splits words
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+words: func(text: string) -> seq<string> {
+    let word = "";
+    for index in 0..text.len() {
+        let byte = text.byte-at(index);
+        if byte == 32 {
+            if word != "" { yield word; }
+            word = "";
+        } else {
+            word = word + from-byte(byte);
+        }
+    }
+    if word != "" { yield word; }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for word in words("the  quick brown fox") { seen.push(word); }
+    expect.equal(seen, ["the", "quick", "brown", "fox",]);
+}

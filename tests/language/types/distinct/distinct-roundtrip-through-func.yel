@@ -1,0 +1,15 @@
+// ---
+// description: a func takes and gives a distinct type
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+next: func(id: binding) -> binding { ((id as u32) + 1) as binding }
+
+main: func() {
+    let id = next(next(3 as binding));
+    expect.equal(id as u32, 5);
+    expect.holds(next(id) > id);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: no package test:nothing
+// features: [modules]
+// negative: compile
+// error: 8:1: no package test:nothing
+// note: looked for nothing/ in tests/language/modules, and for a WIT package in runtime/wit
+// ---
+from "test:nothing" include x;
+main: func() -> s32 { 0 }

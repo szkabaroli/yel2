@@ -1,0 +1,9 @@
+// ---
+// description: char-count of an empty string is 0
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.char-count(""), 0);
+}

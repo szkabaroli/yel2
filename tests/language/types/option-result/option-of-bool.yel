@@ -1,0 +1,11 @@
+// ---
+// description: an option of bool tells some(false) from none
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let off: option<bool> = some(false);
+    expect.holds(off.is-some());
+    expect.equal(expect.some(off), false);
+}

@@ -1,0 +1,19 @@
+// ---
+// description: an or-arm's guard is tried for each alternative and then the next arm
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+variant Wrap { a(s32), b(s32), c, }
+pick: func(w: Wrap) -> string {
+    match w {
+        a(n) | b(n) if n > 0 => "positive {n}",
+        _ => "other",
+    }
+}
+main: func() {
+    expect.equal(pick(Wrap.a(3)), "positive 3");
+    expect.equal(pick(Wrap.b(4)), "positive 4");
+    expect.equal(pick(Wrap.a(-1)), "other");
+    expect.equal(pick(Wrap.b(0)), "other");
+    expect.equal(pick(Wrap.c), "other");
+}

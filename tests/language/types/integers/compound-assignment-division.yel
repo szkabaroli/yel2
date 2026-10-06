@@ -1,0 +1,14 @@
+// ---
+// description: /= and %= on integers
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = -17;
+    value /= 5;
+    expect.equal(value, -3);
+    value = -17;
+    value %= 5;
+    expect.equal(value, -2);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a resource in another resource's field is shared
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+resource Holder { counter: Counter, }
+
+main: func() {
+    let a: Counter = { value: 1, };
+    let holder: Holder = { counter: a, };
+    holder.counter.value = 8;
+    expect.equal(a.value, 8);
+    expect.holds(holder.counter == a);
+}

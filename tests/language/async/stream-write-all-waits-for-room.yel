@@ -1,0 +1,19 @@
+// ---
+// description: write-all of more items than room waits for the reader
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+feed: async func(out: writer<s32>) {
+    wait out.write-all([1, 2, 3, 4, 5, 6,]);
+    out.close();
+}
+
+main: async func() {
+    let (items, out) = stream-pair(2);
+    let feeder = start feed(out);
+    let total = 0;
+    wait for x in items { total += x; }
+    expect.equal(total, 21);
+    wait feeder;
+}

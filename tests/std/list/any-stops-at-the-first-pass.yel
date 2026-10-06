@@ -1,0 +1,12 @@
+// ---
+// description: any does not ask about the items after the first that passes
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let calls = 0;
+    let found = [1, 2, 3, 4,].any({ n -> calls += 1; n == 2 });
+    expect.holds(found);
+    expect.equal(calls, 2);
+}

@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: module tools is private to package test:vis-lib
+// features: [modules]
+// negative: compile
+// error: 7:1: module tools is private to package test:vis-lib
+// ---
+from "../../packages/vis-lib" include tools;
+main: func() -> s32 { tools.count() }

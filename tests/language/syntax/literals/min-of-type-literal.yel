@@ -1,0 +1,12 @@
+// ---
+// description: -128 is an s8 although 128 is not
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let low: s8 = -128;
+    expect.equal(low as s32, -128);
+    let high: s8 = 127;
+    expect.equal(high as s32, 127);
+}

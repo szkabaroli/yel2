@@ -1,0 +1,11 @@
+// ---
+// description: a char takes a width
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let letter = 'x';
+    expect.equal("[{letter:3}]", "[x  ]");
+    expect.equal("[{letter:>3}]", "[  x]");
+}

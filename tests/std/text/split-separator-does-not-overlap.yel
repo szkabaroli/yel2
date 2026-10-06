@@ -1,0 +1,9 @@
+// ---
+// description: split takes separators from left to right
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a---b".split("--"), ["a", "-b",]);
+}

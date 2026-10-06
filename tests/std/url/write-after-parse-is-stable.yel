@@ -1,0 +1,13 @@
+// ---
+// description: writing a parsed URL and parsing again gives the same text
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let first = expect.ok(url.parse("HTTPS://User@Example.COM:8443/a/../b c?x=1 2#f g"));
+    let text = url.write(first);
+    let second = expect.ok(url.parse(text));
+    expect.equal(url.write(second), text);
+}

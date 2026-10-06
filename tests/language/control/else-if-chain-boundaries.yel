@@ -1,0 +1,14 @@
+// ---
+// description: an else-if chain at its exact thresholds
+// features: [control]
+// ---
+from "std:testing" include expect;
+grade: func(score: s32) -> string {
+    if score >= 90 { "a" } else if score >= 80 { "b" } else { "f" }
+}
+main: func() {
+    expect.equal(grade(90), "a");
+    expect.equal(grade(89), "b");
+    expect.equal(grade(80), "b");
+    expect.equal(grade(79), "f");
+}

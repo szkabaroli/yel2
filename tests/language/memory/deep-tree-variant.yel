@@ -1,0 +1,29 @@
+// ---
+// description: a deep variant tree is traced through its children lists
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+variant Tree { leaf(s32), node(list<Tree>), }
+
+build: func(depth: s32) -> Tree {
+    if depth == 0 { return Tree.leaf(1); }
+    Tree.node([build(depth - 1), build(depth - 1),])
+}
+
+sum: func(tree: Tree) -> s32 {
+    match tree {
+        leaf(n) => n,
+        node(kids) => {
+            let total = 0;
+            for kid in kids { total += sum(kid); }
+            total
+        }
+    }
+}
+
+main: func() {
+    let tree = build(10);
+    for i in 0..20000 { let junk = "junk {i}"; }
+    expect.equal(sum(tree), 1024);
+}

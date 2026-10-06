@@ -1,0 +1,14 @@
+// ---
+// description: two sleeps at once take about the longer, not the sum
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+nap: async func(ms: s64) { wait sleep(ms); }
+
+main: async func() {
+    let before = now-ms();
+    let both = wait { first: nap(150), second: nap(150), };
+    let waited = now-ms() - before;
+    expect.holds(waited < 290);
+}

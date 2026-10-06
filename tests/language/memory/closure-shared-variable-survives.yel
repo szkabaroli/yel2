@@ -1,0 +1,20 @@
+// ---
+// description: two closures sharing a captured variable keep it alive and shared
+// features: [memory, closures]
+// ---
+from "std:testing" include expect;
+
+make: func() -> tuple<func(), func() -> s32> {
+    let total = 0;
+    let add = { -> total += 1; };
+    let read = { -> total };
+    (add, read)
+}
+
+main: func() {
+    let (add, read) = make();
+    for i in 0..30000 { let junk = "junk {i}"; }
+    add();
+    add();
+    expect.equal(read(), 2);
+}

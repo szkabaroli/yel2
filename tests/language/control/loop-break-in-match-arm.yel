@@ -1,0 +1,23 @@
+// ---
+// description: a match arm that breaks has no value, so the other arms give it
+// features: [control]
+// ---
+from "std:testing" include expect;
+firsts: func(items: list<option<s32>>) -> list<s32> {
+    let out: list<s32> = [];
+    let i = 0;
+    loop {
+        if i == items.len() { break; }
+        let item = match items[i] {
+            some(value) => value,
+            none => { break; }
+        };
+        out.push(item);
+        i += 1;
+    }
+    out
+}
+main: func() {
+    expect.equal(firsts([some(1), some(2), none, some(4),]), [1, 2,]);
+    expect.equal(firsts([some(7),]), [7,]);
+}

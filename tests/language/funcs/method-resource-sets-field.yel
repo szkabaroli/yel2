@@ -1,0 +1,16 @@
+// ---
+// description: a method of a resource sets its field
+// features: [funcs, methods, resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+bump: func(self: Counter, by: s32) { self.value += by; }
+
+main: func() {
+    let counter: Counter = { value: 0, };
+    counter.bump(2);
+    counter.bump(3);
+    expect.equal(counter.value, 5);
+}

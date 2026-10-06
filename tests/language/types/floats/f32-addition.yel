@@ -1,0 +1,13 @@
+// ---
+// description: f32 addition rounds to single precision
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let tenth: f32 = 0.1;
+    let fifth: f32 = 0.2;
+    expect.equal("{tenth + fifth}", "0.3");
+    let big: f32 = 16777216.0;
+    expect.equal("{big + 1.0}", "16777216");
+}

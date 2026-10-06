@@ -1,0 +1,14 @@
+// ---
+// description: #caller-location names the func that calls
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+where: func(at: source-location = #caller-location) -> string { at.func }
+
+outer: func() -> string { where() }
+
+main: func() {
+    expect.equal(outer(), "outer");
+    expect.equal(where(), "main");
+}

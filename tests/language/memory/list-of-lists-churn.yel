@@ -1,0 +1,21 @@
+// ---
+// description: a list of lists is intact after its rows are rebuilt many times
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let grid: list<list<s32>> = [];
+    for row in 0..10 {
+        let cells: list<s32> = [];
+        for column in 0..10 { cells.push(row * 10 + column); }
+        grid.push(cells);
+    }
+    for round in 0..2000 {
+        let scratch: list<s32> = [];
+        for i in 0..20 { scratch.push(i + round); }
+    }
+    let total = 0;
+    for row in grid { for cell in row { total += cell; } }
+    expect.equal(total, 4950);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: params keeps a piece with a bad percent escape as written
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("a=%zz"), [("a", "%zz"),]);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: quotes and braces in a comment start nothing
+// features: [syntax,comments]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    // an unclosed " and a { and a ' here
+    let value = 5;
+    expect.equal(value, 5);
+}

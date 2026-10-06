@@ -1,0 +1,9 @@
+// ---
+// description: repeat puts a string n times one after the other
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("ab".repeat(3), "ababab");
+}

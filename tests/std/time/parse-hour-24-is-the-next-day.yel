@@ -1,0 +1,10 @@
+// ---
+// description: parse reads 24:00 as midnight of the next day
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.to-iso(expect.ok(time.parse("2026-10-05T24:00:00Z"))), "2026-10-06T00:00:00.000Z");
+}

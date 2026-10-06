@@ -1,0 +1,17 @@
+// ---
+// description: a char range pattern includes its ends and not what is next to them
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+lower: func(c: char) -> bool {
+    match c {
+        'a'..='z' => true,
+        _ => false,
+    }
+}
+main: func() {
+    expect.holds(lower('a'));
+    expect.holds(lower('z'));
+    expect.holds(!lower('{'));
+    expect.holds(!lower('`'));
+}

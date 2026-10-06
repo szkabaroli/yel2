@@ -1,0 +1,20 @@
+// ---
+// description: a closure sees a name a match arm binds
+// features: [funcs, closures, patterns]
+// ---
+from "std:testing" include expect;
+
+describe: func(o: option<s32>) -> s32 {
+    match o {
+        some(n) => {
+            let twice = { -> n * 2 };
+            twice()
+        }
+        none => 0,
+    }
+}
+
+main: func() {
+    expect.equal(describe(some(21)), 42);
+    expect.equal(describe(none), 0);
+}

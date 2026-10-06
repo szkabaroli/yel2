@@ -1,0 +1,11 @@
+// ---
+// description: push adds to a list written as a literal
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2, 3,];
+    xs.push(4);
+    expect.equal(xs, [1, 2, 3, 4,]);
+}

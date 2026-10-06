@@ -1,0 +1,17 @@
+// ---
+// description: a closure given a readonly list's items may read them
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+each: func<T>(xs: list<T> & readonly, f: func(T & readonly)) { for x in xs { f(x); } }
+main: func() {
+    let grid: list<list<s32>> & readonly = [[1,], [2, 3,],];
+    let total = [0,];
+    each(grid, { row -> total[0] = total[0] + row.len(); });
+    expect.equal(total[0], 3);
+    let fixed: list<s32> & readonly = [1, 2, 3,];
+    expect.equal(fixed.map({ x -> x * 2 }), [2, 4, 6,]);
+    expect.equal(fixed.filter({ x -> x > 1 }), [2, 3,]);
+    expect.holds(fixed.any({ x -> x == 3 }));
+    expect.holds(fixed.all({ x -> x > 0 }));
+}

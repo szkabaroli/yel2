@@ -1,0 +1,12 @@
+// ---
+// description: a float in s32's range but past s8's gives s8's bound
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 1000.7;
+    expect.equal(value as s8, 127);
+    expect.equal(value as u8, 255);
+    expect.equal(value as s16, 1000);
+}

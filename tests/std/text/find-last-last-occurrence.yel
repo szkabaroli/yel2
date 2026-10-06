@@ -1,0 +1,10 @@
+// ---
+// description: find-last gives the byte of the last occurrence
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("banana".find-last("an"), some(3));
+    expect.equal("banana".find-last("b"), some(0));
+}

@@ -1,0 +1,9 @@
+// ---
+// description: a spec after an expression that holds a string
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("[{"ab":>4}]", "[  ab]");
+}

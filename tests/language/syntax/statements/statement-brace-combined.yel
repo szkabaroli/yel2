@@ -1,0 +1,24 @@
+// ---
+// description: an if or match that starts a statement leaves what follows as the next statement, and in parens is an operand
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+value: func(flag: bool, seen: list<string>) -> s32 {
+    if flag { seen.push("yes"); }
+    -64
+}
+
+twice: func(n: s32, seen: list<string>) -> s32 {
+    let inner = (if n > 0 { n } else { 0 - n }) - 1;
+    match n { 0 => seen.push("zero"), _ => seen.push("some"), }
+    -inner
+}
+
+main: func() {
+    let seen: list<string> = [];
+    expect.equal(value(true, seen), -64);
+    expect.equal(twice(5, seen), -4);
+    expect.equal(twice(0, seen), 1);
+    expect.equal(seen.join(","), "yes,some,zero");
+}

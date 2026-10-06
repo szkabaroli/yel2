@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /a{3,2}/ has a count past its most
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /a{3,2}/: a count 3 past its most, 2
+// ---
+main: func() {
+    let found = /a{3,2}/;
+}

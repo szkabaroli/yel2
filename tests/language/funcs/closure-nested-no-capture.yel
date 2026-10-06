@@ -1,0 +1,11 @@
+// ---
+// description: a closure given to a func captures nothing
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+apply-twice: func(f: func(s32) -> s32, x: s32) -> s32 { f(f(x)) }
+
+main: func() {
+    expect.equal(apply-twice({ x -> x * 3 }, 2), 18);
+}

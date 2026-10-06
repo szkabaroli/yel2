@@ -1,0 +1,16 @@
+// ---
+// description: a distinct type over string
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type name = distinct string;
+
+greet: func(who: name) -> string { "hello {who}" }
+
+main: func() {
+    let who = "ada" as name;
+    expect.equal(greet(who), "hello ada");
+    expect.equal(who as string, "ada");
+    expect.equal((who as string).len(), 3);
+}

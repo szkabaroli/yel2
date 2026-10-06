@@ -1,0 +1,16 @@
+// ---
+// description: reading a global record into a local copies it
+// features: [records, let]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+let origin: Point;
+
+main: func() {
+    let local = origin;
+    local.x = 4;
+    expect.equal(origin.x, 0);
+    expect.equal(local.x, 4);
+}

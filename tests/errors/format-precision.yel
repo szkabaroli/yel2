@@ -1,5 +1,0 @@
-// error: 4:11: .2 in a spec: expected a float, found s32
-main: func() {
-    let n: s32 = 3;
-    print("{n:.2}");
-}

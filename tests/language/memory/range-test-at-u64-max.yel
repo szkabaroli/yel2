@@ -1,0 +1,11 @@
+// ---
+// description: is with an exclusive range excludes the u64 maximum, an inclusive one holds it
+// features: [memory, ranges]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let max: u64 = 18446744073709551615;
+    expect.equal(max is 0..18446744073709551615, false);
+    expect.equal(max is 0..=18446744073709551615, true);
+}

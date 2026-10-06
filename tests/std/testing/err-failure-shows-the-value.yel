@@ -1,0 +1,11 @@
+// ---
+// description: expect.err stops the program for an ok, showing its value
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let good: result<s32, string> = ok(9);
+    expect.err(good);
+}

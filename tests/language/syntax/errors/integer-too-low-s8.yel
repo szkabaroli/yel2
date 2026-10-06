@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: -129 is out of range for s8
+// features: [syntax,literals]
+// negative: compile
+// error: 8:22: -129 is out of range for s8
+// ---
+main: func() {
+    let small: s8 = -129;
+}

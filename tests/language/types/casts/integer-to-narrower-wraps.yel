@@ -1,0 +1,14 @@
+// ---
+// description: an integer cast to a narrower type keeps the low bits
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let big: s32 = 300;
+    expect.equal(big as u8, 44);
+    let wide: s64 = 4294967296;
+    expect.equal(wide as s32, 0);
+    let two-hundred: s32 = 200;
+    expect.equal(two-hundred as s8, -56);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: pad leaves text that is as wide as the width
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.pad("abc", 3, "*", ">"), "abc");
+    expect.equal(format.pad("abcd", 2, "*", "<"), "abcd");
+}

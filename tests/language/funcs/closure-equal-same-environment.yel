@@ -1,0 +1,12 @@
+// ---
+// description: a func value is the same func made in the same environment
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let clicks = 0;
+    let on-click: func() = { clicks += 1; };
+    let same = on-click;
+    expect.holds(on-click == same);
+}

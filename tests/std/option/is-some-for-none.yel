@@ -1,0 +1,10 @@
+// ---
+// description: is-some is false for none
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: option<s32> = none;
+    expect.holds(!nothing.is-some());
+}

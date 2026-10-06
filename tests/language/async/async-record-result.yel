@@ -1,0 +1,18 @@
+// ---
+// description: an async func may give a record
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+resource Pair { left: s32, right: s32, }
+
+make: async func(left: s32) -> Pair {
+    wait yield-turn();
+    { left: left, right: left + 1, }
+}
+
+main: async func() {
+    let pair = wait make(4);
+    expect.equal(pair.left, 4);
+    expect.equal(pair.right, 5);
+}

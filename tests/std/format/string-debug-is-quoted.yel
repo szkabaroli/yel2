@@ -1,0 +1,9 @@
+// ---
+// description: a string shows quoted with {x:?}
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{"hi":?}", "\"hi\"");
+}

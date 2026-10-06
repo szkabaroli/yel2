@@ -1,0 +1,11 @@
+// ---
+// description: x shows an integer in lowercase hexadecimal
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{255:x}", "ff");
+    expect.equal("{0:x}", "0");
+    expect.equal("{4096:x}", "1000");
+}

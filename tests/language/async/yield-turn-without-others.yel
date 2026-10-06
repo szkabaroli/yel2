@@ -1,0 +1,11 @@
+// ---
+// description: yield-turn with no other task goes straight on
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let turns = 0;
+    for turn in 0..100 { wait yield-turn(); turns += 1; }
+    expect.equal(turns, 100);
+}

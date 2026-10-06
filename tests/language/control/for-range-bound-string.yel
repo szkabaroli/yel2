@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a range's end: expected an integer, found string
+// features: [control]
+// negative: compile
+// error: 8:17: a range's end: expected an integer, found string
+// ---
+main: func() {
+    for i in 0.."a" { }
+}

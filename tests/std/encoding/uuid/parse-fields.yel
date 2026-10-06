@@ -1,0 +1,12 @@
+// ---
+// description: uuid.parse puts the first eight bytes in high and the rest in low
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id = expect.ok(uuid.parse("00112233-4455-6677-8899-aabbccddeeff"));
+    expect.equal(id.high, 0x0011223344556677);
+    expect.equal(id.low, 0x8899aabbccddeeff);
+}

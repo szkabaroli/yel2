@@ -1,0 +1,18 @@
+// ---
+// description: parse fills each field of a full URL
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://ada:pw@example.com:8443/a/b?q=1#top"));
+    expect.equal(u.scheme, "https");
+    expect.equal(u.username, "ada");
+    expect.equal(u.password, "pw");
+    expect.equal(u.host, some("example.com"));
+    expect.equal(u.port, some(8443));
+    expect.equal(u.path, "/a/b");
+    expect.equal(u.query, some("q=1"));
+    expect.equal(u.fragment, some("top"));
+}

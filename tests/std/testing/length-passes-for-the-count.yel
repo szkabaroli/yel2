@@ -1,0 +1,9 @@
+// ---
+// description: expect.length passes where the list has that many items
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.length([1, 2, 3,], 3);
+}

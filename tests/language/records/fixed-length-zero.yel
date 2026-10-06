@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a fixed-length list holds at least one item
+// features: [records, fixed-lists]
+// negative: compile
+// error: 8:22: a fixed-length list holds at least one item
+// ---
+main: func() {
+    let v: list<s32, 0> = [];
+}

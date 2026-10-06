@@ -1,0 +1,11 @@
+// ---
+// description: a list of chars
+// features: [types, chars]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let letters: list<char> = ['a', 'b', 'c',];
+    expect.equal(letters.len(), 3);
+    expect.equal(letters[2], 'c');
+}

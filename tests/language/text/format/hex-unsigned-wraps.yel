@@ -1,0 +1,11 @@
+// ---
+// description: hex of a negative number cast to u8 shows its byte
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = -42;
+    let byte = value as u8;
+    expect.equal("{byte:x}", "d6");
+}

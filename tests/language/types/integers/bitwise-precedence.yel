@@ -1,0 +1,12 @@
+// ---
+// description: shifts bind tighter than &, & tighter than ^, ^ tighter than |
+// features: [types, integers, bitwise]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: u32 = 1;
+    expect.equal(value << 2 | 1, 5);
+    expect.equal(value | 2 & 6, 3);
+    expect.equal(value | 3 ^ 1, 3);
+}

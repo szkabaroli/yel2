@@ -1,0 +1,12 @@
+// ---
+// description: a range over an unsigned typed bound counts in that type
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let limit: u8 = 4;
+    let total: u8 = 0;
+    for step in 0..limit { total += step; }
+    expect.equal(total, 6);
+}

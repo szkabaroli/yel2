@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of mixed: expected list<s32 | string> & readonly, found list<s32> & readonly
+// features: [readonly]
+// negative: compile
+// error: 9:48: the value of mixed: expected list<s32 | string> & readonly, found list<s32> & readonly
+// ---
+main: func() {
+    let ints: list<s32> & readonly = [1, 2,];
+    let mixed: list<s32 | string> & readonly = ints;
+}

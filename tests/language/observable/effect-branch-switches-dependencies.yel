@@ -1,0 +1,47 @@
+// ---
+// description: an effect's dependencies are those of its last run
+// features: [observable, reactive]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let flag = fresh();
+    let left = fresh();
+    let right = fresh();
+    let runs = 0;
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ ->
+            runs += 1;
+            if flag.id == 1 { let _ = left.id; } else { let _ = right.id; }
+            { -> }
+        });
+    });
+    right.id = 5;
+    reactive.flush();
+    expect.equal(runs, 1);
+    flag.id = 2;
+    reactive.flush();
+    expect.equal(runs, 2);
+    left.id = 5;
+    reactive.flush();
+    expect.equal(runs, 2);
+    right.id = 6;
+    reactive.flush();
+    expect.equal(runs, 3);
+    reactive.dispose(owner);
+}

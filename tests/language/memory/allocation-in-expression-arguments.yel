@@ -1,0 +1,16 @@
+// ---
+// description: arguments that each allocate are all kept until the call
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+join3: func(a: string, b: string, c: string) -> string { "{a}{b}{c}" }
+
+main: func() {
+    let total = 0;
+    for i in 0..5000 {
+        let text = join3("a{i}", "b{i}", "c{i}");
+        total += text.len() as s32;
+    }
+    expect.equal(total, 71670);
+}

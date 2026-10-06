@@ -1,0 +1,10 @@
+// ---
+// description: every string ends with the empty string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("hello".ends-with(""));
+    expect.holds("".ends-with(""));
+}

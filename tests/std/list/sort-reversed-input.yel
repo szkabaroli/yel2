@@ -1,0 +1,11 @@
+// ---
+// description: sort turns a list in the opposite order around
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [6, 5, 4, 3, 2, 1,];
+    xs.sort({ a, b -> a < b });
+    expect.equal(xs, [1, 2, 3, 4, 5, 6,]);
+}

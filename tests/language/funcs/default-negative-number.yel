@@ -1,0 +1,11 @@
+// ---
+// description: a negative number as a default
+// features: [funcs, defaults]
+// ---
+from "std:testing" include expect;
+
+offset: func(value: s32, by: s32 = -1) -> s32 { value + by }
+
+main: func() {
+    expect.equal(offset(5), 4);
+}

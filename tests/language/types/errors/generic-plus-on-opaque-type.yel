@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: +: expected a number, found T
+// features: [types, generics]
+// negative: compile
+// error: 7:33: +: expected a number, found T
+// ---
+add: func<T>(a: T, b: T) -> T { a + b }
+main: func() {}

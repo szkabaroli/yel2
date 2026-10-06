@@ -1,0 +1,10 @@
+// ---
+// description: is tests an integer against alternatives
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 3;
+    expect.holds(n is 1 | 2 | 3);
+    expect.holds(!(n is 4 | 5));
+}

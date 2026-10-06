@@ -1,0 +1,10 @@
+// ---
+// description: regex.group gives none for a name the regex has not
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = expect.some(/(?<year>\d{4})/.find("2026"));
+    expect.none(regex.group(found, "week"));
+}

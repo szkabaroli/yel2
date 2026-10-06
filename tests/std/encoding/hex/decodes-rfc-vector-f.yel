@@ -1,0 +1,10 @@
+// ---
+// description: hex.decode of '66'
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(expect.ok(hex.decode("66")), "f".bytes());
+}

@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: type loop-back names itself
+// features: [declarations,types]
+// negative: compile
+// error: 7:1: type loop-back names itself
+// ---
+type loop-back = loop-back;
+
+main: func() {}

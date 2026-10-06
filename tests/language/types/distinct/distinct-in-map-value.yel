@@ -1,0 +1,13 @@
+// ---
+// description: a distinct type as a map's value
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+main: func() {
+    let table: map<string, binding> = map.new();
+    table.set("a", 4 as binding);
+    expect.equal(table["a"] as u32, 4);
+}

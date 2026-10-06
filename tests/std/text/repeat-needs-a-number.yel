@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: text.repeat takes a count, not a string
+// features: [text]
+// negative: compile
+// error: 8:28: argument 2 of yel:std/text.repeat: expected s64, found string
+// ---
+main: func() {
+    let again = "a".repeat("b");
+}

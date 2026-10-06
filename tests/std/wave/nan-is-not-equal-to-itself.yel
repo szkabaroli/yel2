@@ -1,0 +1,8 @@
+// ---
+// description: nan is not equal to itself, and a list of floats shows its items
+// features: [wave]
+// ---
+main: func() {
+    let x: f64 = nan;
+    print("{x == x} {x != x} {[1.5, -0.25,]}\n");
+}

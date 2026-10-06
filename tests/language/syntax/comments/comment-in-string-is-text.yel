@@ -1,0 +1,11 @@
+// ---
+// description: // inside a string is part of the text
+// features: [syntax,comments]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a // b";
+    expect.equal(text.len(), 6);
+    expect.equal(text, "a // b");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: utf8-error is -1 for well-formed text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(text.utf8-error("a€😀"), -1);
+}

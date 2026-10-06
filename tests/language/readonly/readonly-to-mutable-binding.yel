@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of open: expected list<s32>, found list<s32> & readonly
+// features: [readonly]
+// negative: compile
+// error: 9:27: the value of open: expected list<s32>, found list<s32> & readonly
+// ---
+main: func() {
+    let fixed: list<s32> & readonly = [1,];
+    let open: list<s32> = fixed;
+}

@@ -1,0 +1,16 @@
+// ---
+// description: each alternative of a tuple pattern binds the same name
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+pair: func(t: tuple<s32, s32>) -> string {
+    match t {
+        (0, let y) | (let y, 0) => "one zero, other {y}",
+        _ => "no zero",
+    }
+}
+main: func() {
+    expect.equal(pair((0, 5)), "one zero, other 5");
+    expect.equal(pair((6, 0)), "one zero, other 6");
+    expect.equal(pair((1, 1)), "no zero");
+}

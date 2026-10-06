@@ -1,0 +1,9 @@
+// ---
+// description: a list shows its items in brackets
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{[1, 2, 3,]}", "[1, 2, 3]");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: expect.same stops the program for two lists that are only equal
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.same([1, 2,], [1, 2,]);
+}

@@ -1,0 +1,46 @@
+// ---
+// description: a | b matches what either matches: literals, strings, enum cases, cases with payloads
+// features: [patterns, match]
+// ---
+from "std:testing" include expect;
+
+enum Color { red, green, blue, }
+
+variant Shape { circle(s32), square(s32), }
+
+small: func(n: s32) -> bool {
+    match n {
+        1 | 2 | 3 => true,
+        _ => false,
+    }
+}
+
+farewell: func(s: string) -> bool {
+    match s {
+        "bye" | "ciao" => true,
+        _ => false,
+    }
+}
+
+warm: func(c: Color) -> bool {
+    match c {
+        red => true,
+        green | blue => false,
+    }
+}
+
+empty: func(s: Shape) -> bool {
+    match s {
+        circle(0) | square(0) => true,
+        _ => false,
+    }
+}
+
+main: func() {
+    expect.holds(small(1) && small(3));
+    expect.holds(!small(4));
+    expect.holds(farewell("ciao") && !farewell("hi"));
+    expect.holds(warm(Color.red) && !warm(Color.blue) && !warm(Color.green));
+    expect.holds(empty(Shape.circle(0)) && empty(Shape.square(0)));
+    expect.holds(!empty(Shape.circle(1)));
+}

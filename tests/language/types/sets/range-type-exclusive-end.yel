@@ -1,0 +1,14 @@
+// ---
+// description: a..b excludes b
+// features: [types, sets, ranges]
+// ---
+from "std:testing" include expect;
+
+type small = 1..6;
+
+main: func() {
+    let last: small = 5;
+    expect.equal(last, 5);
+    expect.none(6 as? small);
+    expect.none(0 as? small);
+}

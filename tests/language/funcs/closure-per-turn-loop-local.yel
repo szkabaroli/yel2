@@ -1,0 +1,19 @@
+// ---
+// description: a loop's body local is its own for each turn's closure
+// features: [funcs, closures, loops]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let makers: list<func() -> s32> = [];
+    let turn = 0;
+    loop {
+        if turn == 3 { break; }
+        let kept = turn * 10;
+        makers.push({ kept });
+        turn += 1;
+    }
+    expect.equal(makers[0](), 0);
+    expect.equal(makers[1](), 10);
+    expect.equal(makers[2](), 20);
+}

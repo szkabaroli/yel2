@@ -1,0 +1,13 @@
+// ---
+// description: a multiline string without its first and last line break
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        one
+        two
+        """;
+    expect.equal(text, "one\ntwo");
+}

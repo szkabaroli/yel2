@@ -1,0 +1,21 @@
+// ---
+// description: run-with gives the command several variables
+// features: [process]
+// ---
+from "std:testing" include expect;
+from "std:process" include process;
+
+// how a child ended: its code, or minus its signal
+status: func(ended: result<process.ended, string>) -> s64 {
+    match ended {
+        ok(code(number)) => number,
+        ok(signal(number)) => -number,
+        err(_) => -1000,
+    }
+}
+
+main: func() {
+    let variables = [("YEL_TEST_ONE", "1"), ("YEL_TEST_TWO", "2"),];
+    let found = process.run-with("sh", ["-c", "test $YEL_TEST_ONE$YEL_TEST_TWO = 12",], "", variables, "");
+    expect.equal(status(found), 0);
+}

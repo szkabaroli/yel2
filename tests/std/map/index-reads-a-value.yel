@@ -1,0 +1,11 @@
+// ---
+// description: m[key] reads the value of a key
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    expect.equal(m["a"], 1);
+}

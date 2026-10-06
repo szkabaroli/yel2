@@ -1,0 +1,10 @@
+// ---
+// description: hex.decode does not read a 0x prefix
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(expect.err(hex.decode("0xff")), "not a hex digit at byte 1");
+}

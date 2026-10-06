@@ -1,0 +1,10 @@
+// ---
+// description: expect.err gives the error inside an err
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let bad: result<s32, string> = err("broken");
+    expect.equal(expect.err(bad), "broken");
+}

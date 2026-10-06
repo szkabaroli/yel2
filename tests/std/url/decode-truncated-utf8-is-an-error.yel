@@ -1,0 +1,10 @@
+// ---
+// description: decode refuses a character cut short
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("ab%C3"), err("not UTF-8 at byte 2"));
+}

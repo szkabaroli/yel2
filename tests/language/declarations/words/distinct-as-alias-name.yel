@@ -1,0 +1,13 @@
+// ---
+// description: a type named distinct is an alias, not a distinct type
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+type distinct = s64;
+
+main: func() {
+    let plain: distinct = 5;
+    let sum: s64 = plain + 1;
+    expect.equal(sum, 6);
+}

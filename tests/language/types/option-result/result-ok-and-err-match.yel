@@ -1,0 +1,17 @@
+// ---
+// description: match on ok and err binds each payload
+// features: [types, result]
+// ---
+from "std:testing" include expect;
+
+describe: func(outcome: result<s32, string>) -> string {
+    match outcome {
+        ok(value) => "ok {value}",
+        err(reason) => "err {reason}",
+    }
+}
+
+main: func() {
+    expect.equal(describe(ok(3)), "ok 3");
+    expect.equal(describe(err("bad")), "err bad");
+}

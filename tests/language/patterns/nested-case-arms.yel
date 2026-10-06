@@ -1,0 +1,21 @@
+// ---
+// description: cases nest: an option of a result matched to the depth each arm names
+// features: [patterns, match, option, result]
+// ---
+from "std:testing" include expect;
+
+nested: func(x: option<result<s32, string>>) -> string {
+    match x {
+        none => "none",
+        some(ok(0)) => "ok zero",
+        some(ok(n)) => "ok {n}",
+        some(err(e)) => "err {e}",
+    }
+}
+
+main: func() {
+    expect.equal(nested(none), "none");
+    expect.equal(nested(some(ok(0))), "ok zero");
+    expect.equal(nested(some(ok(9))), "ok 9");
+    expect.equal(nested(some(err("bad"))), "err bad");
+}

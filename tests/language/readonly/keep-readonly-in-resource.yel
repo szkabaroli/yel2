@@ -1,0 +1,11 @@
+// ---
+// description: a readonly field keeps what it is given
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Shelf { items: list<string> & readonly, }
+shelve: func(items: list<string> & readonly) -> Shelf { { items: items, } }
+main: func() {
+    let shelf = shelve(["kept",]);
+    expect.equal(shelf.items, ["kept",]);
+}

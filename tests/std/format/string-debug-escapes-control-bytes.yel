@@ -1,0 +1,11 @@
+// ---
+// description: a quoted string writes other control bytes as \u{hex}
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{"\u{7}":?}", "\"\\u\{7\}\"");
+    expect.equal("{"\u{1f}":?}", "\"\\u\{1f\}\"");
+    expect.equal("{"\u{7f}":?}", "\"\\u\{7f\}\"");
+}

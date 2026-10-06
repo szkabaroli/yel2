@@ -1,0 +1,15 @@
+// ---
+// description: a generator yields each value of a loop
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+squares: func(count: s32) -> seq<s32> {
+    for x in 0..count { yield x * x; }
+}
+
+main: func() {
+    let seen: list<s32> = [];
+    for value in squares(5) { seen.push(value); }
+    expect.equal(seen, [0, 1, 4, 9, 16,]);
+}

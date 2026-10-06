@@ -1,0 +1,10 @@
+// ---
+// description: test is true where the regex matches somewhere in the text
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(/\d+/.test("a12b"));
+    expect.holds(/b/.test("abc"));
+}

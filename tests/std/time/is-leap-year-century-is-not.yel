@@ -1,0 +1,11 @@
+// ---
+// description: a year divisible by 100 is not a leap year
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.holds(!time.is-leap-year(1900));
+    expect.holds(!time.is-leap-year(2100));
+}

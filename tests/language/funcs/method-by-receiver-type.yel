@@ -1,0 +1,16 @@
+// ---
+// description: a name taken by two types is found by the receiver's type
+// features: [funcs, methods]
+// ---
+from "std:testing" include expect;
+
+record Box { size: s32, }
+
+len: func(box: Box) -> s32 { box.size }
+
+main: func() {
+    let box: Box = { size: 9, };
+    expect.equal(box.len(), 9);
+    expect.equal("four".len(), 4);
+    expect.equal([1, 2,].len(), 2);
+}

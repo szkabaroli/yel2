@@ -1,0 +1,12 @@
+// ---
+// description: a func calls itself
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+fact: func(n: s64) -> s64 { if n < 2 { 1 } else { n * fact(n - 1) } }
+
+main: func() {
+    expect.equal(fact(0), 1);
+    expect.equal(fact(10), 3628800);
+}

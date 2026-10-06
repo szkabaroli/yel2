@@ -1,0 +1,25 @@
+// ---
+// description: a constant record's list field is its own per evaluation
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+record row { name: string, tags: list<string>, }
+
+rows: func() -> list<row> {
+    [{ name: "ada", tags: ["a", "b",], }, { name: "bob", tags: ["quote",], },]
+}
+
+main: func() {
+    let first = rows();
+    first.push(first[0]);
+    first[0].tags.push("added");
+    first[1].tags[0] = "changed";
+    let again = rows();
+    expect.equal(first.len(), 3);
+    expect.equal(first[0].tags.len(), 3);
+    expect.equal(first[1].tags[0], "changed");
+    expect.equal(again.len(), 2);
+    expect.equal(again[0].tags.len(), 2);
+    expect.equal(again[1].tags[0], "quote");
+}

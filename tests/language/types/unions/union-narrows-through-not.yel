@@ -1,0 +1,16 @@
+// ---
+// description: !(x is T) narrows to the rest
+// features: [types, unions, is]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+text-length: func(who: id) -> s64 {
+    if !(who is s32) { who.len() } else { -1 }
+}
+
+main: func() {
+    expect.equal(text-length("abc"), 3);
+    expect.equal(text-length(1), -1);
+}

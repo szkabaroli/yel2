@@ -1,0 +1,13 @@
+// ---
+// description: chars shows a byte that is not UTF-8 as U+FFFD
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let pieces = buffer(4);
+    pieces.push("a");
+    pieces.push-byte(255);
+    pieces.push("b");
+    expect.equal(pieces.to-string().chars(), ['a', '\u{fffd}', 'b',]);
+}

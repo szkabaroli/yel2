@@ -1,5 +1,0 @@
-// error: 4:13: work is async: wait work(…) for its result, or start work(…) for a future
-work: async func() -> s32 { 1 }
-main: async func() {
-    let n = work();
-}

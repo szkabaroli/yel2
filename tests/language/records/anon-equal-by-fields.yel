@@ -1,0 +1,13 @@
+// ---
+// description: anonymous records are equal by their fields
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let a = { x: 1, y: 2, };
+    let b = { x: 1, y: 2, };
+    let c = { x: 1, y: 3, };
+    expect.holds(a == b);
+    expect.holds(a != c);
+}

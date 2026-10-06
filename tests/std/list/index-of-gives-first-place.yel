@@ -1,0 +1,9 @@
+// ---
+// description: index-of gives the place of the first equal item
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([4, 7, 4,].index-of(4), 0);
+}

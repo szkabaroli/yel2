@@ -1,0 +1,15 @@
+// ---
+// description: an unsigned >> fills with zeros
+// features: [types, integers, shifts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: u8 = 200;
+    expect.equal(top >> 1, 100);
+    expect.equal(top >> 7, 1);
+    let high: u32 = 2147483648;
+    expect.equal(high >> 31, 1);
+    let wide: u64 = 18446744073709551615;
+    expect.equal(wide >> 63, 1);
+}

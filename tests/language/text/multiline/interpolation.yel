@@ -1,0 +1,13 @@
+// ---
+// description: a multiline string interpolates
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    let text = """
+        Hello, {name}!
+        """;
+    expect.equal(text, "Hello, yel!");
+}

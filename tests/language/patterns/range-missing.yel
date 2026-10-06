@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: the match has no arm for 101: add one, or a _ arm
+// features: [patterns]
+// negative: compile
+// error: 9:5: the match has no arm for 101: add one, or a _ arm
+// ---
+main: func() {
+    let b: u8 = 7;
+    match b {
+        0..=100 => {}
+        102..=255 => {}
+    }
+}

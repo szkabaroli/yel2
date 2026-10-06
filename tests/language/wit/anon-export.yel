@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: { x: s32, y: s32 } crosses WIT as a record, which needs a name: type name = { x: s32, y: s32 };
+// features: [wit]
+// negative: compile
+// error: 8:5: { x: s32, y: s32 } crosses WIT as a record, which needs a name: type name = { x: s32, y: s32 };
+// ---
+module api {
+    origin: func() -> { x: s32, y: s32 } { { x: 0, y: 0, } }
+}

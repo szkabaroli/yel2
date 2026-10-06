@@ -1,0 +1,25 @@
+// the linter's test: std:lint's recommended rules, and one of the project's own (a plugin: a
+// rule written here, on the nodes yelc lint gives)
+
+from "std:lint" include lint, rules;
+
+main: func() {
+    lint.run({ l ->
+        l.use(rules.recommended());
+        l.use([no-todo(),]);
+    });
+}
+
+// a func named todo is an error: work not done
+no-todo: func() -> lint.rule {
+    {
+        name: "no-todo",
+        description: "a func named todo",
+        severity: "error",
+        create: { c ->
+            c.on("func", { n ->
+                if n.name == "todo" { c.report(n, "func todo is work not done"); }
+            })
+        },
+    }
+}

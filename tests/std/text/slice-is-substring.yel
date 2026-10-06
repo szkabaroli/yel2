@@ -1,0 +1,10 @@
+// ---
+// description: slice of a string takes the bytes from up to to
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".slice(1, 3), "el");
+    expect.equal("hello".slice(0, 0), "");
+}

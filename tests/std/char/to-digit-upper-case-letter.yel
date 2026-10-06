@@ -1,0 +1,10 @@
+// ---
+// description: to-digit gives an upper case letter's value
+// features: [char]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(to-digit(65, 16), some(10));
+    expect.equal(to-digit(70, 16), some(15));
+}

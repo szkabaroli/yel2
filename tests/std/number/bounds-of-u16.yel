@@ -1,0 +1,10 @@
+// ---
+// description: u16.MIN and u16.MAX are the least and greatest u16
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(u16.MIN, 0);
+    expect.equal(u16.MAX, 65535);
+}

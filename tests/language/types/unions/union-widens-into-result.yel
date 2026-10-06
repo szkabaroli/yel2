@@ -1,0 +1,16 @@
+// ---
+// description: a func returns a value of one kind as the union
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+make: func(numeric: bool) -> id {
+    if numeric { 7 } else { "seven" }
+}
+
+main: func() {
+    expect.equal("{make(true)}", "7");
+    expect.equal("{make(false)}", "seven");
+}

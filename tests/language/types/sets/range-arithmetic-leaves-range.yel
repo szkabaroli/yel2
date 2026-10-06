@@ -1,0 +1,15 @@
+// ---
+// description: arithmetic on a range-typed value gives its base type
+// features: [types, sets, ranges]
+// ---
+from "std:testing" include expect;
+
+type percent = 0..=100;
+
+main: func() {
+    let value: percent = 95;
+    let sum = value + 10;
+    expect.equal(sum, 105);
+    expect.none(sum as? percent);
+    expect.equal(expect.some((value - 50) as? percent), 45);
+}

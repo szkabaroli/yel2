@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a match arm's guard: expected bool, found an integer
+// features: [patterns]
+// negative: compile
+// error: 8:32: a match arm's guard: expected bool, found an integer
+// ---
+main: func() {
+    let r = match 1 { let k if k => 1, _ => 0, };
+}

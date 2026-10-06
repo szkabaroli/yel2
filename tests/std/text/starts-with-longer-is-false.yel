@@ -1,0 +1,9 @@
+// ---
+// description: a prefix longer than the string is not one
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!"he".starts-with("hello"));
+}

@@ -1,0 +1,10 @@
+// ---
+// description: && binds tighter than ||
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    expect.holds(true || false && false);
+    expect.holds(!(false && true || false));
+    expect.holds((true || false) && true);
+}

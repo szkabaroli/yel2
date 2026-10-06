@@ -1,0 +1,27 @@
+// ---
+// description: a state walked through a literal union with a func returning option
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type level = 1 | 2 | 3;
+
+next-level: func(which: level) -> option<level> {
+    match which {
+        1 => some(2),
+        2 => some(3),
+        3 => none,
+    }
+}
+
+main: func() {
+    let current: option<level> = some(1);
+    let steps = 0;
+    for turn in 0..5 {
+        match current {
+            some(let which) => { steps += 1; current = next-level(which); }
+            none => {}
+        }
+    }
+    expect.equal(steps, 3);
+}

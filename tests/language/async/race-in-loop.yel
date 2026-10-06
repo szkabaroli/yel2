@@ -1,0 +1,29 @@
+// ---
+// description: a race repeated in a loop each time gives the first done
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+quick: async func() -> s32 {
+    wait yield-turn();
+    1
+}
+
+slow: async func() -> string {
+    for turn in 0..3 { wait yield-turn(); }
+    "slow"
+}
+
+main: async func() {
+    let wins = 0;
+    for round in 0..3 {
+        let first = start quick();
+        let second = start slow();
+        match wait first | second {
+            let number: s32 => { wins += number; }
+            let text: string => {}
+        }
+        wait second;
+    }
+    expect.equal(wins, 3);
+}

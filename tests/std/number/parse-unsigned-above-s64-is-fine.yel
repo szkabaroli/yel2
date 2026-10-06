@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned reads numbers above s64's greatest
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-unsigned("9223372036854775808"), some(9223372036854775808));
+}

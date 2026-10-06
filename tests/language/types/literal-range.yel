@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: 256 is out of range for u8
+// features: [types]
+// negative: compile
+// error: 8:17: 256 is out of range for u8
+// ---
+main: func() -> s32 {
+    let b: u8 = 256;
+    0
+}

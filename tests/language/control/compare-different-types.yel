@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the right of ==: expected an integer, found string
+// features: [control]
+// negative: compile
+// error: 8:18: the right of ==: expected an integer, found string
+// ---
+main: func() {
+    let x = 1 == "1";
+}

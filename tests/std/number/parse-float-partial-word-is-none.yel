@@ -1,0 +1,11 @@
+// ---
+// description: parse-float refuses a word that only starts like inf
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("in"));
+    expect.none(number.parse-float("infin"));
+    expect.none(number.parse-float("nan1"));
+}

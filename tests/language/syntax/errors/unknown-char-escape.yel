@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: unknown escape \q
+// features: [syntax,literals]
+// negative: compile
+// error: 8:19: unknown escape \q
+// ---
+main: func() {
+    let letter = '\q';
+}

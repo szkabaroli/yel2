@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the right of +: expected an integer, found string
+// features: [text,format]
+// negative: compile
+// error: 8:22: the right of +: expected an integer, found string
+// ---
+main: func() {
+    let text = "{1 + "x"}";
+}

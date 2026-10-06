@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /*x/ has nothing for * to repeat
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /*x/: nothing to repeat at 0
+// ---
+main: func() {
+    let found = /*x/;
+}

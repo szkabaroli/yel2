@@ -1,0 +1,14 @@
+// ---
+// description: a func whose first parameter is a record is called as its method
+// features: [funcs, methods, records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+length-squared: func(p: Point) -> s32 { p.x * p.x + p.y * p.y }
+
+main: func() {
+    let p: Point = { x: 3, y: 4, };
+    expect.equal(p.length-squared(), 25);
+}

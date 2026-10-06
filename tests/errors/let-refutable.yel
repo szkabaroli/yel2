@@ -1,6 +1,0 @@
-// error: 4:5: a let's pattern does not fit (none, _): use a match
-main: func() -> s32 {
-    let o: option<s32> = some(1);
-    let (some(n), _) = (o, 0);
-    n
-}

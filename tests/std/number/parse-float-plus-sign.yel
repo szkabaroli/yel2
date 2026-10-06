@@ -1,0 +1,9 @@
+// ---
+// description: parse-float reads a plus sign
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("+3.25"), some(3.25));
+}

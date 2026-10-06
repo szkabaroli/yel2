@@ -1,0 +1,16 @@
+// ---
+// description: a bare case name is enough where its variant is expected
+// features: [types, variants]
+// ---
+from "std:testing" include expect;
+
+variant Shape { dot, circle(s32), }
+
+make: func(small: bool) -> Shape {
+    if small { dot } else { circle(9) }
+}
+
+main: func() {
+    expect.holds(make(true) == Shape.dot);
+    expect.holds(make(false) == Shape.circle(9));
+}

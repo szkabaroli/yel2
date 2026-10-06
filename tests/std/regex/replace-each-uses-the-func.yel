@@ -1,0 +1,9 @@
+// ---
+// description: replace-each makes each match what the func says
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/\d+/.replace-each("1 and 22", { m -> "{m.text.len()}" }), "1 and 2");
+}

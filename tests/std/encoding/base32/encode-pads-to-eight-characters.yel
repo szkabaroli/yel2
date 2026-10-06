@@ -1,0 +1,11 @@
+// ---
+// description: base32.encode pads a last group to eight characters
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    expect.equal(base32.encode([1,]).len(), 8);
+    expect.equal(base32.encode([1, 2, 3, 4, 5, 6,]).len(), 16);
+}

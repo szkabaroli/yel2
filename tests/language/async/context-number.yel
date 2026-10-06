@@ -1,0 +1,23 @@
+// ---
+// description: a numeric @(context) global is each task's own across waits
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let counter: s32 = 0;
+
+count: async func(start-at: s32, steps: s32) -> s32 {
+    counter = start-at;
+    for step in 0..steps {
+        wait yield-turn();
+        counter += 1;
+    }
+    counter
+}
+
+main: async func() {
+    let first = start count(100, 3);
+    let second = start count(200, 5);
+    expect.equal(wait first, 103);
+    expect.equal(wait second, 205);
+}

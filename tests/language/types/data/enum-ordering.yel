@@ -1,0 +1,13 @@
+// ---
+// description: enum values compare in declaration order
+// features: [types, enums]
+// ---
+from "std:testing" include expect;
+
+enum Color { red, green, blue, }
+
+main: func() {
+    expect.holds(Color.red < Color.green);
+    expect.holds(Color.blue > Color.green);
+    expect.holds(Color.green <= Color.green);
+}

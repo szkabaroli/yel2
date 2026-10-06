@@ -1,0 +1,9 @@
+// ---
+// description: let k binds the whole matched value
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let text = match 41 { let k => "{k + 1}", };
+    expect.equal(text, "42");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: a record literal with no record wanted is anonymous
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let a = { x: 1, y: 2, };
+    expect.equal(a.x + a.y, 3);
+}

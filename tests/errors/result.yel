@@ -1,2 +1,0 @@
-// error: 2:23: the value: expected s32, found string
-main: func() -> s32 { "x" }

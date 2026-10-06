@@ -1,0 +1,11 @@
+// ---
+// description: module is a func name where a colon follows it
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+module: func() -> s32 { 4 }
+
+main: func() {
+    expect.equal(module(), 4);
+}

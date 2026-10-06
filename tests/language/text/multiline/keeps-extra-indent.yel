@@ -1,0 +1,13 @@
+// ---
+// description: a line indented more than the closing quotes keeps the extra spaces
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        Hello, yel!
+          indented two
+        """;
+    expect.equal(text, "Hello, yel!\n  indented two");
+}

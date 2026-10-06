@@ -1,0 +1,9 @@
+// ---
+// description: index-of finds the last item
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2, 3,].index-of(3), 2);
+}

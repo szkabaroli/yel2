@@ -1,0 +1,11 @@
+// ---
+// description: a func of its own is called as a method of a string
+// features: [funcs, methods]
+// ---
+from "std:testing" include expect;
+
+shout: func(text: string) -> string { text + "!" }
+
+main: func() {
+    expect.equal("hey".shout(), "hey!");
+}

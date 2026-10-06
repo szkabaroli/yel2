@@ -1,0 +1,11 @@
+// ---
+// description: u8 subtraction wraps from zero to its maximum
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: u8 = 0;
+    expect.equal(zero - 1, u8.MAX);
+    expect.equal(zero - 2, u8.MAX - 1);
+}

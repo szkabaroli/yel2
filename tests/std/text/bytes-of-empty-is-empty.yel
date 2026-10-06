@@ -1,0 +1,9 @@
+// ---
+// description: an empty string has an empty byte list
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("".bytes().len(), 0);
+}

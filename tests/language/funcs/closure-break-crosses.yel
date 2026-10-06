@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: break outside a loop
+// features: [funcs]
+// negative: compile
+// error: 9:22: break outside a loop
+// ---
+main: func() {
+    for i in 0..3 {
+        let f = { -> break; };
+    }
+}

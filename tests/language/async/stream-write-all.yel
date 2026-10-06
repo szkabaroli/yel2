@@ -1,0 +1,14 @@
+// ---
+// description: write-all puts a whole list into a stream
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(8);
+    wait out.write-all([1, 2, 3,]);
+    out.close();
+    let seen: list<s32> = [];
+    wait for x in items { seen.push(x); }
+    expect.equal(seen, [1, 2, 3,]);
+}

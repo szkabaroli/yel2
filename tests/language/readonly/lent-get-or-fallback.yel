@@ -1,0 +1,11 @@
+// ---
+// description: get-or's fallback is given back where the key is not there
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let scores: map<string, s32> = map.new();
+    scores.set("a", 1);
+    expect.equal(scores.get-or("a", 0), 1);
+    expect.equal(scores.get-or("b", 7), 7);
+}

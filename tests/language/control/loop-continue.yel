@@ -1,0 +1,16 @@
+// ---
+// description: continue in a loop goes to the top
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 0;
+    let odd-sum = 0;
+    loop {
+        n += 1;
+        if n > 7 { break; }
+        if n % 2 == 0 { continue; }
+        odd-sum += n;
+    }
+    expect.equal(odd-sum, 16);
+}

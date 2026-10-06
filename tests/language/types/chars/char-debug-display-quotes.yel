@@ -1,0 +1,14 @@
+// ---
+// description: {c:?} shows a char as a literal
+// features: [types, chars, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let letter: char = 'x';
+    expect.equal("{letter:?}", "'x'");
+    let newline: char = '\n';
+    expect.equal("{newline:?}", "'\\n'");
+    let quote: char = '\'';
+    expect.equal("{quote:?}", "'\\''");
+}

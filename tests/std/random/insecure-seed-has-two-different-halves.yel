@@ -1,0 +1,11 @@
+// ---
+// description: get-insecure-seed gives two numbers that differ
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include insecure-seed;
+
+main: func() {
+    let (first, second) = insecure-seed.get-insecure-seed();
+    expect.not-equal(first, second);
+}

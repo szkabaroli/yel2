@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: field y of Point: expected s32, found string
+// features: [records, types]
+// negative: compile
+// error: 9:31: field y of Point: expected s32, found string
+// ---
+record Point { x: s32, y: s32, }
+main: func() {
+    let p: Point = { x: 1, y: "two", };
+}

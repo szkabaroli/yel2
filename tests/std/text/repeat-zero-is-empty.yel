@@ -1,0 +1,9 @@
+// ---
+// description: repeat zero times is empty
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("ab".repeat(0), "");
+}

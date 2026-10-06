@@ -1,0 +1,22 @@
+// ---
+// description: a context value is passed down through several started tasks
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let request: string = "none";
+
+leaf: async func() -> string {
+    wait yield-turn();
+    request
+}
+
+middle: async func() -> string {
+    let future = start leaf();
+    wait future
+}
+
+main: async func() {
+    request = "root";
+    expect.equal(wait middle(), "root");
+}

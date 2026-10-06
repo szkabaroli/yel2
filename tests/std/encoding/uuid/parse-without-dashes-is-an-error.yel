@@ -1,0 +1,10 @@
+// ---
+// description: uuid.parse refuses 32 digits with no dashes
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(expect.err(uuid.parse("550e8400e29b41d4a716446655440000")), "a UUID is 36 characters, not 32");
+}

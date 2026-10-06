@@ -1,0 +1,12 @@
+// ---
+// description: method calls chain
+// features: [funcs, methods]
+// ---
+from "std:testing" include expect;
+
+double: func(x: s32) -> s32 { x * 2 }
+inc: func(x: s32) -> s32 { x + 1 }
+
+main: func() {
+    expect.equal(5.double().inc().double(), 22);
+}

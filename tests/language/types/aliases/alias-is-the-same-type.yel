@@ -1,0 +1,16 @@
+// ---
+// description: an alias is the type it names, so values pass without conversion
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type name = string;
+
+shout: func(text: string) -> string { text + "!" }
+
+main: func() {
+    let who: name = "ada";
+    expect.equal(shout(who), "ada!");
+    let plain: string = who;
+    expect.equal(plain, "ada");
+}

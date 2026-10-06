@@ -1,0 +1,18 @@
+// ---
+// description: push-char writes the edges of each UTF-8 width
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(16);
+    b.push-char('\u{7f}');
+    b.push-char('\u{80}');
+    b.push-char('\u{7ff}');
+    b.push-char('\u{800}');
+    b.push-char('\u{ffff}');
+    b.push-char('\u{10000}');
+    b.push-char('\u{10ffff}');
+    expect.equal(b.len(), 1 + 2 + 2 + 3 + 3 + 4 + 4);
+    expect.equal(b.to-string().chars().len(), 7);
+}

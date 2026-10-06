@@ -1,0 +1,10 @@
+// ---
+// description: a bool shows as true or false
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{true}", "true");
+    expect.equal("{1 > 2}", "false");
+}

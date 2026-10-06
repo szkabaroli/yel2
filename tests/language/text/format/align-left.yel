@@ -1,0 +1,10 @@
+// ---
+// description: < pads on the right
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 255;
+    expect.equal("[{value:<8}]", "[255     ]");
+}

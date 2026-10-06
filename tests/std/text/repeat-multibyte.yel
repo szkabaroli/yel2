@@ -1,0 +1,9 @@
+// ---
+// description: repeat of multibyte text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("é".repeat(3).len(), 6);
+}

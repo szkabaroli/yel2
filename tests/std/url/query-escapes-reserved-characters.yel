@@ -1,0 +1,10 @@
+// ---
+// description: query percent-encodes reserved characters
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.query([("k", "a&b=c?d"),]), "k=a%26b%3Dc%3Fd");
+}

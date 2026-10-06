@@ -1,0 +1,11 @@
+// ---
+// description: day-of-year of 1 March counts 29 February in a leap year
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.day-of-year(expect.ok(time.parse-date-time("2024-03-01"))), 61);
+    expect.equal(time.day-of-year(expect.ok(time.parse-date-time("2026-03-01"))), 60);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: && keeps a division by zero from running
+// features: [control]
+// ---
+from "std:testing" include expect;
+safe: func(divisor: s32) -> bool { divisor != 0 && 10 / divisor > 1 }
+main: func() {
+    expect.holds(!safe(0));
+    expect.holds(safe(5));
+    expect.holds(!safe(10));
+}

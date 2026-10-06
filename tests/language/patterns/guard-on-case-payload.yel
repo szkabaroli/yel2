@@ -1,0 +1,19 @@
+// ---
+// description: a guard on a case's payload binding
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+sign: func(v: option<s32>) -> string {
+    match v {
+        some(n) if n > 0 => "positive",
+        some(n) if n < 0 => "negative",
+        some(_) => "zero",
+        none => "nothing",
+    }
+}
+main: func() {
+    expect.equal(sign(some(5)), "positive");
+    expect.equal(sign(some(-5)), "negative");
+    expect.equal(sign(some(0)), "zero");
+    expect.equal(sign(none), "nothing");
+}

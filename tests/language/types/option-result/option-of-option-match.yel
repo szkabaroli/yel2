@@ -1,0 +1,19 @@
+// ---
+// description: a match tells some(none) from some(some(x)) and none
+// features: [types, option, match]
+// ---
+from "std:testing" include expect;
+
+describe: func(nested: option<option<s32>>) -> string {
+    match nested {
+        some(some(value)) => "value {value}",
+        some(none) => "inner none",
+        none => "outer none",
+    }
+}
+
+main: func() {
+    expect.equal(describe(some(some(5))), "value 5");
+    expect.equal(describe(some(none)), "inner none");
+    expect.equal(describe(none), "outer none");
+}

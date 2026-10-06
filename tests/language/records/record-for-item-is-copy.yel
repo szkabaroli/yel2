@@ -1,0 +1,14 @@
+// ---
+// description: a for loop's item of records is a copy
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let points: list<Point> = [{ x: 1, y: 2, }, { x: 3, y: 4, },];
+    for p in points { p.x = 0; }
+    expect.equal(points[0].x, 1);
+    expect.equal(points[1].x, 3);
+}

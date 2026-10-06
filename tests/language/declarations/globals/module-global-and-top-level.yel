@@ -1,0 +1,17 @@
+// ---
+// description: a module global and a top-level global of one name are two globals
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let total: s32 = 1;
+
+module counter {
+    let total: s32 = 50;
+    read: func() -> s32 { total }
+}
+
+main: func() {
+    expect.equal(total, 1);
+    expect.equal(counter.read(), 50);
+}

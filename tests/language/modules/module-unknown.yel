@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: package test:shapes has no module nope
+// features: [modules]
+// negative: compile
+// error: 7:1: package test:shapes has no module nope
+// ---
+from "../../packages/shapes" include geometry, nope;
+main: func() -> s32 { 0 }

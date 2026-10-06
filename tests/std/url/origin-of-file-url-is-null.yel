@@ -1,0 +1,11 @@
+// ---
+// description: origin of a file URL is null
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("file:///etc/hosts"));
+    expect.equal(url.origin(u), "null");
+}

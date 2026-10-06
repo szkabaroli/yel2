@@ -1,0 +1,11 @@
+// ---
+// description: get gives some item for an index inside the list
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [10, 20, 30,];
+    expect.equal(xs.get(0), some(10));
+    expect.equal(xs.get(2), some(30));
+}

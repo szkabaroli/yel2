@@ -1,0 +1,22 @@
+// ---
+// description: an async func's frame keeps its locals alive across waits while others allocate
+// features: [memory, async, gc]
+// ---
+from "std:testing" include expect;
+
+collect: async func(name: string) -> string {
+    let parts: list<string> = [];
+    for i in 0..5 {
+        parts.push("{name}{i}");
+        wait yield-turn();
+        let junk = "junk {i} {name}";
+    }
+    parts.join(",")
+}
+
+main: async func() {
+    let first = start collect("a");
+    let second = start collect("b");
+    expect.equal(wait first, "a0,a1,a2,a3,a4");
+    expect.equal(wait second, "b0,b1,b2,b3,b4");
+}

@@ -1,0 +1,15 @@
+// ---
+// description: an async func may call itself with wait
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+countdown: async func(n: s32) -> s32 {
+    if n == 0 { return 0; }
+    wait yield-turn();
+    n + wait countdown(n - 1)
+}
+
+main: async func() {
+    expect.equal(wait countdown(4), 10);
+}

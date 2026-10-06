@@ -1,0 +1,11 @@
+// ---
+// description: a func is called before the line it is declared on
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(later(2), 4);
+}
+
+later: func(x: s32) -> s32 { x * 2 }

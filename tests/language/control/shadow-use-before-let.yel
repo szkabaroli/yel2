@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: x is not declared
+// features: [control]
+// negative: compile
+// error: 8:13: x is not declared
+// ---
+main: func() {
+    let y = x;
+    let x = 1;
+}

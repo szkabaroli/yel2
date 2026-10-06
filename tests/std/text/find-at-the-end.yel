@@ -1,0 +1,10 @@
+// ---
+// description: find sees a match at the very end
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abcabc".find("bc"), some(1));
+    expect.equal("xxab".find("ab"), some(2));
+}

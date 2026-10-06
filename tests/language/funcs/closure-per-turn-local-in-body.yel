@@ -1,0 +1,16 @@
+// ---
+// description: a local made in a loop's body is its own for each turn's closure
+// features: [funcs, closures, loops]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let makers: list<func() -> s32> = [];
+    for turn in 0..3 {
+        let doubled = turn * 2;
+        makers.push({ doubled });
+    }
+    expect.equal(makers[0](), 0);
+    expect.equal(makers[1](), 2);
+    expect.equal(makers[2](), 4);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: u32 subtraction wraps from zero to its maximum
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: u32 = 0;
+    expect.equal(zero - 1, u32.MAX);
+    expect.equal(zero - 2, u32.MAX - 1);
+}

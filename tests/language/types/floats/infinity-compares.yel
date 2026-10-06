@@ -1,0 +1,15 @@
+// ---
+// description: an infinity is above and below every finite number
+// features: [types, floats, infinity]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let high: f64 = inf;
+    let low: f64 = -inf;
+    expect.holds(high > 1.0e300);
+    expect.holds(low < -1.0e300);
+    expect.holds(high == inf);
+    expect.holds(low < high);
+    expect.holds(high >= high);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: a tuple's annotation types its items
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let (a, b): tuple<u8, u8> = (250, 5);
+    expect.equal(a + b, 255);
+}

@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: tests/packages/cyc-a includes this package back: packages cannot include each other
+// features: [modules]
+// negative: compile
+// error: tests/packages/cyc-b/b.yel:2:1: tests/packages/cyc-a includes this package back: packages cannot include each other
+// ---
+from "../../packages/cyc-a" include a;
+main: func() -> s32 { a.f() }

@@ -1,0 +1,11 @@
+// ---
+// description: a string's length counts bytes, not characters
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("é".len(), 2);
+    expect.equal("€".len(), 3);
+    expect.equal("😀".len(), 4);
+}

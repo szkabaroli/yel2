@@ -1,0 +1,11 @@
+// ---
+// description: an inclusive range ending at s64's maximum ends
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let turns = 0;
+    let top: s64 = 9223372036854775807;
+    for i in (top - 1)..=top { turns += 1; }
+    expect.equal(turns, 2);
+}

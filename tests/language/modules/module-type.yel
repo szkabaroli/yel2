@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: the type of p: no type test:shapes/geometry.Nope
+// features: [modules]
+// negative: compile
+// error: 9:5: the type of p: no type test:shapes/geometry.Nope
+// ---
+from "../../packages/shapes" include geometry;
+main: func() -> s32 {
+    let p: geometry.Nope = geometry.origin();
+    0
+}

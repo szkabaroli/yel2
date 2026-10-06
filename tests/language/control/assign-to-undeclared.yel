@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: missing is not declared
+// features: [control]
+// negative: compile
+// error: 8:5: missing is not declared
+// ---
+main: func() {
+    missing = 1;
+}

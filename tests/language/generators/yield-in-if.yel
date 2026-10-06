@@ -1,0 +1,17 @@
+// ---
+// description: a yield in a branch yields only when the branch is taken
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+evens: func(limit: s32) -> seq<s32> {
+    for x in 0..limit {
+        if x % 2 == 0 { yield x; }
+    }
+}
+
+main: func() {
+    let seen: list<s32> = [];
+    for value in evens(8) { seen.push(value); }
+    expect.equal(seen, [0, 2, 4, 6,]);
+}

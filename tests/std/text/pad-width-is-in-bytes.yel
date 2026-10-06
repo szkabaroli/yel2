@@ -1,0 +1,9 @@
+// ---
+// description: pad-start counts the width in bytes
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("é".pad-start(3, "_"), "_é");
+}

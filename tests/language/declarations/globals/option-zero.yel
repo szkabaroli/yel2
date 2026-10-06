@@ -1,0 +1,11 @@
+// ---
+// description: an option global starts none
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let found: option<s32>;
+
+main: func() {
+    expect.none(found);
+}

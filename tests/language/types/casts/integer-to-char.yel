@@ -1,0 +1,12 @@
+// ---
+// description: an integer cast to a char is that scalar value
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let code: u32 = 65;
+    expect.equal(code as char, 'A');
+    expect.equal(8594 as char, '→');
+    expect.equal(128512 as char, '\u{1F600}');
+}

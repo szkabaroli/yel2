@@ -1,0 +1,9 @@
+// ---
+// description: replace takes $1 and $2 as the text of groups
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/(\w+)@(\w+)/.replace("ada@yel", "$2 at $1"), "yel at ada");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: base32.decode reads text with no padding
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    expect.equal(expect.ok(base32.decode("MZXW6")), [102, 111, 111,]);
+}

@@ -1,3 +1,0 @@
-// error: 3:23: no func square
-from "../shapes" include geometry;
-main: func() -> s32 { square(2) }

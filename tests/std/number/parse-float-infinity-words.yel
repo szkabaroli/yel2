@@ -1,0 +1,11 @@
+// ---
+// description: parse-float reads inf and infinity in any case
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("inf"), some(inf));
+    expect.equal(number.parse-float("Infinity"), some(inf));
+    expect.equal(number.parse-float("INF"), some(inf));
+}

@@ -1,0 +1,26 @@
+// ---
+// description: regex /\S+/ on "  ab  cd ": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /\S+/;
+    let text = "  ab  cd ";
+    expect.equal(shown(regex-under-test.find(text)), "\"ab\"@2-4[]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\"ab\"@2-4[] \"cd\"@6-8[]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "  <ab>  <cd> ");
+}

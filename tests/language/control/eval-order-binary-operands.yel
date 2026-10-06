@@ -1,0 +1,12 @@
+// ---
+// description: a binary operator evaluates its left operand first
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<s32>;
+mark: func(n: s32) -> s32 { trace.push(n); n }
+main: func() {
+    let result = mark(10) - mark(3);
+    expect.equal(result, 7);
+    expect.equal(trace, [10, 3,]);
+}

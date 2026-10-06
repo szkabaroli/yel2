@@ -1,0 +1,12 @@
+// ---
+// description: escapes work in a multiline string
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        escaped \\ and \t tab
+        """;
+    expect.equal(text, "escaped \\ and \t tab");
+}

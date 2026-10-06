@@ -1,0 +1,13 @@
+// ---
+// description: from-date-time gives back the instant to-date-time was given
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at = time.from-unix-millis(1759660496789);
+    for offset in [0, 120, -330, 840, -720,] {
+        expect.equal(time.from-date-time(time.to-date-time(at, offset)), at);
+    }
+}

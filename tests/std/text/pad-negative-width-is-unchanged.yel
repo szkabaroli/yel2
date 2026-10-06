@@ -1,0 +1,10 @@
+// ---
+// description: padding to a negative width changes nothing
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("ab".pad-start(-1, "x"), "ab");
+    expect.equal("ab".pad-end(-1, "x"), "ab");
+}

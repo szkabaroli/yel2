@@ -1,0 +1,16 @@
+// ---
+// description: inside if x is T, x is of kind T
+// features: [types, unions, is]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+double: func(who: id) -> s32 {
+    if who is s32 { who * 2 } else { 0 }
+}
+
+main: func() {
+    expect.equal(double(21), 42);
+    expect.equal(double("x"), 0);
+}

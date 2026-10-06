@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: the right of +: expected u8, found u16
+// features: [types, integers]
+// negative: compile
+// error: 7:59: the right of +: expected u8, found u16
+// ---
+main: func() { let a: u8 = 1; let b: u16 = 2; let c = a + b; }

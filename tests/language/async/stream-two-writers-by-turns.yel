@@ -1,0 +1,31 @@
+// ---
+// description: two tasks write to streams of their own and one reader drains both
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+feed: async func(out: writer<string>, name: string) {
+    for x in 0..2 {
+        wait out.write("{name}{x}");
+        wait yield-turn();
+    }
+    out.close();
+}
+
+drain: async func(items: stream<string>) -> list<string> {
+    let seen: list<string> = [];
+    wait for item in items { seen.push(item); }
+    seen
+}
+
+main: async func() {
+    let (left, left-out) = stream-pair(4);
+    let (right, right-out) = stream-pair(4);
+    let a = start feed(left-out, "a");
+    let b = start feed(right-out, "b");
+    let both = wait { left: drain(left), right: drain(right), };
+    expect.equal(both.left, ["a0", "a1",]);
+    expect.equal(both.right, ["b0", "b1",]);
+    wait a;
+    wait b;
+}

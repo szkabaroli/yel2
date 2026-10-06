@@ -1,0 +1,9 @@
+// ---
+// description: unwrap-or gives the value inside a some
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(some(5).unwrap-or(0), 5);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: encode writes a space as %20
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.encode("a b"), "a%20b");
+}

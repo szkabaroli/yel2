@@ -1,0 +1,18 @@
+// ---
+// description: continue in a for over a seq goes on to the next value
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+counting: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield x; }
+}
+
+main: func() {
+    let total = 0;
+    for value in counting(6) {
+        if value % 2 == 1 { continue; }
+        total += value;
+    }
+    expect.equal(total, 6);
+}

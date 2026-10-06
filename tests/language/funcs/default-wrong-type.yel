@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: the default of x: expected s32, found string
+// features: [funcs]
+// negative: compile
+// error: 7:18: the default of x: expected s32, found string
+// ---
+f: func(x: s32 = "text") -> s32 { x }
+main: func() {}

@@ -1,0 +1,14 @@
+// ---
+// description: an identity func over several types
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+same: func<T>(value: T) -> T { value }
+
+main: func() {
+    expect.equal(same(5), 5);
+    expect.equal(same("text"), "text");
+    expect.equal(same('c'), 'c');
+    expect.equal(same(2.5 as f64), 2.5);
+}

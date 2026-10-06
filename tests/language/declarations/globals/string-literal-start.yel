@@ -1,0 +1,11 @@
+// ---
+// description: a global may start as a string literal
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let label: string = "start";
+
+main: func() {
+    expect.equal(label, "start");
+}

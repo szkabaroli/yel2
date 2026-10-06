@@ -1,0 +1,13 @@
+// ---
+// description: a for in a for walks a list of lists
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let grid = [[1, 2,], [], [3,],];
+    let total = 0;
+    for row in grid {
+        for cell in row { total += cell; }
+    }
+    expect.equal(total, 6);
+}

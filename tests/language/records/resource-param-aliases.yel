@@ -1,0 +1,16 @@
+// ---
+// description: a resource given to a func is the caller's object
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+bump: func(counter: Counter) { counter.value += 1; }
+
+main: func() {
+    let a: Counter = { value: 1, };
+    bump(a);
+    bump(a);
+    expect.equal(a.value, 3);
+}

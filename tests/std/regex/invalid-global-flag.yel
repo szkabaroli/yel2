@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex flag g is not a flag here
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /a/g: no flag g: find-all, replace-all and split take each match
+// ---
+main: func() {
+    let found = /a/g;
+}

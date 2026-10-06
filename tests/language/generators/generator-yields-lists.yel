@@ -1,0 +1,19 @@
+// ---
+// description: a generator yields lists
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+rows: func(size: s32) -> seq<list<s32>> {
+    for row in 1..=size {
+        let cells: list<s32> = [];
+        for cell in 0..row { cells.push(cell); }
+        yield cells;
+    }
+}
+
+main: func() {
+    let lengths: list<s32> = [];
+    for row in rows(3) { lengths.push(row.len() as s32); }
+    expect.equal(lengths, [1, 2, 3,]);
+}

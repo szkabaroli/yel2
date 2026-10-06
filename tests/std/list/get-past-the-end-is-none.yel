@@ -1,0 +1,11 @@
+// ---
+// description: get gives none for an index past the end
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [10, 20, 30,];
+    expect.none(xs.get(3));
+    expect.none(xs.get(100));
+}

@@ -1,0 +1,18 @@
+// ---
+// description: a call that never returns fits a match arm of any type
+// features: [types, never]
+// ---
+from "std:testing" include expect;
+
+pick: func(n: s32) -> string {
+    match n {
+        0 => "zero",
+        1 => "one",
+        _ => panic("no word for {n}"),
+    }
+}
+
+main: func() {
+    expect.equal(pick(0), "zero");
+    expect.equal(pick(1), "one");
+}

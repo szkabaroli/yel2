@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: missing is not declared
+// features: [funcs]
+// negative: compile
+// error: 8:18: missing is not declared
+// ---
+main: func() {
+    let f = { -> missing + 1 };
+}

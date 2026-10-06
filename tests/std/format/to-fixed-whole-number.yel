@@ -1,0 +1,9 @@
+// ---
+// description: to-fixed of a whole number writes zeros after the point
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-fixed(7.0, 2), "7.00");
+}

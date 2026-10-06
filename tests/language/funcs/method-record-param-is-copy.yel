@@ -1,0 +1,19 @@
+// ---
+// description: a method's record receiver is the callee's copy
+// features: [funcs, methods, records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+moved: func(p: Point, by: s32) -> Point {
+    p.x += by;
+    p
+}
+
+main: func() {
+    let start: Point = { x: 0, y: 0, };
+    let later = start.moved(5);
+    expect.equal(start.x, 0);
+    expect.equal(later.x, 5);
+}

@@ -1,0 +1,20 @@
+// ---
+// description: a @(context) global set in a task stays that task's across its waits
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let request: string = "none";
+
+handle: async func(name: string, turns: s32) -> string {
+    request = name;
+    for turn in 0..turns { wait yield-turn(); }
+    "{name} sees {request}"
+}
+
+main: async func() {
+    let first = start handle("first", 4);
+    let second = start handle("second", 1);
+    expect.equal(wait second, "second sees second");
+    expect.equal(wait first, "first sees first");
+}

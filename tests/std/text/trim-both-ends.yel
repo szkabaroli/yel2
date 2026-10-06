@@ -1,0 +1,9 @@
+// ---
+// description: trim takes spaces off both ends
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("  the quick fox  ".trim(), "the quick fox");
+}

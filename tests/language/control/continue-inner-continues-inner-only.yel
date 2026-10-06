@@ -1,0 +1,15 @@
+// ---
+// description: continue in an inner loop skips its turn only
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let count = 0;
+    for i in 0..3 {
+        for j in 0..3 {
+            if j == 1 { continue; }
+            count += 1;
+        }
+    }
+    expect.equal(count, 6);
+}

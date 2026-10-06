@@ -1,0 +1,15 @@
+// ---
+// description: += -= *= wrap as the operators do
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: u8 = 250;
+    value += 10;
+    expect.equal(value, 4);
+    value -= 5;
+    expect.equal(value, 255);
+    value *= 2;
+    expect.equal(value, 254);
+}

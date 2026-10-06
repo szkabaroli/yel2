@@ -1,0 +1,19 @@
+// ---
+// description: a func with result never ends with a call that does not return
+// features: [types, never]
+// ---
+from "std:testing" include expect;
+
+stop: func(reason: string) -> never {
+    panic(reason)
+}
+
+half: func(n: s32) -> s32 {
+    if n % 2 != 0 { stop("{n} is odd"); }
+    n / 2
+}
+
+main: func() {
+    expect.equal(half(8), 4);
+    expect.equal(half(0), 0);
+}

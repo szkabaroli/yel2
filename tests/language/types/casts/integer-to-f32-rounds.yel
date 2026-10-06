@@ -1,0 +1,10 @@
+// ---
+// description: a large integer cast to f32 loses low digits
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 16777217;
+    expect.equal(value as f32, 16777216.0);
+}

@@ -1,0 +1,30 @@
+// ---
+// description: a writer taken out of a record a started task has: the task closes it
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+resource Channel { out: writer<s32>, }
+
+total: async func(items: stream<s32>) -> s32 {
+    let sum = 0;
+    wait for x in items { sum += x; }
+    sum
+}
+
+producer: async func(channel: Channel) {
+    wait yield-turn();
+    wait channel.out.write(2);
+    wait channel.out.write(3);
+    channel.out.close();
+}
+
+main: async func() {
+    let (items, first-out) = stream-pair(8);
+    let channel: Channel = { out: first-out, };
+    let started = start producer(channel);
+    let { out } = channel;
+    wait out.write(1);
+    expect.equal(wait total(items), 6);
+    wait started;
+}

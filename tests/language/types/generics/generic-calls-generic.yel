@@ -1,0 +1,15 @@
+// ---
+// description: a generic func calling another with its type parameter
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+same: func<T>(value: T) -> T { value }
+twice: func<T>(value: T) -> tuple<T, T> { (same(value), same(value)) }
+
+main: func() {
+    let (left, right) = twice("ab");
+    expect.equal(left + right, "abab");
+    let (first, second) = twice(7);
+    expect.equal(first + second, 14);
+}

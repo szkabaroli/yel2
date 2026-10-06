@@ -1,0 +1,22 @@
+// ---
+// description: a list given to a started task is the same list
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+fill: async func(items: list<s32>) {
+    for x in 0..3 {
+        wait yield-turn();
+        items.push(x);
+    }
+}
+
+main: async func() {
+    let items: list<s32> = [];
+    wait fill(items);
+    expect.equal(items, [0, 1, 2,]);
+    let more: list<s32> = [];
+    let future = start fill(more);
+    wait future;
+    expect.equal(more, [0, 1, 2,]);
+}

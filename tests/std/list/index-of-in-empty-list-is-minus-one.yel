@@ -1,0 +1,10 @@
+// ---
+// description: index-of on an empty list is -1
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<string> = [];
+    expect.equal(nothing.index-of("a"), -1);
+}

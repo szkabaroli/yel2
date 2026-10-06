@@ -1,9 +1,0 @@
-// error: 5:5: the match has no arm for some(circle(_)): add one, or a _ arm
-variant Shape { dot, circle(s32), }
-main: func() -> s32 {
-    let s: option<Shape> = none;
-    match s {
-        none => 0,
-        some(dot) => 1,
-    }
-}

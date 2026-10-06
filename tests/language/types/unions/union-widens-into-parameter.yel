@@ -1,0 +1,14 @@
+// ---
+// description: a value of one kind goes where the union is wanted
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+describe: func(who: id) -> string { "{who}" }
+
+main: func() {
+    expect.equal(describe(4), "4");
+    expect.equal(describe("ann"), "ann");
+}

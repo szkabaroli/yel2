@@ -1,0 +1,11 @@
+// ---
+// description: param decodes the value it gives
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://h/?q=yel+lang%21"));
+    expect.equal(url.param(u, "q"), some("yel lang!"));
+}

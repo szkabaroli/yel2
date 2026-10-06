@@ -1,0 +1,12 @@
+// ---
+// description: NaN shows as nan
+// features: [types, floats, nan, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = nan;
+    expect.equal("{value}", "nan");
+    let single: f32 = nan;
+    expect.equal("{single}", "nan");
+}

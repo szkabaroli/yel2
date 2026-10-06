@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the value: expected s32, found string
+// features: [funcs]
+// negative: compile
+// error: 8:38: the value: expected s32, found string
+// ---
+main: func() {
+    let f: func(s32) -> s32 = { x -> "text" };
+}

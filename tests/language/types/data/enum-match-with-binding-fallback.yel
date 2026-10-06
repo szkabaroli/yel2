@@ -1,0 +1,21 @@
+// ---
+// description: a match on an enum with a let binding as the last arm
+// features: [types, enums, match]
+// ---
+from "std:testing" include expect;
+
+enum Color { red, green, blue, }
+
+color-name: func(color: Color) -> string {
+    match color {
+        red => "red",
+        green => "green",
+        let other => "not red or green: {other}",
+    }
+}
+
+main: func() {
+    expect.equal(color-name(Color.red), "red");
+    expect.equal(color-name(Color.green), "green");
+    expect.equal(color-name(Color.blue), "not red or green: blue");
+}

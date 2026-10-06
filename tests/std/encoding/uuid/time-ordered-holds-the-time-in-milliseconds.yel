@@ -1,0 +1,12 @@
+// ---
+// description: the first 48 bits of a version 7 UUID are the Unix time in milliseconds
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id = uuid.time-ordered();
+    expect.holds((id.high >> 16) > 1700000000000);
+    expect.holds((id.high >> 16) < 4000000000000);
+}

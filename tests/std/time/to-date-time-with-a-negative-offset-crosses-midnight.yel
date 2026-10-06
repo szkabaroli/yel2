@@ -1,0 +1,11 @@
+// ---
+// description: to-date-time with a negative offset can give the day before
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = time.to-date-time(time.from-unix-millis(0), -330);
+    expect.equal((when.year, when.month, when.day, when.hour, when.minute), (1969, 12, 31, 18, 30));
+}

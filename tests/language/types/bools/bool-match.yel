@@ -1,0 +1,17 @@
+// ---
+// description: a match on a bool needs both arms
+// features: [types, bools, match]
+// ---
+from "std:testing" include expect;
+
+word: func(flag: bool) -> string {
+    match flag {
+        true => "yes",
+        false => "no",
+    }
+}
+
+main: func() {
+    expect.equal(word(true), "yes");
+    expect.equal(word(false), "no");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: an option holding a readonly list
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let maybe: option<list<s32> & readonly> = some([1, 2,]);
+    let size = match maybe { some(xs) => xs.len(), none => 0, };
+    expect.equal(size, 2);
+}

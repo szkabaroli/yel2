@@ -1,0 +1,13 @@
+// ---
+// description: a record's fields may be keywords written with a percent sign
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+record entry { %type: string, %in: s32, }
+
+main: func() {
+    let found: entry = { %type: "file", %in: 3, };
+    expect.equal(found.%type, "file");
+    expect.equal(found.%in, 3);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: replace takes $$ as one dollar sign
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/a/.replace("a", "$$"), "$");
+}

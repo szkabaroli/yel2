@@ -1,0 +1,21 @@
+// ---
+// description: a union of two list types
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type items = list<s32> | list<string>;
+
+count: func(found: items) -> s64 {
+    match found {
+        let numbers: list<s32> => numbers.len(),
+        let texts: list<string> => texts.len() * 10,
+    }
+}
+
+main: func() {
+    let numbers: list<s32> = [1, 2,];
+    let texts: list<string> = ["a", "b", "c",];
+    expect.equal(count(numbers), 2);
+    expect.equal(count(texts), 30);
+}

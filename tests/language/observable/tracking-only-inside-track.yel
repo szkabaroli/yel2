@@ -1,0 +1,13 @@
+// ---
+// description: observe.tracking is true only while a run is tracked
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(observe.tracking(), false);
+    let inside = false;
+    let watch = observe.track({ -> inside = observe.tracking(); }, { -> });
+    expect.equal(inside, true);
+    expect.equal(observe.tracking(), false);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a record held by a resource is set in place
+// features: [records, resources]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+resource Canvas { cursor: Point, }
+
+main: func() {
+    let canvas: Canvas = { cursor: { x: 0, y: 0, }, };
+    canvas.cursor.x = 5;
+    let same = canvas;
+    same.cursor.y = 6;
+    expect.equal(canvas.cursor, { x: 5, y: 6, });
+}

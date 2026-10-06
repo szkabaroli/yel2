@@ -1,0 +1,22 @@
+// ---
+// description: tasks that sleep wake in the order of their durations, not their start
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+nap: async func(ms: s64, name: string) {
+    wait sleep(ms);
+    log.push(name);
+}
+
+main: async func() {
+    let slow = start nap(120, "slow");
+    let medium = start nap(60, "medium");
+    let fast = start nap(5, "fast");
+    wait slow;
+    wait medium;
+    wait fast;
+    expect.equal(log, ["fast", "medium", "slow",]);
+}

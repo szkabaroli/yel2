@@ -1,0 +1,12 @@
+// ---
+// description: a float of a whole number shows its digits (100), not an exponent
+// features: [types, floats, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let hundred: f64 = 100.0;
+    expect.equal("{hundred}", "100");
+    let ten: f64 = 10.0;
+    expect.equal("{ten}", "10");
+}

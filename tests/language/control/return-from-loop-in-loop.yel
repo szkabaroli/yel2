@@ -1,0 +1,15 @@
+// ---
+// description: return from inside a loop block leaves the func
+// features: [control]
+// ---
+from "std:testing" include expect;
+first-multiple: func(base: s32, floor: s32) -> s32 {
+    let n = base;
+    loop {
+        loop {
+            if n >= floor { return n; }
+            n += base;
+        }
+    }
+}
+main: func() { expect.equal(first-multiple(7, 50), 56); }

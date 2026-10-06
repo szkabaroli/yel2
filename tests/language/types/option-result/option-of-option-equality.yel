@@ -1,0 +1,13 @@
+// ---
+// description: some(none) differs from none and from some(some(1))
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nested: option<option<s32>> = some(none);
+    expect.holds(nested == some(none));
+    expect.holds(nested != some(some(1)));
+    let empty: option<option<s32>> = none;
+    expect.holds(nested != empty);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: 0o starts an octal integer
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(0o17, 15);
+    expect.equal(0o10, 8);
+    expect.equal(0o777, 511);
+}

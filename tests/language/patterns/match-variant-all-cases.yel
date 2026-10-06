@@ -1,0 +1,18 @@
+// ---
+// description: a match listing every case of a variant needs no wildcard
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+variant Shape { dot, circle(s32), rect(tuple<s32, s32>), }
+area: func(s: Shape) -> s32 {
+    match s {
+        dot => 0,
+        circle(r) => r * r * 3,
+        rect((w, h)) => w * h,
+    }
+}
+main: func() {
+    expect.equal(area(Shape.dot), 0);
+    expect.equal(area(Shape.circle(2)), 12);
+    expect.equal(area(Shape.rect((3, 4))), 12);
+}

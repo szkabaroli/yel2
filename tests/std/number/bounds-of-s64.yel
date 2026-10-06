@@ -1,0 +1,10 @@
+// ---
+// description: s64.MIN and s64.MAX are the least and greatest s64
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(s64.MIN, -9223372036854775808);
+    expect.equal(s64.MAX, 9223372036854775807);
+}

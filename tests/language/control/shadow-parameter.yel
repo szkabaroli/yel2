@@ -1,0 +1,10 @@
+// ---
+// description: a let hides a parameter of the same name
+// features: [control]
+// ---
+from "std:testing" include expect;
+bump: func(n: s32) -> s32 {
+    let n = n + 1;
+    n
+}
+main: func() { expect.equal(bump(4), 5); }

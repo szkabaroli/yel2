@@ -1,0 +1,11 @@
+// ---
+// description: an if with an else is a value of its branch
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let big = if 5 > 3 { "big" } else { "small" };
+    expect.equal(big, "big");
+    let small = if 1 > 3 { "big" } else { "small" };
+    expect.equal(small, "small");
+}

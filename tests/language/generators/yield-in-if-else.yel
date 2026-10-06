@@ -1,0 +1,17 @@
+// ---
+// description: both branches of an if may yield
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+label: func(limit: s32) -> seq<string> {
+    for x in 0..limit {
+        if x % 2 == 0 { yield "even {x}"; } else { yield "odd {x}"; }
+    }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for item in label(3) { seen.push(item); }
+    expect.equal(seen, ["even 0", "odd 1", "even 2",]);
+}

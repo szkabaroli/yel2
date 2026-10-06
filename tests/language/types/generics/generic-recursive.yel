@@ -1,0 +1,15 @@
+// ---
+// description: a generic func calling itself
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+count-down: func<T>(marker: T, steps: s32) -> s32 {
+    if steps == 0 { return 0; }
+    1 + count-down(marker, steps - 1)
+}
+
+main: func() {
+    expect.equal(count-down("a", 4), 4);
+    expect.equal(count-down(1, 2), 2);
+}

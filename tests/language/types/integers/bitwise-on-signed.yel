@@ -1,0 +1,14 @@
+// ---
+// description: & | ^ work on a signed integer's two's complement bits
+// features: [types, integers, bitwise]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let minus-one: s32 = -1;
+    expect.equal(minus-one & 255, 255);
+    expect.equal(minus-one ^ minus-one, 0);
+    let low: s32 = 5;
+    expect.equal(low | minus-one, -1);
+    expect.equal(minus-one ^ 255, -256);
+}

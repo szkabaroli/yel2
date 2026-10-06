@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned of a plus alone is none
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned("+"));
+}

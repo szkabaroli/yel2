@@ -1,0 +1,16 @@
+// ---
+// description: where x is T fails, x is the rest of the union
+// features: [types, unions, is]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+length: func(who: id) -> s64 {
+    if who is s32 { 0 } else { who.len() }
+}
+
+main: func() {
+    expect.equal(length(5), 0);
+    expect.equal(length("abcd"), 4);
+}

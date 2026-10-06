@@ -1,0 +1,17 @@
+// ---
+// description: does not compile: func m.run is declared twice
+// features: [declarations]
+// negative: compile
+// error: 12:5: func m.run is declared twice
+// error: 16:5: func n.run is declared twice
+// ---
+// a func declared twice, its shapes differing either way (the first kept, the second's body not
+// checked against it: told once, never a panic)
+module m {
+    run: func(a: s64) -> s64 { a }
+    run: func(a: s64, b: s64) -> s64 { a + b }
+}
+module n {
+    run: func(a: s64, b: s64) -> s64 { a + b }
+    run: async func(a: s64) -> s64 { a }
+}

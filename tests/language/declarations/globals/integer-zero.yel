@@ -1,0 +1,11 @@
+// ---
+// description: a global with no value starts at 0
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let count: s64;
+
+main: func() {
+    expect.equal(count, 0);
+}

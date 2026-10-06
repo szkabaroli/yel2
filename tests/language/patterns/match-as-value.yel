@@ -1,0 +1,10 @@
+// ---
+// description: a match is a value
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 3;
+    let word = match n { 1 => "one", 3 => "three", _ => "many", };
+    expect.equal(word, "three");
+}

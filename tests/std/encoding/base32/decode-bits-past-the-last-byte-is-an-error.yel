@@ -1,0 +1,10 @@
+// ---
+// description: base32.decode refuses spare bits that are not zero
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    expect.equal(expect.err(base32.decode("MZ")), "bits past the last byte at byte 1");
+}

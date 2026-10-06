@@ -1,0 +1,17 @@
+// ---
+// description: a guard on a typed binding falls through to the next arm
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(value: s32 | string) -> string {
+    match value {
+        let n: s32 if n > 10 => "big",
+        let n: s32 => "small",
+        let s: string => "text",
+    }
+}
+main: func() {
+    expect.equal(describe(50), "big");
+    expect.equal(describe(5), "small");
+    expect.equal(describe("x"), "text");
+}

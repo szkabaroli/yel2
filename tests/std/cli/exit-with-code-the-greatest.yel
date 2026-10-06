@@ -1,0 +1,10 @@
+// ---
+// description: exit-with-code of 255 ends the program with 255
+// features: [cli]
+// exit: 255
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    exit.exit-with-code(255);
+}

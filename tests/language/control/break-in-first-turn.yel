@@ -1,0 +1,13 @@
+// ---
+// description: break in the first turn runs the rest of the body zero times
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let after = 0;
+    for i in 0..3 {
+        break;
+        after += 1;
+    }
+    expect.equal(after, 0);
+}

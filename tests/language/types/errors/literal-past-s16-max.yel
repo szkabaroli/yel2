@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: 32768 is out of range for s16
+// features: [types, integers]
+// negative: compile
+// error: 7:29: 32768 is out of range for s16
+// ---
+main: func() { let a: s16 = 32768; }

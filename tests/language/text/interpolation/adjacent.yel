@@ -1,0 +1,12 @@
+// ---
+// description: adjacent interpolations have nothing between them
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let left = 1;
+    let right = 2;
+    expect.equal("{left}{right}", "12");
+    expect.equal("w{left}{right}x", "w12x");
+}

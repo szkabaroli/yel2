@@ -1,0 +1,11 @@
+// ---
+// description: is with a range tests membership
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type grade = 1..6;
+main: func() {
+    let g: grade = 5;
+    expect.holds(!(g is 1..=3));
+    expect.holds(g is 4..=5);
+}

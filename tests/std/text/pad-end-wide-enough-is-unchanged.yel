@@ -1,0 +1,10 @@
+// ---
+// description: pad-end of text already at the width is unchanged
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".pad-end(3, "0"), "abc");
+    expect.equal("abcd".pad-end(2, "0"), "abcd");
+}

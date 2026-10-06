@@ -1,0 +1,12 @@
+// ---
+// description: byte-at reads a byte, from-byte makes a one-byte string, + joins strings
+// features: [syntax,strings]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let word = "hello";
+    let shout = "";
+    for i in 0..word.len() { shout = shout + from-byte(word.byte-at(i) - 32); }
+    expect.equal(shout + "!", "HELLO!");
+}

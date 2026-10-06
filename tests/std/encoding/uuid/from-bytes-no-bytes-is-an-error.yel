@@ -1,0 +1,11 @@
+// ---
+// description: uuid.from-bytes refuses no bytes
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let nothing: list<u8> = [];
+    expect.equal(expect.err(uuid.from-bytes(nothing)), "a UUID is 16 bytes, not 0");
+}

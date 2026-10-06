@@ -1,0 +1,15 @@
+// ---
+// description: both cases of a result
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+show: func(r: result<s32, string>) -> string {
+    match r {
+        ok(n) => "ok {n}",
+        err(why) => "err {why}",
+    }
+}
+main: func() {
+    expect.equal(show(ok(1)), "ok 1");
+    expect.equal(show(err("bad")), "err bad");
+}

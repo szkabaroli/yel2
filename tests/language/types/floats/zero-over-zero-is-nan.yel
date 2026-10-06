@@ -1,0 +1,11 @@
+// ---
+// description: 0.0 / 0.0 is NaN
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: f64 = 0.0;
+    let result = zero / zero;
+    expect.holds(result != result);
+}

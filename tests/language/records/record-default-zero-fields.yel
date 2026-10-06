@@ -1,0 +1,16 @@
+// ---
+// description: a global record without a value is zero in every field
+// features: [records, let]
+// ---
+from "std:testing" include expect;
+
+record Mixed { count: s64, ratio: f64, on: bool, name: string, }
+
+let blank: Mixed;
+
+main: func() {
+    expect.equal(blank.count, 0);
+    expect.equal(blank.ratio, 0.0);
+    expect.equal(blank.on, false);
+    expect.equal(blank.name, "");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: flags show the names that are set, and compare as sets
+// features: [wave]
+// ---
+flags Access { read, write, execute, }
+
+main: func() {
+    let granted = Access.read | Access.write;
+    let none-set = granted & Access.execute;
+    print("{granted} {none-set} {granted.write} {granted.execute} {granted == Access.write | Access.read}\n");
+}

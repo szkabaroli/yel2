@@ -1,0 +1,18 @@
+// ---
+// description: in a && chain, the right side sees the left's narrowing
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post" | "put";
+type write = "post" | "put";
+reads: func(m: "get") -> string { "read {m}" }
+writes: func(m: write) -> string { "write {m}" }
+both: func(a: method, b: method) -> string {
+    if a is "get" && b is write { return "{reads(a)}, then {writes(b)}"; }
+    "other"
+}
+main: func() {
+    expect.equal(both("get", "put"), "read get, then write put");
+    expect.equal(both("post", "put"), "other");
+    expect.equal(both("get", "get"), "other");
+}

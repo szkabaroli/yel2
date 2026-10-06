@@ -1,0 +1,16 @@
+// ---
+// description: a func returns a record that is no one else's
+// features: [funcs, records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+origin: func() -> Point { { x: 0, y: 0, } }
+
+main: func() {
+    let a = origin();
+    let b = origin();
+    a.x = 5;
+    expect.equal(b.x, 0);
+}

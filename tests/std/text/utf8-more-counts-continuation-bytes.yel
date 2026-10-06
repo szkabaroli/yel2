@@ -1,0 +1,12 @@
+// ---
+// description: utf8-more tells how many bytes follow a lead byte
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(text.utf8-more(65), 0);
+    expect.equal(text.utf8-more(195), 1);
+    expect.equal(text.utf8-more(226), 2);
+    expect.equal(text.utf8-more(240), 3);
+}

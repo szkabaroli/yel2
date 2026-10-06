@@ -1,0 +1,9 @@
+// ---
+// description: replace-all changes every match
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/o/.replace-all("foo boo", "0"), "f00 b00");
+}

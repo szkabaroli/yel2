@@ -1,0 +1,11 @@
+// ---
+// description: \" in a string is a double quote
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "say \"hi\"";
+    expect.equal(text.len(), 8);
+    expect.equal(text.byte-at(4), 34);
+}

@@ -1,0 +1,20 @@
+// ---
+// description: continue and break in a loop of an async func
+// features: [control]
+// ---
+from "std:testing" include expect;
+counter: async func(n: s32) -> s32 {
+    let total = 0;
+    let i = 0;
+    loop {
+        i += 1;
+        if i % 2 == 0 { continue; }
+        wait yield-turn();
+        total += i;
+        if i >= n { break; }
+    }
+    total
+}
+main: async func() {
+    expect.equal(wait counter(9), 25);
+}

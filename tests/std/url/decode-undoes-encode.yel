@@ -1,0 +1,11 @@
+// ---
+// description: decode gives back what encode was given
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let text = "a b/c?d=é&€ 😀 100%";
+    expect.equal(url.decode(url.encode(text)), ok(text));
+}

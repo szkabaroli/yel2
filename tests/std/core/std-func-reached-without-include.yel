@@ -1,0 +1,10 @@
+// ---
+// description: std's funcs need no include
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("ab".repeat(3), "ababab");
+    expect.equal(repeat("ab", 2), "abab");
+}

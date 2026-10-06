@@ -1,0 +1,15 @@
+// ---
+// description: expect.ok and expect.err give the payload of their side
+// features: [types, result]
+// ---
+from "std:testing" include expect;
+
+divide: func(left: s32, right: s32) -> result<s32, string> {
+    if right == 0 { return err("zero divisor"); }
+    ok(left / right)
+}
+
+main: func() {
+    expect.equal(expect.ok(divide(8, 2)), 4);
+    expect.equal(expect.err(divide(1, 0)), "zero divisor");
+}

@@ -1,0 +1,16 @@
+// ---
+// description: an alias names a tuple type
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type name = string;
+type level = 1 | 2 | 3;
+type pair = tuple<name, level>;
+
+main: func() {
+    let entry: pair = ("/home", 2);
+    expect.equal(entry.0, "/home");
+    expect.equal(entry.1, 2);
+    expect.equal(entry.1 + 10, 12);
+}

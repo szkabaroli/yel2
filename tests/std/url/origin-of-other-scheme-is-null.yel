@@ -1,0 +1,11 @@
+// ---
+// description: origin of a scheme that is not special is null
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("foo://h/x"));
+    expect.equal(url.origin(u), "null");
+}

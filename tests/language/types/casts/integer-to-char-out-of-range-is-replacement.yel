@@ -1,0 +1,13 @@
+// ---
+// description: a value past U+10FFFF, or negative, cast to char is U+FFFD
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let negative: s32 = -1;
+    expect.equal(negative as char, '\u{FFFD}');
+    let past: u32 = 1114112;
+    expect.equal(past as char, '\u{FFFD}');
+    expect.equal(1114111 as char, '\u{10FFFF}');
+}

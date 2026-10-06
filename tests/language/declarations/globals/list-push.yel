@@ -1,0 +1,14 @@
+// ---
+// description: a list global holds what is pushed
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let seen: list<string>;
+
+main: func() {
+    seen.push("a");
+    seen.push("b");
+    expect.equal(seen.len(), 2);
+    expect.equal(seen.join(","), "a,b");
+}

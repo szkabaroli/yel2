@@ -1,0 +1,17 @@
+// ---
+// description: a constant list literal inside a loop is new each turn
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let lengths: list<s64> = [];
+    for turn in 0..3 {
+        let items = [1, 2,];
+        items.push(3);
+        lengths.push(items.len());
+    }
+    expect.equal(lengths[0], 3);
+    expect.equal(lengths[1], 3);
+    expect.equal(lengths[2], 3);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: does not compile: #embed: cannot read no-such-file.txt
+// features: [declarations]
+// negative: compile
+// error: 11:16: #embed: cannot read tests/language/declarations/no-such-file.txt
+// error: 12:16: #embed takes the file's path, a string written out: #embed("motd.txt")
+// ---
+
+main: func() {
+    let name = "a.txt";
+    let text = #embed("no-such-file.txt");
+    let more = #embed(name);
+    print("{text}{more}\n");
+}

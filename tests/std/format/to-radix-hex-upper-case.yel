@@ -1,0 +1,9 @@
+// ---
+// description: to-radix writes hex in upper case where asked
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-radix(48879, 16, true), "BEEF");
+}

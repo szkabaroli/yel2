@@ -1,0 +1,16 @@
+// ---
+// description: an alternative inside a case's payload is taken out to the arm
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+shape: func(v: option<result<s32, s32>>) -> string {
+    match v {
+        some(ok(n) | err(n)) => "a number {n}",
+        none => "nothing",
+    }
+}
+main: func() {
+    expect.equal(shape(some(ok(1))), "a number 1");
+    expect.equal(shape(some(err(2))), "a number 2");
+    expect.equal(shape(none), "nothing");
+}

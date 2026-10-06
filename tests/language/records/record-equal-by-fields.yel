@@ -1,0 +1,16 @@
+// ---
+// description: records are equal by their fields
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let b: Point = { x: 1, y: 2, };
+    let c: Point = { x: 1, y: 3, };
+    expect.holds(a == b);
+    expect.holds(a != c);
+    expect.holds(a == { x: 1, y: 2, });
+}

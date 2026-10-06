@@ -1,0 +1,12 @@
+// ---
+// description: from-unix-millis gives seconds and nanoseconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at = time.from-unix-millis(1500);
+    expect.equal(at.seconds, 1);
+    expect.equal(at.nanoseconds, 500000000);
+}

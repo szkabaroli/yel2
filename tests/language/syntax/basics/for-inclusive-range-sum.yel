@@ -1,0 +1,16 @@
+// ---
+// description: for over a..=b includes b, += accumulates
+// features: [syntax,loops]
+// ---
+from "std:testing" include expect;
+
+sum-to: func(n: s32) -> s32 {
+    let total = 0;
+    for i in 0..=n { total += i; }
+    total
+}
+
+main: func() {
+    expect.equal(sum-to(100), 5050);
+    expect.equal(sum-to(0), 0);
+}

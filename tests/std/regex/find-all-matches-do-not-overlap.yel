@@ -1,0 +1,9 @@
+// ---
+// description: find-all takes each match from where the one before ended
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/aa/.find-all("aaaaa").map({ m -> m.start }), [0, 2,]);
+}

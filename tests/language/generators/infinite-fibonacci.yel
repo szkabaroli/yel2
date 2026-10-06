@@ -1,0 +1,25 @@
+// ---
+// description: an infinite generator keeps its state between values
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+fibonacci: func() -> seq<s64> {
+    let current: s64 = 0;
+    let next: s64 = 1;
+    loop {
+        yield current;
+        let sum = current + next;
+        current = next;
+        next = sum;
+    }
+}
+
+main: func() {
+    let seen: list<s64> = [];
+    for value in fibonacci() {
+        if seen.len() == 10 { break; }
+        seen.push(value);
+    }
+    expect.equal(seen, [0, 1, 1, 2, 3, 5, 8, 13, 21, 34,]);
+}

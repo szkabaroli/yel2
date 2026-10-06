@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: #nothing: no such directive (#file, #line, #column, #func, #location, #embed(path); a parameter's default: #caller-location, #caller-expression(param))
+// features: [syntax,directives]
+// negative: compile
+// error: 8:17: #nothing: no such directive (#file, #line, #column, #func, #location, #embed(path); a parameter's default: #caller-location, #caller-expression(param))
+// ---
+main: func() {
+    let place = #nothing;
+}

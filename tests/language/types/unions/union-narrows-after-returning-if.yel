@@ -1,0 +1,17 @@
+// ---
+// description: after an if that returns, the local is the rest of the union
+// features: [types, unions, is]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+describe: func(who: id) -> string {
+    if who is s32 { return "#{who * 2}"; }
+    "name {who}"
+}
+
+main: func() {
+    expect.equal(describe(21), "#42");
+    expect.equal(describe("x"), "name x");
+}

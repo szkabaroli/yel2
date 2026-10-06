@@ -1,0 +1,19 @@
+// ---
+// description: a two parameter closure orders a sort
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+resource Person { name: string, age: s32, }
+
+main: func() {
+    let people: list<Person> = [
+        { name: "grace", age: 85, },
+        { name: "ada", age: 36, },
+        { name: "alan", age: 41, },
+    ];
+    people.sort({ a, b -> a.age < b.age });
+    expect.equal(people[0].name, "ada");
+    expect.equal(people[1].name, "alan");
+    expect.equal(people[2].name, "grace");
+}

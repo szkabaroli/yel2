@@ -1,0 +1,11 @@
+// ---
+// description: before is false for two equal instants
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at = time.from-unix-millis(5);
+    expect.holds(!time.before(at, at));
+}

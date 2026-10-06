@@ -1,0 +1,12 @@
+// ---
+// description: a cast result goes where its type is wanted
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+double: func(value: u8) -> u8 { value * 2 }
+
+main: func() {
+    let wide: s32 = 130;
+    expect.equal(double(wide as u8), 4);
+}

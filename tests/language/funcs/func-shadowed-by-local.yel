@@ -1,0 +1,13 @@
+// ---
+// description: a local named as a func hides the func
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+size: func() -> s32 { 1 }
+
+main: func() {
+    expect.equal(size(), 1);
+    let size = 5;
+    expect.equal(size, 5);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: read-some takes the items there are, up to the count
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(8);
+    wait out.write-all([1, 2, 3, 4, 5,]);
+    expect.equal(wait items.read-some(3), [1, 2, 3,]);
+    expect.equal(wait items.read-some(10), [4, 5,]);
+    out.close();
+}

@@ -1,0 +1,18 @@
+// ---
+// description: a recursive func that allocates at each level keeps its frames' values
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+build: func(depth: s32) -> string {
+    if depth == 0 { return "leaf"; }
+    let label = "level {depth}";
+    let below = build(depth - 1);
+    "{label}>{below}"
+}
+
+main: func() {
+    let text = build(200);
+    expect.equal(text.len() > 1000, true);
+    expect.equal(text.substring(0, 17), "level 200>level 1");
+}

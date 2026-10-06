@@ -1,0 +1,14 @@
+// ---
+// description: an unconstrained float literal is an f32: it fits an f32 and widens inexactly
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = 0.1;
+    let narrow: f32 = value;
+    let widened = narrow as f64;
+    let exact: f64 = 0.1;
+    expect.holds(widened != exact);
+    expect.holds(widened > 0.0999 && widened < 0.1001);
+}

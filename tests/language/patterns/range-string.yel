@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: a range pattern on a string: ranges are of integers or chars
+// features: [patterns]
+// negative: compile
+// error: 9:9: a range pattern on a string: ranges are of integers or chars
+// ---
+main: func() {
+    match "b" {
+        "a".."c" => {}
+        _ => {}
+    }
+}

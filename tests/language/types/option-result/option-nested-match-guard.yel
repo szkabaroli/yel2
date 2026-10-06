@@ -1,0 +1,19 @@
+// ---
+// description: a guard on an option's payload
+// features: [types, option, match]
+// ---
+from "std:testing" include expect;
+
+size: func(found: option<s32>) -> string {
+    match found {
+        some(value) if value > 10 => "large",
+        some(_) => "small",
+        none => "none",
+    }
+}
+
+main: func() {
+    expect.equal(size(some(50)), "large");
+    expect.equal(size(some(5)), "small");
+    expect.equal(size(none), "none");
+}

@@ -1,5 +1,0 @@
-// error: 3:5: break outside a loop
-main: func() -> s32 {
-    break;
-    0
-}

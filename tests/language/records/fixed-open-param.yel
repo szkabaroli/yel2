@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a parameter: list<T, ?> takes its length from a let's value: write the length
+// features: [records]
+// negative: compile
+// error: 7:1: a parameter: list<T, ?> takes its length from a let's value: write the length
+// ---
+first: func(v: list<s32, ?>) -> s32 {
+    v[0]
+}
+main: func() {}

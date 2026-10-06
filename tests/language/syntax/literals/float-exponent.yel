@@ -1,0 +1,16 @@
+// ---
+// description: a float literal with an exponent, with and without a sign
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let big: f64 = 1e3;
+    expect.equal(big, 1000.0);
+    let small: f64 = 2.5e-3;
+    expect.equal(small * 1000.0, 2.5);
+    let plus: f64 = 1e+2;
+    expect.equal(plus, 100.0);
+    let upper: f64 = 5E2;
+    expect.equal(upper, 500.0);
+}

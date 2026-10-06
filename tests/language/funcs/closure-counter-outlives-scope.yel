@@ -1,0 +1,17 @@
+// ---
+// description: a returned closure keeps its captured count alive
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+make-counter: func() -> func() -> s32 {
+    let count = 0;
+    { count += 1; count }
+}
+
+main: func() {
+    let counter = make-counter();
+    expect.equal(counter(), 1);
+    expect.equal(counter(), 2);
+    expect.equal(counter(), 3);
+}

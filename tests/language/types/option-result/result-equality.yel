@@ -1,0 +1,15 @@
+// ---
+// description: == compares results by side and payload
+// features: [types, result]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let first: result<s32, string> = ok(1);
+    let second: result<s32, string> = ok(1);
+    let third: result<s32, string> = err("x");
+    expect.holds(first == second);
+    expect.holds(first != third);
+    expect.holds(third == err("x"));
+    expect.holds(third != err("y"));
+}

@@ -1,0 +1,9 @@
+// ---
+// description: parse-float gives the same value as the literal
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("0.1"), some(0.1));
+}

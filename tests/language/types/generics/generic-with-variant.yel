@@ -1,0 +1,14 @@
+// ---
+// description: a generic func over a variant type
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+variant Shape { dot, circle(s32), }
+
+same: func<T>(value: T) -> T { value }
+
+main: func() {
+    expect.holds(same(Shape.circle(2)) == Shape.circle(2));
+    expect.holds(same(Shape.dot) == Shape.dot);
+}

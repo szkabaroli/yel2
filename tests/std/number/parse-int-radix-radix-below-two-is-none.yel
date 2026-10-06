@@ -1,0 +1,11 @@
+// ---
+// description: parse-int-radix refuses a radix below 2
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int-radix("0", 1));
+    expect.none(number.parse-int-radix("0", 0));
+    expect.none(number.parse-int-radix("0", -10));
+}

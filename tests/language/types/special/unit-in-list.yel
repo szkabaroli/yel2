@@ -1,0 +1,10 @@
+// ---
+// description: a list of unit
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let items: list<()> = [(), (),];
+    expect.equal(items.len(), 2);
+}

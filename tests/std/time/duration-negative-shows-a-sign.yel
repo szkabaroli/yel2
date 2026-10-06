@@ -1,0 +1,11 @@
+// ---
+// description: a negative duration shows a minus sign
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.seconds(-90)}", "-1m30s");
+    expect.equal("{time.nanoseconds(-42)}", "-42ns");
+}

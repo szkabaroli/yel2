@@ -1,0 +1,15 @@
+// ---
+// description: a record in a tuple is a value
+// features: [records, tuples]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let pair = (a, "label");
+    a.y = 77;
+    expect.equal(pair.0.y, 2);
+    expect.equal(pair.1, "label");
+}

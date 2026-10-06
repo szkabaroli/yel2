@@ -1,0 +1,16 @@
+// ---
+// description: an inner closure writes a variable two scopes out
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let total = 0;
+    let outer = { n: s32 ->
+        let inner = { m: s32 -> total += m; };
+        inner(n);
+        inner(n);
+    };
+    outer(4);
+    expect.equal(total, 8);
+}

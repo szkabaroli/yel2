@@ -1,0 +1,9 @@
+// ---
+// description: test is false where the regex matches nowhere
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!/\d+/.test("abc"));
+}

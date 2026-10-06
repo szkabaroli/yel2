@@ -1,0 +1,15 @@
+// ---
+// description: results show as ok(x) and err(e), and a result with no value as ok
+// features: [wave]
+// ---
+check: func(n: s32) -> result<s32, string> {
+    if n < 0 { err("negative: {n}") } else { ok(n * 2) }
+}
+
+save: func(fail: bool) -> result<_, string> {
+    if fail { err("disk full") } else { ok }
+}
+
+main: func() {
+    print("{check(4)} {check(-1)} {save(false)} {save(true)}\n");
+}

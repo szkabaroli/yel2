@@ -1,0 +1,13 @@
+// ---
+// description: 0x starts a hexadecimal integer, in either case of digit
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(0xff, 255);
+    expect.equal(0xFF, 255);
+    expect.equal(0xaB, 171);
+    expect.equal(0x10, 16);
+    expect.equal(0x0, 0);
+}

@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: a tuple needs a type (no value's type is ())
+// features: [types]
+// negative: compile
+// error: 7:25: a tuple needs a type (no value's type is ())
+// ---
+main: func() -> tuple<> {}

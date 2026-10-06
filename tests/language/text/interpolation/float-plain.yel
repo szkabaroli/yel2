@@ -1,0 +1,13 @@
+// ---
+// description: a float shows with its fraction digits
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let half: f64 = 0.5;
+    let quarter: f64 = 1.25;
+    expect.equal("{half}", "0.5");
+    expect.equal("{quarter}", "1.25");
+    expect.equal("{-quarter}", "-1.25");
+}

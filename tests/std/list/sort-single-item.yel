@@ -1,0 +1,11 @@
+// ---
+// description: sort of one item does nothing
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [3,];
+    xs.sort({ a, b -> a < b });
+    expect.equal(xs, [3,]);
+}

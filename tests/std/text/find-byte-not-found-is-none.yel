@@ -1,0 +1,10 @@
+// ---
+// description: find-byte gives none for a byte that is not there
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none("abc".find-byte(122));
+    expect.none("".find-byte(97));
+}

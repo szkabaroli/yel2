@@ -1,0 +1,12 @@
+// ---
+// description: #line follows the file's line, not the func's
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let first = #line;
+
+    let second = #line;
+    expect.equal(second - first, 2);
+}

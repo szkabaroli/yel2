@@ -1,0 +1,10 @@
+// ---
+// description: an empty list has length 0
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<s32> = [];
+    expect.equal(nothing.len(), 0);
+}

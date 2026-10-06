@@ -1,0 +1,14 @@
+// ---
+// description: a generic func applying a func value
+// features: [types, generics, closures]
+// ---
+from "std:testing" include expect;
+
+apply: func<A, B>(value: A, convert: func(A) -> B) -> B { convert(value) }
+
+length: func(text: string) -> s64 { text.len() }
+
+main: func() {
+    expect.equal(apply("abcd", length), 4);
+    expect.equal(apply(3, { number: s32 -> "n{number}" }), "n3");
+}

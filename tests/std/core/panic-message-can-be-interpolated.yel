@@ -1,0 +1,9 @@
+// ---
+// description: panic's message can show values
+// features: [core]
+// exit: 1
+// ---
+main: func() {
+    let count = 3;
+    panic("count was {count}");
+}

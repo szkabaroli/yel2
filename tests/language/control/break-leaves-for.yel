@@ -1,0 +1,13 @@
+// ---
+// description: break leaves a for at once
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let seen: list<s32> = [];
+    for i in 0..10 {
+        if i == 3 { break; }
+        seen.push(i);
+    }
+    expect.equal(seen, [0, 1, 2,]);
+}

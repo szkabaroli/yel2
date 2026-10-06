@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a match arm: expected string, found an integer
+// features: [patterns]
+// negative: compile
+// error: 8:40: a match arm: expected string, found an integer
+// ---
+main: func() {
+    let r = match 1 { 1 => "one", _ => 2, };
+}

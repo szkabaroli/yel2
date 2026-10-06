@@ -1,0 +1,9 @@
+// ---
+// description: parse-float reads a plus sign in the exponent
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("1.5e+2"), some(150.0));
+}

@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: +: expected a number, found bool
+// features: [types, bools]
+// negative: compile
+// error: 7:24: +: expected a number, found bool
+// ---
+main: func() { let a = true + false; }

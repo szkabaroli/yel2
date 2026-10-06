@@ -1,0 +1,10 @@
+// ---
+// description: encode escapes control bytes
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.encode("\n\t\u{7f}"), "%0A%09%7F");
+}

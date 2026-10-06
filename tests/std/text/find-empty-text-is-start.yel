@@ -1,0 +1,10 @@
+// ---
+// description: find of the empty text is at 0
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".find(""), some(0));
+    expect.equal("".find(""), some(0));
+}

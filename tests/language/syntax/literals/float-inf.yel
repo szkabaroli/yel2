@@ -1,0 +1,13 @@
+// ---
+// description: inf is a float literal, and -inf its negation
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let up: f64 = inf;
+    let down: f64 = -inf;
+    expect.holds(up > 1.0e300);
+    expect.holds(down < -1.0e300);
+    expect.equal(up, -down);
+}

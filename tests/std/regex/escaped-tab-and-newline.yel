@@ -1,0 +1,10 @@
+// ---
+// description: \t and \n match a tab and a line feed
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(/a\tb/.test("a\tb"));
+    expect.holds(/a\nb/.test("a\nb"));
+}

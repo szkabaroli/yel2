@@ -1,0 +1,11 @@
+// ---
+// description: b shows an integer in binary
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{255:b}", "11111111");
+    expect.equal("{5:b}", "101");
+    expect.equal("{0:b}", "0");
+}

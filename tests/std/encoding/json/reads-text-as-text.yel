@@ -1,0 +1,22 @@
+// ---
+// description: a string's value is its text with the escapes undone
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let item = expect.ok(json.parse("\"a\\nb\""));
+    match item {
+        text(content) => expect.equal(content, "a\nb"),
+        _ => expect.fail("not text"),
+    }
+}

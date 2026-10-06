@@ -1,0 +1,12 @@
+// ---
+// description: fields of a readonly record read readonly, deep
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Team { name: string, members: list<string>, }
+roster: func(t: Team & readonly) -> string { "{t.name}: {t.members.join(", ")}" }
+main: func() {
+    let team: Team & readonly = { name: "core", members: ["ada", "grace",], };
+    expect.equal(roster(team), "core: ada, grace");
+    expect.equal(team.members[0], "ada");
+}

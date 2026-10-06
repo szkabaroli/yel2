@@ -1,0 +1,14 @@
+// ---
+// description: an async func that yields a turn still gives its result
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+double: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x * 2
+}
+
+main: async func() {
+    expect.equal(wait double(21), 42);
+}

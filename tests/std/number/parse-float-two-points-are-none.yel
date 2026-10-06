@@ -1,0 +1,9 @@
+// ---
+// description: parse-float refuses two decimal points
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("1.2.3"));
+}

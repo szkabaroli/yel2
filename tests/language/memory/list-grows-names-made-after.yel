@@ -1,0 +1,17 @@
+// ---
+// description: names made while a list grows past its first room stay distinct
+// features: [memory]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names: list<string> = [];
+    for i in 0..40 { names.push("name {i}"); }
+    let distinct = true;
+    for i in 1..names.len() {
+        if names[i] == names[i - 1] { distinct = false; }
+    }
+    expect.equal(names.len(), 40);
+    expect.holds(distinct);
+    expect.equal(names[39], "name 39");
+}

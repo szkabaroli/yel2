@@ -1,0 +1,7 @@
+// The WASI host's interfaces, tested (yelc test tests/packages/host): natively through std's host
+// (runtime/std/core/host/host-*.yel, the runtime's C), as a component through the host's own
+// (tools/test-component.sh, the network and name lookups granted: WASMTIME_FLAGS), the same tests
+// either way. Each file a part: imports.yel (cli, random, clocks), waits.yel (the host's clock
+// waited for), resources.yel (handles), filesystem.yel, tcp.yel, dns.yel. What a process's stdin,
+// stdout and exit do is tested where they are the program's own: tests/components/cat.yel, tests/components/stdin-drop.yel,
+// tests/std/cli/exit.yel

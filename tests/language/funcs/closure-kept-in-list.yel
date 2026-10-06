@@ -1,0 +1,15 @@
+// ---
+// description: closures kept in a list are called later
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let steps: list<func() -> s32> = [];
+    let count = 0;
+    steps.push({ count += 1; count });
+    steps.push({ count += 10; count });
+    expect.equal(steps[0](), 1);
+    expect.equal(steps[1](), 11);
+    expect.equal(steps[0](), 12);
+}

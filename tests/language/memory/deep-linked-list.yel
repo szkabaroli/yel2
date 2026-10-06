@@ -1,0 +1,28 @@
+// ---
+// description: a long linked list of resources is traced to its end
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+resource Link { value: s32, next: option<Link>, }
+
+main: func() {
+    let head: option<Link> = none;
+    for i in 0..5000 {
+        let link: Link = { value: i, next: head, };
+        head = some(link);
+    }
+    for i in 0..30000 { let junk = "junk {i}"; }
+    let total: s64 = 0;
+    let current = head;
+    loop {
+        match current {
+            some(link) => {
+                total += link.value as s64;
+                current = link.next;
+            }
+            none => { break; }
+        }
+    }
+    expect.equal(total, 12497500);
+}

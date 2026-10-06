@@ -1,0 +1,18 @@
+// ---
+// description: a record passed to a func that only reads it may stay on the stack
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Cell { n: s32, }
+
+read: func(cell: Cell) -> s32 { cell.n + 1 }
+
+main: func() {
+    let total = 0;
+    for i in 0..1000 {
+        let cell: Cell = { n: i, };
+        total += read(cell);
+    }
+    expect.equal(total, 500500);
+}

@@ -1,0 +1,15 @@
+// ---
+// description: == compares two values of one distinct type
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+main: func() {
+    let first = 3 as binding;
+    let second = 3 as binding;
+    let third = 4 as binding;
+    expect.holds(first == second);
+    expect.holds(first != third);
+}

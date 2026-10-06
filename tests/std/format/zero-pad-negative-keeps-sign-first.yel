@@ -1,0 +1,9 @@
+// ---
+// description: zero-pad puts the zeros after a minus sign
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.zero-pad("-42", 6), "-00042");
+}

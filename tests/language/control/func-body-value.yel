@@ -1,0 +1,7 @@
+// ---
+// description: a func's body ends in its value, no return needed
+// features: [control]
+// ---
+from "std:testing" include expect;
+square: func(n: s32) -> s32 { n * n }
+main: func() { expect.equal(square(9), 81); }

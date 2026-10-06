@@ -1,0 +1,9 @@
+// ---
+// description: replace with a longer text grows the string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a.b.c".replace(".", "<dot>"), "a<dot>b<dot>c");
+}

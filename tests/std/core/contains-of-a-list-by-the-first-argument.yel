@@ -1,0 +1,11 @@
+// ---
+// description: contains takes the list meaning where its first argument is a list
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let letters = ["a", "b", "c",];
+    expect.holds(letters.contains("b"));
+    expect.holds(!contains(letters, "z"));
+}

@@ -1,0 +1,10 @@
+// ---
+// description: parse-date-time reads an offset of two digits as hours
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(expect.ok(time.parse-date-time("2026-10-05T12:00:00-08")).offset, -480);
+}

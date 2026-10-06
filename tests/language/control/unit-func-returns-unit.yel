@@ -1,0 +1,10 @@
+// ---
+// description: a func without -> T gives ()
+// features: [control]
+// ---
+from "std:testing" include expect;
+nothing: func() {}
+main: func() {
+    let unit: () = nothing();
+    expect.equal(unit, ());
+}

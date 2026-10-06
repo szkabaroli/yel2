@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: type handle: no type nothing
+// features: [declarations,types]
+// negative: compile
+// error: 7:1: type handle: no type nothing
+// ---
+type handle = nothing;
+
+main: func() {}

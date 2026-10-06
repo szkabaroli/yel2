@@ -1,0 +1,14 @@
+// ---
+// description: the lines of a multiline string split back apart
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        first
+        second
+        third
+        """;
+    expect.equal(text.lines().len(), 3);
+}

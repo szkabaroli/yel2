@@ -1,0 +1,9 @@
+// ---
+// description: expect.holds passes for a condition that holds
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(2 > 1);
+}

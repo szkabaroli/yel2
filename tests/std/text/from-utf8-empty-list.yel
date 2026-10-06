@@ -1,0 +1,10 @@
+// ---
+// description: from-utf8 of no bytes is the empty string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<u8> = [];
+    expect.equal(from-utf8(nothing), ok(""));
+}

@@ -1,0 +1,30 @@
+// ---
+// description: a variant in an observable field is read and written as a whole
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+variant Loading { idle, pending(option<string>), ready(string), }
+
+@(observable) resource Page { user: Loading, }
+
+describe: func(state: Loading) -> string {
+    match state {
+        idle => "idle",
+        pending(before) => "loading (was {before.unwrap-or("nobody")})",
+        ready(user) => user,
+    }
+}
+
+main: func() {
+    let page: Page = { user: Loading.idle, };
+    let seen: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { -> let _ = reactive.effect({ -> seen.push(describe(page.user)); { -> } }); });
+    page.user = Loading.pending(none);
+    reactive.flush();
+    page.user = Loading.ready("ada");
+    reactive.flush();
+    expect.equal(seen, ["idle", "loading (was nobody)", "ada",]);
+    reactive.dispose(owner);
+}

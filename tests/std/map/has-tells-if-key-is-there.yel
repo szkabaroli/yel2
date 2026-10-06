@@ -1,0 +1,12 @@
+// ---
+// description: has is true for a key that is there and false otherwise
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    expect.holds(m.has("a"));
+    expect.holds(!m.has("b"));
+}

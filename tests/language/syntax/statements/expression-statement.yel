@@ -1,0 +1,17 @@
+// ---
+// description: an expression statement runs for its effect
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+touch: func(counter: list<s32>) -> s64 {
+    counter.push(1);
+    counter.len()
+}
+
+main: func() {
+    let counter: list<s32> = [];
+    touch(counter);
+    touch(counter);
+    expect.equal(counter.len(), 2);
+}

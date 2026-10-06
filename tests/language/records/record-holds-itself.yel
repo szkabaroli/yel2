@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: record Node holds itself: a value's size would never end
+// features: [records]
+// negative: compile
+// error: 7:1: record Node holds itself: a value's size would never end
+// ---
+record Node { value: s32, next: option<Node>, }
+record Pair { left: Inner, }
+record Inner { back: list<Pair>, }
+main: func() {}

@@ -1,0 +1,18 @@
+// ---
+// description: a global record's field is set in place
+// features: [records, let]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+let origin: Point;
+let moves: s32;
+
+main: func() {
+    origin.x = 3;
+    moves += 1;
+    expect.equal(origin.x, 3);
+    expect.equal(origin.y, 0);
+    expect.equal(moves, 1);
+}

@@ -1,0 +1,17 @@
+// ---
+// description: a readonly variant parameter's payloads read readonly
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+variant Shape { dot, items(list<s32>), }
+size: func(s: Shape & readonly) -> s64 {
+    match s {
+        dot => 0,
+        items(xs) => xs.len(),
+    }
+}
+main: func() {
+    let shape = Shape.items([1, 2, 3,]);
+    expect.equal(size(shape), 3);
+    expect.equal(size(Shape.dot), 0);
+}

@@ -1,6 +1,0 @@
-// error: 4:23: the range holds no value: its end is before its start
-main: func() {
-    let x: u64 = 5;
-    let s = match x { 0..0 => "never", _ => "any", };
-    print(s);
-}

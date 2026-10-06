@@ -1,0 +1,20 @@
+// ---
+// description: after an if that leaves, the name is what the test excluded
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post" | "put" | "delete";
+type write = "post" | "put";
+writes: func(m: write) -> string { "write {m}" }
+removes: func(m: "delete") -> string { "remove {m}" }
+reads: func(m: "get") -> string { "read {m}" }
+route: func(m: method) -> string {
+    if m is "get" { return reads(m); }
+    if m is write { writes(m) } else { removes(m) }
+}
+main: func() {
+    expect.equal(route("get"), "read get");
+    expect.equal(route("post"), "write post");
+    expect.equal(route("put"), "write put");
+    expect.equal(route("delete"), "remove delete");
+}

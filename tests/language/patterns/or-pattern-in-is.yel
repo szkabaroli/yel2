@@ -1,0 +1,12 @@
+// ---
+// description: is with alternatives tests either
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+level: func(n: s32) -> string {
+    if n is 1 | 2 | 3 { "small {n}" } else { "big {n}" }
+}
+main: func() {
+    expect.equal(level(2), "small 2");
+    expect.equal(level(9), "big 9");
+}

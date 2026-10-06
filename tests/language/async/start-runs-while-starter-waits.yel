@@ -1,0 +1,16 @@
+// ---
+// description: a started task runs while its starter waits for something else
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+side: async func() { log.push("side"); }
+
+main: async func() {
+    let future = start side();
+    wait yield-turn();
+    expect.equal(log, ["side",]);
+    wait future;
+}

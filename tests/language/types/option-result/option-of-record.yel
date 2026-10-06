@@ -1,0 +1,14 @@
+// ---
+// description: an option holding a record
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+main: func() {
+    let found: option<Point> = some({ x: 1, y: 2, });
+    expect.equal(expect.some(found).y, 2);
+    let missing: option<Point> = none;
+    expect.none(missing);
+}

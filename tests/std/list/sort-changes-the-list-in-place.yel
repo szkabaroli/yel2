@@ -1,0 +1,12 @@
+// ---
+// description: sort changes the list it is given
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [2, 1,];
+    let same = xs;
+    xs.sort({ a, b -> a < b });
+    expect.equal(same, [1, 2,]);
+}

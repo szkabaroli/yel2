@@ -1,0 +1,11 @@
+// ---
+// description: a const may be a char
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const SLASH = '/';
+
+main: func() {
+    expect.equal(SLASH as u32, 47);
+}

@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: +: expected a number, found char
+// features: [types, chars]
+// negative: compile
+// error: 7:24: +: expected a number, found char
+// ---
+main: func() { let a = 'a' + 1; }

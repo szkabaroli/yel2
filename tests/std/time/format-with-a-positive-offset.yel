@@ -1,0 +1,11 @@
+// ---
+// description: format writes +HH:MM for an offset ahead of UTC
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = time.to-date-time(time.from-unix-millis(1759660496789), 120);
+    expect.equal(time.format(when), "2025-10-05T12:34:56.789+02:00");
+}

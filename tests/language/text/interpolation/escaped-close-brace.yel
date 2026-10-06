@@ -1,0 +1,11 @@
+// ---
+// description: a backslash before } makes a literal brace
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a \} b";
+    expect.equal(text.len(), 5);
+    expect.equal(text.byte-at(2), 125);
+}

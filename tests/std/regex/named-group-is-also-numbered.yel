@@ -1,0 +1,11 @@
+// ---
+// description: a named group is in the group list by its number too
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = expect.some(/(?<word>\w+) (\w+)/.find("ab cd"));
+    expect.equal(found.groups, [some("ab"), some("cd"),]);
+    expect.equal(regex.group(found, "word"), some("ab"));
+}

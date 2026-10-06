@@ -1,0 +1,10 @@
+// ---
+// description: day-of-year of 5 October 2026
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.day-of-year(expect.ok(time.parse-date-time("2026-10-05"))), 278);
+}

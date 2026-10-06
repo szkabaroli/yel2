@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: type tree names itself
+// features: [types]
+// negative: compile
+// error: 7:1: type tree names itself
+// ---
+type tree = list<tree>;
+main: func() {}

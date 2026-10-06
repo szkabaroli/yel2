@@ -1,0 +1,19 @@
+// ---
+// description: a finished task's result is kept in its future until it is waited for
+// features: [memory, async, gc]
+// ---
+from "std:testing" include expect;
+
+make: async func(i: s32) -> string {
+    wait yield-turn();
+    "result {i}"
+}
+
+main: async func() {
+    let futures: list<future<string>> = [];
+    for i in 0..20 { futures.push(start make(i)); }
+    for turn in 0..3 { wait yield-turn(); }
+    for i in 0..30000 { let junk = "junk {i}"; }
+    expect.equal(wait futures[0], "result 0");
+    expect.equal(wait futures[19], "result 19");
+}

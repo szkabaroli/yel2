@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: expected a name, found the keyword match (a name of that word is written %match)
+// features: [syntax,names]
+// negative: compile
+// error: 7:1: expected a name, found the keyword match (a name of that word is written %match)
+// ---
+match: func() {}
+main: func() {}

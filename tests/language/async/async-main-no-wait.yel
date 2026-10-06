@@ -1,0 +1,10 @@
+// ---
+// description: an async main without any wait still runs
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let value = 1 + 1;
+    expect.equal(value, 2);
+}

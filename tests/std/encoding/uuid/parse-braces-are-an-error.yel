@@ -1,0 +1,10 @@
+// ---
+// description: uuid.parse refuses a UUID in braces
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.err(uuid.parse("\{550e8400-e29b-41d4-a716-446655440000\}"));
+}

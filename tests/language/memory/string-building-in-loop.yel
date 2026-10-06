@@ -1,0 +1,12 @@
+// ---
+// description: a string built up by many appends stays whole
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "";
+    for i in 0..2000 { text = text + "ab"; }
+    expect.equal(text.len(), 4000);
+    expect.equal(text.substring(0, 6), "ababab");
+}

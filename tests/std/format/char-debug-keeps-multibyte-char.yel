@@ -1,0 +1,9 @@
+// ---
+// description: a quoted char keeps a multibyte char
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{'😀':?}", "'😀'");
+}

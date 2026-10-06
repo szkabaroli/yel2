@@ -1,0 +1,9 @@
+// ---
+// description: a match on bool with both literals
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let flag = false;
+    expect.equal(match flag { true => 1, false => 0, }, 0);
+}

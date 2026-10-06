@@ -1,0 +1,23 @@
+// ---
+// description: a record pattern matches each field it names, binds with let, and leaves the others out
+// features: [patterns, match, records]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+where: func(p: Point) -> string {
+    match p {
+        { x: 0, y: 0 } => "origin",
+        { x: 0, y: let y } => "on the y axis at {y}",
+        let { y: 0, x } => "on the x axis at {x}",
+        _ => "somewhere",
+    }
+}
+
+main: func() {
+    expect.equal(where({ x: 0, y: 0, }), "origin");
+    expect.equal(where({ x: 0, y: 4, }), "on the y axis at 4");
+    expect.equal(where({ x: 3, y: 0, }), "on the x axis at 3");
+    expect.equal(where({ x: 1, y: 2, }), "somewhere");
+}

@@ -1,0 +1,27 @@
+// ---
+// description: a record converted to a union in a loop escapes the turn
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Cell { n: s32, }
+type either = s32 | Cell;
+
+main: func() {
+    let kept: list<either> = [];
+    for i in 0..3 {
+        let cell: Cell = { n: i + 10, };
+        let value: either = cell;
+        kept.push(value);
+    }
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    let total = 0;
+    for value in kept {
+        match value {
+            let cell: Cell => { total += cell.n; }
+            let number: s32 => {}
+        }
+    }
+    expect.equal(total, 33);
+}

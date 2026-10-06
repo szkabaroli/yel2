@@ -1,0 +1,14 @@
+// ---
+// description: a record holding a list, changed through the record
+// features: [types, records]
+// ---
+from "std:testing" include expect;
+
+resource Counter { name: string, values: list<s32>, }
+
+main: func() {
+    let counter: Counter = { name: "hits", values: [], };
+    for step in 0..3 { counter.values.push(step * step); }
+    expect.equal(counter.name, "hits");
+    expect.equal("{counter.values}", "[0, 1, 4]");
+}

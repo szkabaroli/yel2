@@ -1,0 +1,12 @@
+// ---
+// description: an unsettled literal takes T: 1 as s64 is an s64
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let wide = 1 as s64;
+    expect.equal(wide << 40, 1099511627776);
+    let narrow = 255 as u8;
+    expect.equal(narrow + 1, 0);
+}

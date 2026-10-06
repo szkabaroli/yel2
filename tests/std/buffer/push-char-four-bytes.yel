@@ -1,0 +1,12 @@
+// ---
+// description: push-char writes an emoji as four bytes
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push-char('😀');
+    expect.equal(b.to-bytes(), [240, 159, 152, 128,]);
+    expect.equal(b.to-string(), "😀");
+}

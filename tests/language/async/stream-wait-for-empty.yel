@@ -1,0 +1,13 @@
+// ---
+// description: wait for over a stream closed empty runs no turns
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(1);
+    out.close();
+    let turns = 0;
+    wait for x in items { turns += 1; }
+    expect.equal(turns, 0);
+}

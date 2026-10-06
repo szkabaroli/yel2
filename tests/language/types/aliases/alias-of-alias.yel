@@ -1,0 +1,14 @@
+// ---
+// description: an alias may name another alias
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type name = string;
+type label = name;
+
+main: func() {
+    let text: label = "x";
+    let plain: string = text;
+    expect.equal(plain, "x");
+}

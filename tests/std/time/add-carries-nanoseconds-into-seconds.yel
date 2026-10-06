@@ -1,0 +1,13 @@
+// ---
+// description: add carries nanoseconds past a second into the seconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let start = time.from-unix-millis(900);
+    let later = time.add(start, time.milliseconds(200));
+    expect.equal(later.seconds, 1);
+    expect.equal(later.nanoseconds, 100000000);
+}

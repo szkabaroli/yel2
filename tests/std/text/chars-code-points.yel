@@ -1,0 +1,12 @@
+// ---
+// description: a char converts to its code point
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = "é€😀".chars();
+    expect.equal(found[0] as s64, 233);
+    expect.equal(found[1] as s64, 8364);
+    expect.equal(found[2] as s64, 128512);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: nothing after a failed assert runs
+// features: [core]
+// exit: 1
+// ---
+main: func() {
+    print("before\n");
+    assert(false);
+    print("after\n");
+}

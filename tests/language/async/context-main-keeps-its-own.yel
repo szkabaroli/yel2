@@ -1,0 +1,19 @@
+// ---
+// description: setting a @(context) global in tasks leaves the starter's value alone
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let request: string = "none";
+
+handle: async func(name: string) {
+    request = name;
+    wait yield-turn();
+}
+
+main: async func() {
+    request = "main";
+    let first = start handle("child");
+    wait first;
+    expect.equal(request, "main");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a 0 before the width pads an integer with zeros
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 255;
+    expect.equal("[{value:08}]", "[00000255]");
+    expect.equal("[{value:03}]", "[255]");
+}

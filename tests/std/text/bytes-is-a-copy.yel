@@ -1,0 +1,13 @@
+// ---
+// description: changing the byte list leaves the string alone
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "abc";
+    let bytes = text.bytes();
+    bytes[0] = 120;
+    expect.equal(text, "abc");
+    expect.equal(bytes[0], 120);
+}

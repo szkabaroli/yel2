@@ -1,0 +1,9 @@
+// ---
+// description: pop of an empty list stops the program
+// features: [list]
+// exit: 1
+// ---
+main: func() {
+    let nothing: list<s32> = [];
+    nothing.pop();
+}

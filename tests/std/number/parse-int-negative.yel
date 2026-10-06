@@ -1,0 +1,9 @@
+// ---
+// description: parse-int reads a number with a minus sign
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int("-12"), some(-12));
+}

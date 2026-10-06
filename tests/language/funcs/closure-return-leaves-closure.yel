@@ -1,0 +1,14 @@
+// ---
+// description: return in a closure returns from the closure only
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let sign = { n: s32 ->
+        if n < 0 { return -1; }
+        1
+    };
+    let after = sign(-4) + sign(4);
+    expect.equal(after, 0);
+}

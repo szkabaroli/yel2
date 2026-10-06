@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a """ string's text starts on the next line
+// features: [text]
+// negative: compile
+// error: 8:13: a """ string's text starts on the next line
+// ---
+main: func() -> s32 {
+    let s = """text""";
+    0
+}

@@ -1,0 +1,11 @@
+// ---
+// description: s16 addition wraps from its maximum to its minimum
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: s16 = s16.MAX;
+    expect.equal(top + 1, s16.MIN);
+    expect.equal(top + 2, s16.MIN + 1);
+}

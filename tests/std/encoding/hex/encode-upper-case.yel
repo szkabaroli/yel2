@@ -1,0 +1,10 @@
+// ---
+// description: hex.encode-upper writes digits a to f in upper case
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(hex.encode-upper([171, 205, 239,]), "ABCDEF");
+}

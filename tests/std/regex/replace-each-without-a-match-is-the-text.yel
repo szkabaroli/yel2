@@ -1,0 +1,9 @@
+// ---
+// description: replace-each gives the text itself where nothing matches
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/x/.replace-each("abc", { m -> "!" }), "abc");
+}

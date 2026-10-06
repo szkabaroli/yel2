@@ -1,0 +1,9 @@
+// ---
+// description: a string built from escapes is valid UTF-8
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("\u{20AC}\u{1F600}".is-utf8());
+}

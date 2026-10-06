@@ -1,0 +1,12 @@
+// ---
+// description: f64 cast to f32 rounds to single precision
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 1.1;
+    expect.equal("{value as f32}", "1.1");
+    let exact: f64 = 2.5;
+    expect.equal(exact as f32, 2.5);
+}

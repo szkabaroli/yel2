@@ -1,0 +1,10 @@
+// ---
+// description: a list literal is readonly where that is wanted
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let fixed: list<string> & readonly = ["a", "b",];
+    expect.equal(fixed.len(), 2);
+    expect.equal(fixed[1], "b");
+}

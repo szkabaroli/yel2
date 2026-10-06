@@ -1,0 +1,16 @@
+// ---
+// description: == compares a union with a value of one of its kinds
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type value = s32 | string | bool;
+
+main: func() {
+    let text: value = "two";
+    expect.holds(text == "two");
+    expect.holds(!(text == 2));
+    let number: value = 3;
+    expect.holds(number == 3);
+    expect.holds(number != "3");
+}

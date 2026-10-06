@@ -1,0 +1,12 @@
+// ---
+// description: a float below an integer's minimum gives the minimum
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let large: f64 = -1e20;
+    expect.equal(large as s32, s32.MIN);
+    expect.equal(large as s8, -128);
+    expect.equal(large as s64, s64.MIN);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: a distinct type over a signed integer orders by value
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type offset = distinct s32;
+
+main: func() {
+    let before = -5 as offset;
+    let after = 5 as offset;
+    expect.holds(before < after);
+    expect.equal(before as s32, -5);
+}

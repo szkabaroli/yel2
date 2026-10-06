@@ -1,0 +1,10 @@
+// ---
+// description: u32.MIN and u32.MAX are the least and greatest u32
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(u32.MIN, 0);
+    expect.equal(u32.MAX, 4294967295);
+}

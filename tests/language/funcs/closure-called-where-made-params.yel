@@ -1,0 +1,12 @@
+// ---
+// description: a closure called where it is made takes written parameter types
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let k: s64 = ({ x: s64, y: s64 -> x * y })(6, 7);
+    expect.equal(k, 42);
+    let n = ({ -> 5 })();
+    expect.equal(n, 5);
+}

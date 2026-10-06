@@ -1,0 +1,17 @@
+// ---
+// description: a race with a timer gives the work when it is done first
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+quick: async func() -> string {
+    wait yield-turn();
+    "quick"
+}
+
+main: async func() {
+    match wait quick() | sleep(2000) {
+        let text: string => expect.equal(text, "quick"),
+        () => expect.fail("the timer won"),
+    }
+}

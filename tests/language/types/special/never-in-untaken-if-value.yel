@@ -1,0 +1,12 @@
+// ---
+// description: a never in the untaken branch of an if used as a value
+// features: [types, never]
+// ---
+from "std:testing" include expect;
+
+stop: func(reason: string) -> never { panic(reason) }
+
+main: func() {
+    let value: s32 = if false { stop("never taken") } else { 7 };
+    expect.equal(value, 7);
+}

@@ -1,0 +1,15 @@
+// ---
+// description: wait inside a loop with break
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let turns = 0;
+    loop {
+        wait yield-turn();
+        turns += 1;
+        if turns == 5 { break; }
+    }
+    expect.equal(turns, 5);
+}

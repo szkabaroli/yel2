@@ -1,0 +1,16 @@
+// ---
+// description: a resource in a list is the same object
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+main: func() {
+    let a: Counter = { value: 1, };
+    let all: list<Counter> = [a,];
+    a.value = 9;
+    expect.equal(all[0].value, 9);
+    all[0].value = 4;
+    expect.equal(a.value, 4);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: get-insecure-random-bytes gives that many bytes
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include insecure;
+
+main: func() {
+    expect.equal(insecure.get-insecure-random-bytes(24).len(), 24);
+}

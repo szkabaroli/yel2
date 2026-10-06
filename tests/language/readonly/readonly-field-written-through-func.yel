@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: argument 1 of add is readonly, and add writes it (through its field)
+// features: [readonly]
+// negative: compile
+// error: 12:9: argument 1 of add is readonly, and add writes it
+// help: give it a value that is not readonly (a copy), or make add only read it
+// ---
+resource Team { members: list<string>, }
+add: func(t: Team, name: string) { t.members.push(name); }
+main: func() {
+    let team: Team & readonly = { members: [], };
+    add(team, "ada");
+}

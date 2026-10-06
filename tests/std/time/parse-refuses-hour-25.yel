@@ -1,0 +1,10 @@
+// ---
+// description: time.parse refuses hour 25
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(expect.err(time.parse("2026-10-05T25:00Z")), "no time 25:00:00");
+}

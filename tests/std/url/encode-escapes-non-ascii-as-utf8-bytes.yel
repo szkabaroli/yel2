@@ -1,0 +1,10 @@
+// ---
+// description: encode writes each UTF-8 byte of a character as %XX
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.encode("é€😀"), "%C3%A9%E2%82%AC%F0%9F%98%80");
+}

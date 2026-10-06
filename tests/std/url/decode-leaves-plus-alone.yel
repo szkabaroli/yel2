@@ -1,0 +1,10 @@
+// ---
+// description: decode does not turn + into a space
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("a+b"), ok("a+b"));
+}

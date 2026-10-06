@@ -1,0 +1,9 @@
+// ---
+// description: map can give items of another type
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2,].map({ n -> "<{n}>" }), ["<1>", "<2>",]);
+}

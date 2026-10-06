@@ -1,0 +1,11 @@
+// ---
+// description: get-initial-cwd gives the directory the program started in
+// features: [cli]
+// ---
+from "std:testing" include expect;
+from "std:cli" include environment, exit;
+
+main: func() {
+    let found = expect.some(environment.get-initial-cwd());
+    expect.holds(found.starts-with("/"));
+}

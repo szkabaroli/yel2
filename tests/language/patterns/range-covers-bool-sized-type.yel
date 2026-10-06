@@ -1,0 +1,18 @@
+// ---
+// description: a range type is covered by arms of just its values
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type grade = 1..4;
+name: func(g: grade) -> string {
+    match g {
+        1 => "one",
+        2 => "two",
+        3 => "three",
+    }
+}
+main: func() {
+    let g: grade = 3;
+    expect.equal(name(g), "three");
+    expect.equal(name(1), "one");
+}

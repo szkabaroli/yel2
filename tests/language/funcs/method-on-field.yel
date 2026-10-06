@@ -1,0 +1,14 @@
+// ---
+// description: a method is called on a field
+// features: [funcs, methods, records]
+// ---
+from "std:testing" include expect;
+
+resource Line { name: string, }
+
+shout: func(text: string) -> string { text + "!" }
+
+main: func() {
+    let line: Line = { name: "ada", };
+    expect.equal(line.name.shout(), "ada!");
+}

@@ -1,0 +1,13 @@
+// ---
+// description: ...rest binds the fields not named
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+record Person { name: string, age: s32, city: string, }
+main: func() {
+    let person: Person = { name: "ada", age: 36, city: "london", };
+    let { name, ...rest } = person;
+    expect.equal(name, "ada");
+    expect.equal(rest.age, 36);
+    expect.equal(rest.city, "london");
+}

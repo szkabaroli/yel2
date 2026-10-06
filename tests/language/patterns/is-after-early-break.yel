@@ -1,0 +1,16 @@
+// ---
+// description: after an if that breaks, the name is narrowed after it
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post";
+writes: func(m: "post") -> string { "write {m}" }
+main: func() {
+    let methods: list<method> = ["post", "get", "post",];
+    let out: list<string> = [];
+    for m in methods {
+        if m is "get" { break; }
+        out.push(writes(m));
+    }
+    expect.equal(out, ["write post",]);
+}

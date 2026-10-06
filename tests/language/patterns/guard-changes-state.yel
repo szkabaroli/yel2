@@ -1,0 +1,16 @@
+// ---
+// description: a guard may change a variable the body reads
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+let hits: s32;
+count: func(value: bool) -> bool { hits += 1; value }
+main: func() {
+    let n = 2;
+    let text = match n {
+        let k if count(k == 1) => "one",
+        let k if count(k == 2) => "two {hits}",
+        _ => "other",
+    };
+    expect.equal(text, "two 2");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: the monotonic clock does not go down
+// features: [clocks]
+// ---
+from "std:testing" include expect;
+from "std:clocks" include system-clock, monotonic-clock;
+
+main: func() {
+    let first = monotonic-clock.now();
+    let second = monotonic-clock.now();
+    expect.holds(second >= first);
+}

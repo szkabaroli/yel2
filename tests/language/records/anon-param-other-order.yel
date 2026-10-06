@@ -1,0 +1,15 @@
+// ---
+// description: a parameter of an anonymous record type takes the same fields in another order
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+type point = { x: s32, y: s32 };
+
+mirror: func(p: { y: s32, x: s32 }) -> point { { x: p.y, y: p.x, } }
+
+main: func() {
+    let flipped = mirror({ x: 1, y: 2, });
+    expect.equal(flipped.x, 2);
+    expect.equal(flipped.y, 1);
+}

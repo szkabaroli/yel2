@@ -1,0 +1,9 @@
+// ---
+// description: map makes each item another
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2, 3,].map({ n -> n * 10 }), [10, 20, 30,]);
+}

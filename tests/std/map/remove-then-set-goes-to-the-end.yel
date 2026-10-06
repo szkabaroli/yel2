@@ -1,0 +1,16 @@
+// ---
+// description: a key set again after remove goes to the end of the order
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    m.set(1, 10);
+    m.set(2, 20);
+    m.set(3, 30);
+    m.remove(1);
+    m.set(1, 11);
+    expect.equal(m.keys(), [2, 3, 1,]);
+    expect.equal(m[1], 11);
+}

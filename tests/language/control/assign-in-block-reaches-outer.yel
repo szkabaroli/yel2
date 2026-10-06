@@ -1,0 +1,12 @@
+// ---
+// description: assignment inside a block changes the outer variable
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let x = 1;
+    {
+        x = 5;
+    }
+    expect.equal(x, 5);
+}

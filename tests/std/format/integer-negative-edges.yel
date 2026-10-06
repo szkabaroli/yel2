@@ -1,0 +1,10 @@
+// ---
+// description: an interpolated negative number keeps its sign and digits
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let ten = -10;
+    expect.equal("{ten} {ten + 1} {ten * 10}", "-10 -9 -100");
+}

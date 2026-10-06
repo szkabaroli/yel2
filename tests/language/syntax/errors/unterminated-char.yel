@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: unterminated character
+// features: [syntax,literals]
+// negative: compile
+// error: 8:18: unterminated character
+// ---
+main: func() {
+    let letter = 'a;
+}

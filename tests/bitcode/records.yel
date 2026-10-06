@@ -1,6 +1,6 @@
 // record Name { fields }: a value, copied where it goes (a variable, a field, a parameter, a list's
 // item), equal by its fields; a field is set where the record is (a variable, a field of one, a
-// resource's field). A resource is a shared object instead: tests/resources-shared.yel
+// resource's field). A resource is a shared object instead: tests/language/records/resources-shared.yel
 
 record Point { x: s32, y: s32, }
 

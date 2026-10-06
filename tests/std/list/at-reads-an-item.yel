@@ -1,0 +1,11 @@
+// ---
+// description: at gives the item at an index
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [10, 20, 30,];
+    expect.equal(xs.at(0), 10);
+    expect.equal(xs.at(2), 30);
+}

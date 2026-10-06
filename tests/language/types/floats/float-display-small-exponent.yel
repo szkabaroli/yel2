@@ -1,0 +1,12 @@
+// ---
+// description: a small float shows with an exponent when long
+// features: [types, floats, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let tiny: f64 = 2.5e-3;
+    expect.equal("{tiny}", "0.0025");
+    let huge: f64 = 1e21;
+    expect.equal("{huge}", "1e+21");
+}

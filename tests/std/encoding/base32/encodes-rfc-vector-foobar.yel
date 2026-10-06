@@ -1,0 +1,10 @@
+// ---
+// description: base32.encode of 'foobar'
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    expect.equal(base32.encode("foobar".bytes()), "MZXW6YTBOI======");
+}

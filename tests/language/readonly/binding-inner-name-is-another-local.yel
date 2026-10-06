@@ -1,0 +1,17 @@
+// ---
+// description: an inner let of the same name is another local, so the outer can be made readonly
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let shared: list<s32> = [1,];
+    let xs: list<s32> = [];
+    if true {
+        let xs = shared;
+        xs.push(0);
+    }
+    let frozen: list<s32> & readonly = xs;
+    shared.push(2);
+    expect.equal(frozen, []);
+    expect.equal(shared, [1, 0, 2,]);
+}

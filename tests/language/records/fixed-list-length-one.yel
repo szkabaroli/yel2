@@ -1,0 +1,11 @@
+// ---
+// description: a fixed-length list of one item
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let single: list<string, 1> = ["only"];
+    expect.equal(single.len(), 1);
+    expect.equal(single[0], "only");
+}

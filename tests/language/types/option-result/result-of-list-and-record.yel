@@ -1,0 +1,16 @@
+// ---
+// description: a result whose sides are a list and a record
+// features: [types, result]
+// ---
+from "std:testing" include expect;
+
+resource Problem { code: s32, }
+
+fetch: func(good: bool) -> result<list<s32>, Problem> {
+    if good { ok([1, 2,]) } else { err({ code: 404, }) }
+}
+
+main: func() {
+    expect.equal(expect.ok(fetch(true)).len(), 2);
+    expect.equal(expect.err(fetch(false)).code, 404);
+}

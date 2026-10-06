@@ -1,0 +1,12 @@
+// ---
+// description: is-digit holds for 0 to 9 and not the bytes beside them
+// features: [char]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(is-digit(48));
+    expect.holds(is-digit(57));
+    expect.holds(!is-digit(47));
+    expect.holds(!is-digit(58));
+}

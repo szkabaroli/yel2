@@ -1,0 +1,13 @@
+// ---
+// description: format writes a fraction with no zeros at its end
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let half: time.date-time = { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0, nanosecond: 500000000, offset: 0, };
+    let milli: time.date-time = { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0, nanosecond: 1000000, offset: 0, };
+    expect.equal(time.format(half), "2026-01-01T00:00:00.5Z");
+    expect.equal(time.format(milli), "2026-01-01T00:00:00.001Z");
+}

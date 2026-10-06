@@ -1,0 +1,10 @@
+// ---
+// description: decode refuses bytes that are not UTF-8
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("%FF"), err("not UTF-8 at byte 0"));
+}

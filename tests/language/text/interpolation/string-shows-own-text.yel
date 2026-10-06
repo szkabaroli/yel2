@@ -1,0 +1,11 @@
+// ---
+// description: a string in an interpolation shows as its own text, without quotes
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "plain";
+    expect.equal("{text}", "plain");
+    expect.equal("{text.len()}", "5");
+}

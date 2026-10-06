@@ -1,0 +1,8 @@
+// ---
+// description: a char shows as itself, and quoted and escaped inside a list
+// features: [wave]
+// ---
+main: func() {
+    let c = 'é';
+    print("{c} {'\u{1F600}'} {['a', '\n', '\'', c,]}\n");
+}

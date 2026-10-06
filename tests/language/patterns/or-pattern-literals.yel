@@ -1,0 +1,16 @@
+// ---
+// description: an or-pattern of literals
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+weekend: func(day: s32) -> bool {
+    match day {
+        6 | 7 => true,
+        _ => false,
+    }
+}
+main: func() {
+    expect.holds(weekend(6));
+    expect.holds(weekend(7));
+    expect.holds(!weekend(5));
+}

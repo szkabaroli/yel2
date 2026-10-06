@@ -1,0 +1,11 @@
+// ---
+// description: parse gives the scheme in lower case
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("HtTp://h/"));
+    expect.equal(u.scheme, "http");
+}

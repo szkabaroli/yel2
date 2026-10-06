@@ -1,0 +1,9 @@
+// ---
+// description: replace takes matches from left to right without overlap
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("aaa".replace("aa", "b"), "ba");
+}

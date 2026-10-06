@@ -1,0 +1,10 @@
+// ---
+// description: time.parse refuses a date with no dash
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(expect.err(time.parse("20261005")), "expected - at 4");
+}

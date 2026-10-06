@@ -1,0 +1,11 @@
+// ---
+// description: bools in a list, tested with all and any
+// features: [types, bools]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let flags = [true, false, true,];
+    expect.holds(flags.any({ flag -> flag }));
+    expect.holds(!flags.all({ flag -> flag }));
+}

@@ -1,0 +1,9 @@
+// ---
+// description: pad with ^ puts the fill on both sides
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.pad("ab", 6, "*", "^"), "**ab**");
+}

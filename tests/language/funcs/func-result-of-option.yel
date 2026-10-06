@@ -1,0 +1,17 @@
+// ---
+// description: a func returns an option and its caller matches
+// features: [funcs, options]
+// ---
+from "std:testing" include expect;
+
+find: func(items: list<s32>, wanted: s32) -> option<s64> {
+    for i in 0..items.len() {
+        if items[i] == wanted { return some(i); }
+    }
+    none
+}
+
+main: func() {
+    expect.equal(expect.some(find([5, 6, 7,], 7)), 2);
+    expect.none(find([5, 6, 7,], 9));
+}

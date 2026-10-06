@@ -1,0 +1,20 @@
+// ---
+// description: a yield in a loop with a break
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+powers: func(limit: s32) -> seq<s32> {
+    let power = 1;
+    loop {
+        if power > limit { break; }
+        yield power;
+        power *= 2;
+    }
+}
+
+main: func() {
+    let seen: list<s32> = [];
+    for value in powers(50) { seen.push(value); }
+    expect.equal(seen, [1, 2, 4, 8, 16, 32,]);
+}

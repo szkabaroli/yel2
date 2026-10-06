@@ -1,0 +1,12 @@
+// ---
+// description: casting to the same type changes nothing
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = -42;
+    expect.equal(value as s32, -42);
+    let unsigned: u8 = 200;
+    expect.equal(unsigned as u8, 200);
+}

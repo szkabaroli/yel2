@@ -1,0 +1,12 @@
+// ---
+// description: a member after a dot may be written without the percent sign
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+record entry { %type: string, }
+
+main: func() {
+    let found: entry = { %type: "file", };
+    expect.equal(found.type, "file");
+}

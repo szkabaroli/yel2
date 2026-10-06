@@ -1,0 +1,14 @@
+// ---
+// description: a record literal that ends a block is the block's value
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = {
+        let base = 4;
+        { twice: base * 2, half: base / 2, }
+    };
+    expect.equal(value.twice, 8);
+    expect.equal(value.half, 2);
+}

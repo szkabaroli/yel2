@@ -1,0 +1,14 @@
+// ---
+// description: values are in the order they were first added
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<string> = set.new();
+    s.add("c");
+    s.add("a");
+    s.add("b");
+    s.add("a");
+    expect.equal(s.values(), ["c", "a", "b",]);
+}

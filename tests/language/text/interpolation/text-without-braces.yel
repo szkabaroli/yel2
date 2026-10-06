@@ -1,0 +1,10 @@
+// ---
+// description: a string with no brace is its text
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("no braces here", "no braces here");
+    expect.equal("".len(), 0);
+}

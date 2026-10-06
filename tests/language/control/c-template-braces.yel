@@ -1,0 +1,10 @@
+// ---
+// description: in a C template, a brace starts an interpolation only before a name or a paren
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let test = "x > 0";
+    expect.equal(c"if ({test}) { y = { 0 }; } else {}" + "", "if (x > 0) \{ y = \{ 0 \}; \} else \{\}");
+    expect.equal(c"{ .tag = {(1 + 2)} } {1, 2} \{literal\}" + "", "\{ .tag = 3 \} \{1, 2\} \{literal\}");
+}

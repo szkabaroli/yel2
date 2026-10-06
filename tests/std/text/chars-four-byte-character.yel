@@ -1,0 +1,10 @@
+// ---
+// description: chars reads a four byte character as one
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("😀a".chars().len(), 2);
+    expect.equal("😀a".chars()[0], '\u{1f600}');
+}

@@ -1,0 +1,15 @@
+// ---
+// description: break in an inner loop leaves it, the outer goes on
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let pairs: list<string> = [];
+    for i in 0..3 {
+        for j in 0..10 {
+            if j > i { break; }
+            pairs.push("{i}{j}");
+        }
+    }
+    expect.equal(pairs.join(" "), "00 10 11 20 21 22");
+}

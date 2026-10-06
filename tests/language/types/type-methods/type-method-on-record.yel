@@ -1,0 +1,16 @@
+// ---
+// description: a module's func taking a record first is its method
+// features: [types, type-methods]
+// ---
+from "std:testing" include expect;
+
+module geometry {
+    record vector { x: s32, y: s32, }
+
+    length-squared: func(value: vector) -> s32 { value.x * value.x + value.y * value.y }
+}
+
+main: func() {
+    let value: geometry.vector = { x: 3, y: 4, };
+    expect.equal(value.length-squared(), 25);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: wait results may be arguments of another call
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+value: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x
+}
+
+add: func(left: s32, right: s32) -> s32 { left + right }
+
+main: async func() {
+    expect.equal(add(wait value(3), wait value(4)), 7);
+}

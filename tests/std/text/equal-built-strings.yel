@@ -1,0 +1,11 @@
+// ---
+// description: two strings made apart compare equal by content
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let left = "ab" + "c";
+    let right = "a" + "bc";
+    expect.holds(left == right);
+}

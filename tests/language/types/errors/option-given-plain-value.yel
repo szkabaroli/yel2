@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: the value of a: expected option<s32>, found an integer
+// features: [types, option]
+// negative: compile
+// error: 7:37: the value of a: expected option<s32>, found an integer
+// ---
+main: func() { let a: option<s32> = 3; }

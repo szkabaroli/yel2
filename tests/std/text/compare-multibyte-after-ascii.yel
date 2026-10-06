@@ -1,0 +1,9 @@
+// ---
+// description: compare puts a multibyte character after ASCII
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(compare("é", "z") > 0);
+}

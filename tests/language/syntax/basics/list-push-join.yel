@@ -1,0 +1,12 @@
+// ---
+// description: push adds an item, join glues the items with a separator, len counts them
+// features: [syntax,lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names = ["yel", "zero",];
+    names.push("bootstrap");
+    expect.equal(names.join(", "), "yel, zero, bootstrap");
+    expect.equal(names.len(), 3);
+}

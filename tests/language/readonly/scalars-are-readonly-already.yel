@@ -1,0 +1,11 @@
+// ---
+// description: numbers and strings are readonly already
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n: s32 & readonly = 5;
+    let s: string & readonly = "text";
+    expect.equal(n + 1, 6);
+    expect.equal(s.len(), 4);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: params reads a value with an empty name
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("=v"), [("", "v"),]);
+}

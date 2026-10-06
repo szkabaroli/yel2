@@ -1,0 +1,13 @@
+// ---
+// description: & | ^ work on s64 across the sign bit
+// features: [types, integers, bitwise]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let low: s64 = s64.MIN;
+    let minus-one: s64 = -1;
+    expect.equal(low & minus-one, s64.MIN);
+    expect.equal(low ^ minus-one, s64.MAX);
+    expect.equal(low | 1, s64.MIN + 1);
+}

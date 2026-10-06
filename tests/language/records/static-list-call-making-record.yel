@@ -1,0 +1,21 @@
+// ---
+// description: a call of a func that only makes a record of its parameters is a constant
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+record part { id: string, name: string, size: s32, tags: list<string>, }
+
+part-of: func(name: string, size: s32) -> part { { id: name, name: name, size: size, tags: ["made",], } }
+
+parts: func() -> list<part> { [part-of("inbox", 3), part-of("compose", 4),] }
+
+main: func() {
+    let all = parts();
+    expect.equal(all[0].id, "inbox");
+    expect.equal(all[0].name, "inbox");
+    expect.equal(all[0].size, 3);
+    expect.equal(all[0].tags.join(","), "made");
+    expect.equal(all[1].id, "compose");
+    expect.equal(all[1].size, 4);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: split works on multibyte text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("é,😀,x".split(","), ["é", "😀", "x",]);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: from-date-time takes day 32 of January as 1 February
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when: time.date-time = { year: 2026, month: 1, day: 32, hour: 0, minute: 0, second: 0, nanosecond: 0, offset: 0, };
+    expect.equal(time.to-iso(time.from-date-time(when)), "2026-02-01T00:00:00.000Z");
+}

@@ -1,0 +1,21 @@
+// ---
+// description: a match on a char with literal and range arms
+// features: [types, chars, match]
+// ---
+from "std:testing" include expect;
+
+kind: func(letter: char) -> string {
+    match letter {
+        'a' | 'e' | 'i' | 'o' | 'u' => "vowel",
+        'a'..='z' => "consonant",
+        '0'..='9' => "digit",
+        _ => "other",
+    }
+}
+
+main: func() {
+    expect.equal(kind('e'), "vowel");
+    expect.equal(kind('x'), "consonant");
+    expect.equal(kind('7'), "digit");
+    expect.equal(kind('?'), "other");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a set global starts empty
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let tags: set<string>;
+
+main: func() {
+    expect.equal(tags.len(), 0);
+}

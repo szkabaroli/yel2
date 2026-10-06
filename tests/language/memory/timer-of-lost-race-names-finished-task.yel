@@ -1,0 +1,20 @@
+// ---
+// description: a race's loser timer names a task done and collected: its later firing is safe
+// features: [memory, async]
+// ---
+from "std:testing" include expect;
+
+racer: async func() {
+    match wait sleep(30) | yield-turn() {
+        () => {}
+    }
+}
+
+main: async func() {
+    let future = start racer();
+    wait yield-turn();
+    let junk: list<string> = [];
+    for i in 0..200 { junk.push("{i}{i}{i}{i}{i}{i}{i}{i}"); }
+    wait sleep(60);
+    expect.equal(junk.len(), 200);
+}

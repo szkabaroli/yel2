@@ -1,0 +1,9 @@
+// ---
+// description: blocks nest as values
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = { let a = { 1 + 1 }; { a + 10 } };
+    expect.equal(n, 12);
+}

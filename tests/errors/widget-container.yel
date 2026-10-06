@@ -1,5 +1,0 @@
-// error: 4:5: @(container) and @(base) go on a widget (widget Name { … })
-module ui {
-    @(container)
-    record Card { title: string, }
-}

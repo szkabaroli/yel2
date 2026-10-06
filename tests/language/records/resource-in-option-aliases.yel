@@ -1,0 +1,16 @@
+// ---
+// description: a resource in an option is the same object
+// features: [resources, options]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+main: func() {
+    let a: Counter = { value: 1, };
+    let found: option<Counter> = some(a);
+    a.value = 2;
+    let got = expect.some(found);
+    expect.equal(got.value, 2);
+    expect.holds(got == a);
+}

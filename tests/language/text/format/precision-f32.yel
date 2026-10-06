@@ -1,0 +1,10 @@
+// ---
+// description: a precision works on an f32
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f32 = 1.5;
+    expect.equal("{value:.2}", "1.50");
+}

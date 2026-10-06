@@ -1,0 +1,19 @@
+// ---
+// description: a generic func over result sides
+// features: [types, result, generics]
+// ---
+from "std:testing" include expect;
+
+swap: func<T, E>(outcome: result<T, E>) -> result<E, T> {
+    match outcome {
+        ok(value) => err(value),
+        err(reason) => ok(reason),
+    }
+}
+
+main: func() {
+    let first: result<s32, string> = ok(1);
+    expect.equal(expect.err(swap(first)), 1);
+    let second: result<s32, string> = err("x");
+    expect.equal(expect.ok(swap(second)), "x");
+}

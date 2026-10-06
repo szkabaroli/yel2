@@ -1,0 +1,11 @@
+// ---
+// description: type is a func name where a colon follows it
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+type: func() -> string { "a type" }
+
+main: func() {
+    expect.equal(type(), "a type");
+}

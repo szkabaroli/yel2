@@ -1,0 +1,12 @@
+// ---
+// description: closing quotes at the start of a line strip nothing
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+  kept
+"""; 
+    expect.equal(text, "  kept");
+}

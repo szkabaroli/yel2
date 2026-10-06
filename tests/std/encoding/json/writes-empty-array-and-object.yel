@@ -1,0 +1,19 @@
+// ---
+// description: json.write writes empty containers
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    expect.equal(json.write(json.value.array([])), "[]");
+    expect.equal(json.write(json.object([])), "\{\}");
+}

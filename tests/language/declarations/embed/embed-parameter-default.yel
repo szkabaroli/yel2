@@ -1,0 +1,12 @@
+// ---
+// description: #embed may be a parameter's default
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+show: func(text: string = #embed("motd.txt")) -> s64 { text.len() }
+
+main: func() {
+    expect.equal(show(), 12);
+    expect.equal(show("ab"), 2);
+}

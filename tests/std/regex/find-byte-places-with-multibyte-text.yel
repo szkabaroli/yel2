@@ -1,0 +1,11 @@
+// ---
+// description: find gives places in bytes of text with multibyte characters
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = expect.some(/b/.find("éé b"));
+    expect.equal(found.start, 5);
+    expect.equal(found.end, 6);
+}

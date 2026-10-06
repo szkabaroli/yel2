@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of x: expected s32, found a float
+// features: [types]
+// negative: compile
+// error: 8:18: the value of x: expected s32, found a float
+// ---
+main: func() -> s32 {
+    let x: s32 = 1.5;
+    x
+}

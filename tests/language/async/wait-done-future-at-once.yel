@@ -1,0 +1,13 @@
+// ---
+// description: a future that finished while the starter did other work gives its result
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+value: async func() -> s32 { 5 }
+
+main: async func() {
+    let future = start value();
+    for turn in 0..3 { wait yield-turn(); }
+    expect.equal(wait future, 5);
+}

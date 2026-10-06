@@ -1,0 +1,10 @@
+// ---
+// description: trim takes only space, tab, line feed and carriage return
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("\u{b}x".trim().len(), 2);
+    expect.equal("\u{c}x".trim().len(), 2);
+}

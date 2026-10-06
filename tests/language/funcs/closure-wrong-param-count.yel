@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the value of f: expected func(s32) -> s32, found func(_, _) -> _
+// features: [funcs]
+// negative: compile
+// error: 8:31: the value of f: expected func(s32) -> s32, found func(_, _) -> _
+// ---
+main: func() {
+    let f: func(s32) -> s32 = { a, b -> a };
+}

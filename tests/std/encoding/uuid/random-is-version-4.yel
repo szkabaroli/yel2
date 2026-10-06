@@ -1,0 +1,10 @@
+// ---
+// description: uuid.random makes a version 4 UUID
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(uuid.version(uuid.random()), 4);
+}

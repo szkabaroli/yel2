@@ -1,0 +1,14 @@
+// ---
+// description: a list of lists: set, pop, len
+// features: [types, lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let items = [[1,], [], [2, 3,],];
+    items.set(1, [4,]);
+    let last = items.pop();
+    expect.equal("{items}", "[[1], [4]]");
+    expect.equal("{last}", "[2, 3]");
+    expect.equal(items.len(), 2);
+}

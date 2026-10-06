@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: expected a name, found the keyword let (a name of that word is written %let)
+// features: [syntax,names]
+// negative: compile
+// error: 7:8: expected a name, found the keyword let (a name of that word is written %let)
+// ---
+record let { first: s32, }
+main: func() {}

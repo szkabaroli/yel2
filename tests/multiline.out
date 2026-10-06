@@ -1,8 +1,0 @@
-Hello, yel!
-  indented two
-a "quote", "" two, """ three
-escaped \ and 	 tab
-
-after an empty line|
-["one\ntwo"]
-[] 0 96

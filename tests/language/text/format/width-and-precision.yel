@@ -1,0 +1,11 @@
+// ---
+// description: width and precision together
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 3.14159;
+    expect.equal("[{value:8.3}]", "[   3.142]");
+    expect.equal("[{value:<8.2}]", "[3.14    ]");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: to-digit is none for a digit the radix does not have
+// features: [char]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(to-digit(50, 2));
+    expect.none(to-digit(103, 16));
+    expect.none(to-digit(57, 8));
+    expect.none(to-digit(97, 10));
+}

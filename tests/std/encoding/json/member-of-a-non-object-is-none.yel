@@ -1,0 +1,20 @@
+// ---
+// description: json.member gives none for a value that is not an object
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    expect.none(json.member(json.value.number("1"), "a"));
+    expect.none(json.member(json.value.array([]), "a"));
+    expect.none(json.member(json.value.null, "a"));
+}

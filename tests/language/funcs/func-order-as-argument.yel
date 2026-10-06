@@ -1,0 +1,39 @@
+// ---
+// description: a func passed as the order of a sort
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+resource Named { name: string, score: s32, }
+
+by-score: func(a: Named, b: Named) -> bool { a.score < b.score }
+
+by-name-length: func(a: Named, b: Named) -> bool { a.name.len() < b.name.len() }
+
+sort: func(xs: list<Named>, less: func(Named, Named) -> bool) {
+    for i in 1..xs.len() {
+        let j = i;
+        for step in 0..i {
+            if j > 0 && less(xs[j], xs[j - 1]) {
+                let t = xs[j];
+                xs[j] = xs[j - 1];
+                xs[j - 1] = t;
+                j -= 1;
+            }
+        }
+    }
+}
+
+main: func() {
+    let people: list<Named> = [
+        { name: "grace", score: 3, },
+        { name: "ada", score: 9, },
+        { name: "barbara", score: 1, },
+    ];
+    sort(people, by-score);
+    expect.equal(people[0].name, "barbara");
+    expect.equal(people[2].name, "ada");
+    sort(people, by-name-length);
+    expect.equal(people[0].name, "ada");
+    expect.equal(people[2].name, "barbara");
+}

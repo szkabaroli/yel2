@@ -1,0 +1,18 @@
+// ---
+// description: a record wrapped in an option and kept outside the loop escapes the turn
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Cell { n: s32, }
+
+main: func() {
+    let best: option<Cell> = none;
+    for i in 0..5 {
+        let cell: Cell = { n: i * 3, };
+        best = some(cell);
+    }
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    expect.equal(expect.some(best).n, 12);
+}

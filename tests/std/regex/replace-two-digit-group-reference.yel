@@ -1,0 +1,9 @@
+// ---
+// description: replace reads $10 as group 10 where the regex has ten groups
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)/.replace("abcdefghij", "$10$1"), "ja");
+}

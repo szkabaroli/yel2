@@ -1,0 +1,21 @@
+// ---
+// description: nested matches binding the same name each get their own payload
+// features: [memory, patterns]
+// ---
+from "std:testing" include expect;
+
+nested: func(x: option<option<s32>>) -> string {
+    match x {
+        some(x) => match x {
+            some(x) => "{x + 1}",
+            none => "inner none",
+        },
+        none => "none",
+    }
+}
+
+main: func() {
+    expect.equal(nested(some(some(4))), "5");
+    expect.equal(nested(some(none)), "inner none");
+    expect.equal(nested(none), "none");
+}

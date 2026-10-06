@@ -1,0 +1,12 @@
+// ---
+// description: parse gives no host to a URL with no authority
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("mailto:ada@example.com"));
+    expect.none(u.host);
+    expect.equal(u.path, "ada@example.com");
+}

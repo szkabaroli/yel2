@@ -1,0 +1,10 @@
+// ---
+// description: padding an empty string gives only fill
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("".pad-start(3, "x"), "xxx");
+    expect.equal("".pad-end(2, "x"), "xx");
+}

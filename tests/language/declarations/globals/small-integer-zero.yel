@@ -1,0 +1,15 @@
+// ---
+// description: every integer width starts at 0
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let tiny: u8;
+let small: s16;
+let wide: u64;
+
+main: func() {
+    expect.equal(tiny as s32, 0);
+    expect.equal(small as s32, 0);
+    expect.equal(wide, 0 as u64);
+}

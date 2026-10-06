@@ -1,0 +1,21 @@
+// ---
+// description: a closure outlives its maker: its environment is read after allocations
+// features: [memory, closures]
+// ---
+from "std:testing" include expect;
+
+make: func(n: s32) -> func() -> string {
+    let name = "x{n}";
+    let count = n;
+    {
+        let a = "{name}-a";
+        count += 1;
+        let b = "{name}-b{count}";
+        "{a} {b} {name} {count}"
+    }
+}
+
+main: func() {
+    expect.equal(make(5)(), "x5-a x5-b6 x5 6");
+    expect.equal(make(7)(), "x7-a x7-b8 x7 8");
+}

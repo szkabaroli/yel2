@@ -1,0 +1,11 @@
+// ---
+// description: expect.near passes for floats close enough
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let sum: f64 = 0.1 + 0.2;
+    expect.near(sum, 0.3);
+    expect.near(1.0, 1.0000001, 0.001);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: expected ';', found 'print'
+// features: [syntax]
+// negative: compile
+// error: 8:18: expected ';', found 'print'
+// ---
+main: func() -> s32 {
+    let x = 1 + 2
+        print("x");
+    0
+}

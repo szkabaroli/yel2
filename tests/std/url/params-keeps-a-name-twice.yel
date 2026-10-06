@@ -1,0 +1,10 @@
+// ---
+// description: params keeps a name given twice, in order
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("a=1&a=2"), [("a", "1"), ("a", "2"),]);
+}

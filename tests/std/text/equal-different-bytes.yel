@@ -1,0 +1,12 @@
+// ---
+// description: equal is false for strings that differ
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!equal("abc", "abd"));
+    expect.holds(!equal("abc", "ab"));
+    expect.holds(!equal("abc", "ABC"));
+    expect.holds("abc" != "abd");
+}

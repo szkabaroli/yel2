@@ -1,0 +1,14 @@
+// ---
+// description: tuple keys are the same where their parts are
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<tuple<s32, string>, s32> = map.new();
+    m.set((1, "a"), 10);
+    m.set((1, "b"), 20);
+    m.set((1, "a"), 11);
+    expect.equal(m.len(), 2);
+    expect.equal(m[(1, "a")], 11);
+}

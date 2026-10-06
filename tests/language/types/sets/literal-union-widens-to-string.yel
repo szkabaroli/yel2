@@ -1,0 +1,15 @@
+// ---
+// description: a union of string literals goes where a string is wanted, free
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post";
+
+shout: func(text: string) -> string { text + "!" }
+
+main: func() {
+    let which: method = "post";
+    expect.equal(shout(which), "post!");
+    expect.equal(which.len(), 4);
+}

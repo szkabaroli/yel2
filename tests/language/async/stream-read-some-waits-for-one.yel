@@ -1,0 +1,19 @@
+// ---
+// description: read-some waits until at least one item is there
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+produce: async func(out: writer<s32>) {
+    wait yield-turn();
+    wait yield-turn();
+    wait out.write(5);
+    out.close();
+}
+
+main: async func() {
+    let (items, out) = stream-pair(4);
+    let producer = start produce(out);
+    expect.equal(wait items.read-some(4), [5,]);
+    wait producer;
+}

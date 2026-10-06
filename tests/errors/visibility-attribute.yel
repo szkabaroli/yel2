@@ -1,3 +1,0 @@
-// error: 2:19: @(private="module"): private is the package's (@(private)) or the file's (@(private="file"))
-@(private="module") helper: func() -> s32 { 1 }
-main: func() -> s32 { helper() }

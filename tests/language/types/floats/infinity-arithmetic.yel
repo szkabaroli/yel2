@@ -1,0 +1,15 @@
+// ---
+// description: infinity plus a number stays infinity, infinity minus infinity is NaN
+// features: [types, floats, infinity]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let high: f64 = inf;
+    expect.equal(high + 1.0, inf);
+    expect.equal(high * -1.0, -inf);
+    let difference = high - high;
+    expect.holds(difference != difference);
+    let unbounded = high * 0.0;
+    expect.holds(unbounded != unbounded);
+}

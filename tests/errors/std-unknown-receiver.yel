@@ -1,5 +1,0 @@
-// error: 4:17: contains: which one depends on its first argument's type, not known yet: annotate it
-first: func<T>(xs: list<T>) -> T { xs[0] }
-main: func() {
-    let found = first([]).contains(1);
-}

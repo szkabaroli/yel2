@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: record Point has the fields { x, y }, given { x, y, z }
+// features: [records]
+// negative: compile
+// error: 9:20: record Point has the fields { x, y }, given { x, y, z }
+// ---
+record Point { x: s32, y: s32, }
+main: func() {
+    let p: Point = { x: 1, y: 2, z: 3, };
+}

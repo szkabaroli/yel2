@@ -1,0 +1,11 @@
+// ---
+// description: an escape next to an interpolation
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    expect.equal("\t{name}\n", "\tyel\n");
+    expect.equal("{name}\\", "yel\\");
+}

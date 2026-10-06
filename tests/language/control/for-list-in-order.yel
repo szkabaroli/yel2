@@ -1,0 +1,10 @@
+// ---
+// description: for over a list visits the items in order
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let out = "";
+    for word in ["one", "two", "three",] { out = out + word; }
+    expect.equal(out, "onetwothree");
+}

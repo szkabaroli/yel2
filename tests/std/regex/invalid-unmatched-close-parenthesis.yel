@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /a)/ has a ) with no group
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /a)/: an unmatched ) at 1
+// ---
+main: func() {
+    let found = /a)/;
+}

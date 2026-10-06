@@ -1,0 +1,11 @@
+// ---
+// description: get past a list's end is none, not a stop
+// features: [records, lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let v = [1, 2, 3];
+    expect.none(v.get(3));
+    expect.equal(expect.some(v.get(2)), 3);
+}

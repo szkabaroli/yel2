@@ -1,0 +1,13 @@
+// ---
+// description: a record shows a label that is a WAVE keyword with a %, and options of options and enums show
+// features: [wave]
+// ---
+resource Entry { ok: bool, name: string, size: u64, }
+
+enum Dir { north, south, }
+
+main: func() {
+    let entry: Entry = { ok: true, name: "a.txt", size: 12, };
+    let nested: option<option<Dir>> = some(some(Dir.south));
+    print("{entry} {nested} {Dir.north < Dir.south}\n");
+}

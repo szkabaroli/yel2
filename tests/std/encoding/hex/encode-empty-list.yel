@@ -1,0 +1,12 @@
+// ---
+// description: hex.encode of no bytes is empty
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    let nothing: list<u8> = [];
+    expect.equal(hex.encode(nothing), "");
+    expect.equal(hex.encode-upper(nothing), "");
+}

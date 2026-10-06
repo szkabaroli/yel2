@@ -1,0 +1,24 @@
+// ---
+// description: an arm of an integer literal, a negative one, or a constant matches that value
+// features: [patterns, match]
+// ---
+from "std:testing" include expect;
+
+const LIMIT = 10;
+const ORIGIN: s32 = 0;
+
+size: func(n: s32) -> string {
+    match n {
+        ORIGIN => "zero",
+        -1 => "minus one",
+        LIMIT => "the limit",
+        _ => "other",
+    }
+}
+
+main: func() {
+    expect.equal(size(0), "zero");
+    expect.equal(size(-1), "minus one");
+    expect.equal(size(10), "the limit");
+    expect.equal(size(11), "other");
+}

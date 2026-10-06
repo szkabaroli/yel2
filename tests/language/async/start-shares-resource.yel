@@ -1,0 +1,20 @@
+// ---
+// description: a started task and its starter share a resource
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+resource Counter { n: s32, }
+
+bump: async func(counter: Counter) {
+    wait yield-turn();
+    counter.n += 10;
+}
+
+main: async func() {
+    let counter: Counter = { n: 1, };
+    let future = start bump(counter);
+    counter.n += 1;
+    wait future;
+    expect.equal(counter.n, 12);
+}

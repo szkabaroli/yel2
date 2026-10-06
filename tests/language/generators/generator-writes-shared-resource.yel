@@ -1,0 +1,24 @@
+// ---
+// description: a generator that writes a resource it was given changes it as it is read
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+resource Tally { reads: s32, }
+
+counting: func(tally: Tally) -> seq<s32> {
+    for x in 0..3 {
+        tally.reads += 1;
+        yield x;
+    }
+}
+
+main: func() {
+    let tally: Tally = { reads: 0, };
+    let seen: list<s32> = [];
+    for value in counting(tally) {
+        seen.push(tally.reads);
+    }
+    expect.equal(seen, [1, 2, 3,]);
+    expect.equal(tally.reads, 3);
+}

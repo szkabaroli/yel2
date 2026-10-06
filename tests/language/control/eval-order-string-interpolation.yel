@@ -1,0 +1,10 @@
+// ---
+// description: interpolations in a string are evaluated left to right
+// features: [control]
+// ---
+from "std:testing" include expect;
+let counter: s32;
+next: func() -> s32 { counter += 1; counter }
+main: func() {
+    expect.equal("{next()}-{next()}-{next()}", "1-2-3");
+}

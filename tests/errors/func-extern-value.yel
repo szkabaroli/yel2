@@ -1,4 +1,0 @@
-// error: 3:13: print is an extern: an extern is not a value yet
-main: func() {
-    let f = print;
-}

@@ -1,0 +1,12 @@
+// ---
+// description: \0 in a string is a zero byte and counts in the length
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a\0b";
+    expect.equal(text.len(), 3);
+    expect.equal(text.byte-at(1), 0);
+    expect.equal(text.byte-at(2), 98);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: reversing twice gives the string back
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("héllo wörld".reverse().reverse(), "héllo wörld");
+}

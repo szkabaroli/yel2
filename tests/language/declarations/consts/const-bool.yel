@@ -1,0 +1,11 @@
+// ---
+// description: a const may be a bool
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const ENABLED = true;
+
+main: func() {
+    expect.holds(ENABLED);
+}

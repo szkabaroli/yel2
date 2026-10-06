@@ -1,0 +1,14 @@
+// ---
+// description: a negative signed integer cast to unsigned wraps (two's complement)
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let negative: s32 = -1;
+    expect.equal(negative as u32, 4294967295);
+    expect.equal(negative as u64, 18446744073709551615);
+    expect.equal(negative as u8, 255);
+    let low: s8 = -128;
+    expect.equal(low as u8, 128);
+}

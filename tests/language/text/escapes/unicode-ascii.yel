@@ -1,0 +1,11 @@
+// ---
+// description: \u{..} with a small value is one byte
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "\u{41}\u{7A}";
+    expect.equal(text, "Az");
+    expect.equal(text.len(), 2);
+}

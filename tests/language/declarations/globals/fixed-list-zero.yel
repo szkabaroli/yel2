@@ -1,0 +1,13 @@
+// ---
+// description: a fixed-length list global starts as zeros
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let slots: list<s64, 3>;
+
+main: func() {
+    expect.equal(slots.len(), 3);
+    expect.equal(slots[0], 0);
+    expect.equal(slots[2], 0);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: a tuple holding distinct values
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+type local = distinct u32;
+
+main: func() {
+    let pair: tuple<binding, local> = (1 as binding, 2 as local);
+    expect.equal(pair.0 as u32 + pair.1 as u32, 3);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a generic func wrapping a value in some
+// features: [types, option, generics]
+// ---
+from "std:testing" include expect;
+
+wrap: func<T>(value: T) -> option<T> { some(value) }
+
+main: func() {
+    expect.equal("{wrap(wrap(1))}", "some(some(1))");
+    expect.equal("{wrap([1, 2,])}", "some([1, 2])");
+}

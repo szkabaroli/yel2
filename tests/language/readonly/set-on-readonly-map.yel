@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: argument 1 of set is readonly, and set writes it
+// features: [readonly]
+// negative: compile
+// error: 10:5: argument 1 of set is readonly, and set writes it
+// help: give it a value that is not readonly (a copy), or make set only read it
+// ---
+main: func() {
+    let scores: map<string, s32> & readonly = map.new();
+    scores.set("a", 1);
+}

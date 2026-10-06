@@ -1,0 +1,12 @@
+// ---
+// description: push-byte keeps bytes up to 255
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push-byte(255);
+    b.push-byte(128);
+    expect.equal(b.to-bytes(), [255, 128,]);
+}

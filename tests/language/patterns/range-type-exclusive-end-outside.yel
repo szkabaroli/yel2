@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of g: expected 1..6, found 6
+// features: [patterns]
+// negative: compile
+// error: 9:20: the value of g: expected 1..6, found 6
+// ---
+type grade = 1..6;
+main: func() {
+    let g: grade = 6;
+}

@@ -1,0 +1,22 @@
+// ---
+// description: a record passed to a func that keeps it in a list escapes
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Cell { n: s32, }
+
+keep: func(into: list<Cell>, cell: Cell) { into.push(cell); }
+
+main: func() {
+    let kept: list<Cell> = [];
+    for i in 0..4 {
+        let cell: Cell = { n: i * i, };
+        keep(kept, cell);
+    }
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    let total = 0;
+    for cell in kept { total += cell.n; }
+    expect.equal(total, 14);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: a directive works inside an interpolation
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{#line}", "8");
+    expect.equal("{#func}", "main");
+}

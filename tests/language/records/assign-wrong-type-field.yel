@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: the value given .x: expected s32, found string
+// features: [records, types]
+// negative: compile
+// error: 10:11: the value given .x: expected s32, found string
+// ---
+record Point { x: s32, y: s32, }
+main: func() {
+    let p: Point = { x: 1, y: 2, };
+    p.x = "text";
+}

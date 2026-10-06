@@ -1,0 +1,11 @@
+// ---
+// description: a const may be given a type
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const ORIGIN: s32 = 0;
+
+main: func() {
+    expect.equal(ORIGIN, 0);
+}

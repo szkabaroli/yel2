@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: time.from-unix-millis takes a number, not a string
+// features: [time]
+// negative: compile
+// error: 10:36: argument 1 of std:time/time.from-unix-millis: expected s64, found string
+// ---
+from "std:time" include time;
+
+main: func() {
+    let at = time.from-unix-millis("x");
+}

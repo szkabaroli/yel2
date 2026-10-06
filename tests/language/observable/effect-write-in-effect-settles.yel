@@ -1,0 +1,35 @@
+// ---
+// description: an effect that writes what another reads settles by the flush
+// features: [observable, reactive]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let source = fresh();
+    let mirror = fresh();
+    let seen: list<u32> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ -> mirror.id = source.id * 10; { -> } });
+        let _ = reactive.effect({ -> seen.push(mirror.id); { -> } });
+    });
+    source.id = 2;
+    reactive.flush();
+    expect.equal(mirror.id, 20);
+    expect.equal(seen[seen.len() - 1], 20);
+    reactive.dispose(owner);
+}

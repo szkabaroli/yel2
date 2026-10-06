@@ -1,0 +1,11 @@
+// ---
+// description: escapes in a string: tab, quote, brace, backslash
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    expect.equal("a\tb".len(), 3);
+    expect.equal("\"".len(), 1);
+    expect.equal("\{ok\}".len(), 4);
+    expect.equal("\\".len(), 1);
+}

@@ -1,0 +1,21 @@
+// ---
+// description: json.parse and json.write handle an array of many items
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let parts: list<string> = [];
+    for index in 0..500 { parts.push("{index}"); }
+    let text = "[" + parts.join(",") + "]";
+    expect.equal(again(text), text);
+}

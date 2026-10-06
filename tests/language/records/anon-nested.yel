@@ -1,0 +1,13 @@
+// ---
+// description: anonymous records nest, with lists inside
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nested = { id: 7, at: { x: 1, y: 1, }, tags: ["a", "b",], };
+    expect.equal(nested.id, 7);
+    expect.equal(nested.at.y, 1);
+    expect.equal(nested.tags.len(), 2);
+    expect.equal(nested.tags[1], "b");
+}

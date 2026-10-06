@@ -1,0 +1,11 @@
+// ---
+// description: a name bound in an arm hides an outer one only in that arm
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let k = 100;
+    let inner = match 5 { let k => k + 1, };
+    expect.equal(inner, 6);
+    expect.equal(k, 100);
+}

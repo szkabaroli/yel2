@@ -1,0 +1,15 @@
+// ---
+// description: char escapes: newline, tab, return, nul, quote, backslash
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('\n' as u32, 10);
+    expect.equal('\t' as u32, 9);
+    expect.equal('\r' as u32, 13);
+    expect.equal('\0' as u32, 0);
+    expect.equal('\'' as u32, 39);
+    expect.equal('\\' as u32, 92);
+    expect.equal('"' as u32, 34);
+}

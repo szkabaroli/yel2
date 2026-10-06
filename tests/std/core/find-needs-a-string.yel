@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: text.find takes a string, not a number
+// features: [std]
+// negative: compile
+// error: 8:28: argument 2 of yel:std/text.find: expected string, found an integer
+// ---
+main: func() {
+    let found = "abc".find(1);
+}

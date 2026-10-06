@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: wait takes an async func's call or a future, found an integer
+// features: [async]
+// negative: compile
+// error: 9:13: wait takes an async func's call or a future, found an integer
+// ---
+main: async func() {
+    let n = 3;
+    let m = wait n;
+}

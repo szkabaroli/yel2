@@ -1,0 +1,9 @@
+// ---
+// description: find gives the match that starts first
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(/a|b/.find("xxbxa")).start, 2);
+}

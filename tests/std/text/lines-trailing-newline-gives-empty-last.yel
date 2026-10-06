@@ -1,0 +1,9 @@
+// ---
+// description: lines ends with an empty line after a final line feed
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a\nb\n".lines(), ["a", "b", "",]);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a let hiding a parameter is another local
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+size: func(xs: list<s32>) -> s64 {
+    let xs: list<s32> = [];
+    xs.push(1);
+    let frozen: list<s32> & readonly = xs;
+    frozen.len()
+}
+main: func() {
+    let own = [1, 2, 3,];
+    expect.equal(size(own), 1);
+    expect.equal(own.len(), 3);
+}

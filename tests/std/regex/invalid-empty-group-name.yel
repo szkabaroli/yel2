@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /(?<>a)/ has a group with an empty name
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /(?<>a)/: a group's name is empty
+// ---
+main: func() {
+    let found = /(?<>a)/;
+}

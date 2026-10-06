@@ -1,0 +1,18 @@
+// ---
+// description: an async func's locals keep their values across a wait
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let total = 0;
+    let label = "start";
+    let items = [1, 2, 3,];
+    for item in items {
+        total += item;
+        wait yield-turn();
+        label = "{label}-{item}";
+    }
+    expect.equal(total, 6);
+    expect.equal(label, "start-1-2-3");
+}

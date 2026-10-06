@@ -1,0 +1,9 @@
+// ---
+// description: a count repeats a group
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(/(ab){2}/.find("ababab")).text, "abab");
+}

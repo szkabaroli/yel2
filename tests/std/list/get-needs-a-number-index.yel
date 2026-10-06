@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: list.get takes an index that is a number
+// features: [list]
+// negative: compile
+// error: 9:28: argument 2 of yel:std/list.get: expected s64, found string
+// ---
+main: func() {
+    let numbers = [1, 2,];
+    let item = numbers.get("a");
+}

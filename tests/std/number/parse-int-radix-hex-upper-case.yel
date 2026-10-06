@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix reads hex digits in upper case
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("FF", 16), some(255));
+}

@@ -1,0 +1,10 @@
+// ---
+// description: expect.equal shows the items of lists that differ
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2,], [1, 3,]);
+}

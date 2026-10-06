@@ -1,0 +1,18 @@
+// ---
+// description: a module's func taking its own type first is called as a method
+// features: [types, type-methods]
+// ---
+from "std:testing" include expect;
+
+module shapes {
+    resource square { side: s64, }
+
+    made: func(side: s64) -> square { { side: side, } }
+
+    area: func(shape: square) -> s64 { shape.side * shape.side }
+}
+
+main: func() {
+    let shape = shapes.made(3);
+    expect.equal(shape.area(), 9);
+}

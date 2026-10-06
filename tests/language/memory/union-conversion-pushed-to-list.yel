@@ -1,0 +1,29 @@
+// ---
+// description: records converted to a union and pushed into a list stay intact
+// features: [memory]
+// ---
+from "std:testing" include expect;
+
+resource P { name: string, n: s32, }
+type mix = s32 | P;
+
+keep: func(i: s32, out: list<mix>) {
+    let p: P = { name: "k{i}", n: i, };
+    let m: mix = p;
+    out.push(m);
+}
+
+main: func() {
+    let xs: list<mix> = [];
+    for i in 0..3 { keep(i, xs); }
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    let names: list<string> = [];
+    for m in xs {
+        match m {
+            let p: P => names.push(p.name),
+            let n: s32 => names.push("number"),
+        }
+    }
+    expect.equal(names, ["k0", "k1", "k2",]);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: < <= > >= order two distinct values by their base
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+main: func() {
+    let low = 3 as binding;
+    let high = 4 as binding;
+    expect.holds(low < high);
+    expect.holds(low <= high);
+    expect.holds(high > low);
+    expect.holds(high >= high);
+}

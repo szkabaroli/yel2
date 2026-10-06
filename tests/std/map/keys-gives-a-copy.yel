@@ -1,0 +1,13 @@
+// ---
+// description: changing the list keys gave leaves the map alone
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    m.set(1, 1);
+    let keys = m.keys();
+    keys.push(2);
+    expect.equal(m.len(), 1);
+}

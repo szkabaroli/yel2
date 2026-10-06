@@ -1,0 +1,15 @@
+// ---
+// description: a distinct type's display func shows its values
+// features: [types, distinct, display]
+// ---
+from "std:testing" include expect;
+
+type tag = distinct u32;
+
+display: func(value: tag) -> string { "#{value as u32}" }
+
+main: func() {
+    expect.equal("{7 as tag}", "#7");
+    expect.equal("{7 as u32}", "7");
+    expect.equal("{[1 as tag, 2 as tag,]:?}", "[1, 2]");
+}

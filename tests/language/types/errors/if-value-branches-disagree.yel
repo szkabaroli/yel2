@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: the value: expected an integer, found string
+// features: [types, types]
+// negative: compile
+// error: 7:45: the value: expected an integer, found string
+// ---
+main: func() { let a = if true { 1 } else { "x" }; }

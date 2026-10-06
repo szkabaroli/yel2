@@ -1,0 +1,17 @@
+// ---
+// description: return leaves a func early with a value
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+sign: func(n: s32) -> s32 {
+    if n < 0 { return -1; }
+    if n > 0 { return 1; }
+    0
+}
+
+main: func() {
+    expect.equal(sign(-5), -1);
+    expect.equal(sign(5), 1);
+    expect.equal(sign(0), 0);
+}

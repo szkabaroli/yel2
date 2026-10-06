@@ -1,0 +1,14 @@
+// ---
+// description: a closed and drained stream reads none
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(2);
+    wait out.write(1);
+    out.close();
+    expect.equal(expect.some(wait items.read()), 1);
+    expect.none(wait items.read());
+    expect.none(wait items.read());
+}

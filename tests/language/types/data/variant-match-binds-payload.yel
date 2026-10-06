@@ -1,0 +1,27 @@
+// ---
+// description: a match on a variant binds each case's payload
+// features: [types, variants, match]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+variant Shape {
+    dot,
+    circle(s32),
+    rect(Point),
+}
+
+area: func(shape: Shape) -> s32 {
+    match shape {
+        dot => 0,
+        circle(radius) => 3 * radius * radius,
+        rect(corner) => corner.x * corner.y,
+    }
+}
+
+main: func() {
+    expect.equal(area(Shape.dot), 0);
+    expect.equal(area(Shape.circle(2)), 12);
+    expect.equal(area(Shape.rect({ x: 5, y: 6, })), 30);
+}

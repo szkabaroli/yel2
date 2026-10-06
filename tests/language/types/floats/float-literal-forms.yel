@@ -1,0 +1,14 @@
+// ---
+// description: float literals with a point, an exponent, a negative exponent
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let plain: f64 = 3.14;
+    expect.equal(plain, 3.14);
+    let exponent: f64 = 1e3;
+    expect.equal(exponent, 1000.0);
+    let small: f64 = 2.5e-3;
+    expect.equal(small, 0.0025);
+}

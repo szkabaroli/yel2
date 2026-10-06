@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /[z-a]/ has a range out of order
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /[z-a]/: a range out of order: z-a
+// ---
+main: func() {
+    let found = /[z-a]/;
+}

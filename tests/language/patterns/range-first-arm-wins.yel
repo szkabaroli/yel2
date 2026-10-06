@@ -1,0 +1,17 @@
+// ---
+// description: with overlapping ranges the first arm that fits is taken
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+which: func(n: s32) -> string {
+    match n {
+        0..=10 => "first",
+        5..=20 => "second",
+        _ => "none",
+    }
+}
+main: func() {
+    expect.equal(which(7), "first");
+    expect.equal(which(15), "second");
+    expect.equal(which(30), "none");
+}

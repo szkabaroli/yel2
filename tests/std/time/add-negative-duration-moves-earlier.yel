@@ -1,0 +1,11 @@
+// ---
+// description: add of a negative duration gives an earlier instant
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let start = time.from-unix-millis(0);
+    expect.equal(time.add(start, time.milliseconds(-1500)), time.from-unix-millis(-1500));
+}

@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: a { x: an integer, y: an integer } has no field z
+// features: [records]
+// negative: compile
+// error: 10:13: a { x: an integer, y: an integer } has no field z
+// help: did you mean x?
+// ---
+main: func() {
+    let a = { x: 1, y: 2, };
+    print("{a.z}\n");
+}

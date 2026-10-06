@@ -1,0 +1,10 @@
+// ---
+// description: contains compares strings by content
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let words = ["a", "b" + "c",];
+    expect.holds(words.contains("bc"));
+}

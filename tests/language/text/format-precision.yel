@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: .2 in a spec: expected a float, found s32
+// features: [text]
+// negative: compile
+// error: 9:11: .2 in a spec: expected a float, found s32
+// ---
+main: func() {
+    let n: s32 = 3;
+    print("{n:.2}");
+}

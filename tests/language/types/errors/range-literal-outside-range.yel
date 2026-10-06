@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: the value of a: expected 0..=100, found 101
+// features: [types, sets]
+// negative: compile
+// error: 8:33: the value of a: expected 0..=100, found 101
+// ---
+type percent = 0..=100;
+main: func() { let a: percent = 101; }

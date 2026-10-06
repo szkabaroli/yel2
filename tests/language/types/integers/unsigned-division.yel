@@ -1,0 +1,14 @@
+// ---
+// description: unsigned division and remainder use the full range
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let big: u32 = 4294967295;
+    expect.equal(big / 2, 2147483647);
+    expect.equal(big % 10, 5);
+    let huge: u64 = 18446744073709551615;
+    expect.equal(huge / 10, 1844674407370955161);
+    expect.equal(huge % 10, 5);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: an interpolation may be the whole string or sit at either end
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let word = "mid";
+    expect.equal("{word}", "mid");
+    expect.equal("{word}!", "mid!");
+    expect.equal("!{word}", "!mid");
+}

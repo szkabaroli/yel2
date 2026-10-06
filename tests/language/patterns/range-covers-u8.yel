@@ -1,0 +1,21 @@
+// ---
+// description: arms of ranges covering a u8 need no wildcard
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(b: u8) -> string {
+    match b {
+        0 => "zero",
+        1..=9 => "small",
+        10..100 => "medium",
+        100..=199 => "large",
+        200..=255 => "huge",
+    }
+}
+main: func() {
+    expect.equal(describe(0), "zero");
+    expect.equal(describe(5), "small");
+    expect.equal(describe(42), "medium");
+    expect.equal(describe(150), "large");
+    expect.equal(describe(255), "huge");
+}

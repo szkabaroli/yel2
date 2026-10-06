@@ -1,0 +1,14 @@
+// ---
+// description: a returned closure keeps a captured string
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+greeter: func(word: string) -> func(string) -> string { { name -> "{word}, {name}" } }
+
+main: func() {
+    let hello = greeter("hello");
+    let hi = greeter("hi");
+    expect.equal(hello("ada"), "hello, ada");
+    expect.equal(hi("bob"), "hi, bob");
+}

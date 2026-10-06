@@ -1,0 +1,15 @@
+// ---
+// description: base64 gives back bytes of every length from 0 to 9
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    let bytes: list<u8> = [];
+    for length in 0..10 {
+        expect.equal(expect.ok(base64.decode(base64.encode(bytes))), bytes);
+        expect.equal(expect.ok(base64.decode-url(base64.encode-url(bytes))), bytes);
+        bytes.push((length * 29 + 200) as u8);
+    }
+}

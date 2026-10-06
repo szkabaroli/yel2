@@ -1,0 +1,10 @@
+// ---
+// description: to-radix writes zero as 0 in any base
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-radix(0, 2, false), "0");
+    expect.equal(format.to-radix(0, 16, true), "0");
+}

@@ -1,0 +1,22 @@
+// ---
+// description: values of long and short lifetimes made in turn: the long ones intact
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+resource Entry { id: s32, text: string, }
+
+main: func() {
+    let kept: list<Entry> = [];
+    for i in 0..20000 {
+        let entry: Entry = { id: i, text: "entry {i}", };
+        if i % 1000 == 0 { kept.push(entry); }
+    }
+    expect.equal(kept.len(), 20);
+    let ok = true;
+    for index in 0..kept.len() {
+        let entry = kept[index];
+        if entry.id != index as s32 * 1000 || entry.text != "entry {entry.id}" { ok = false; }
+    }
+    expect.holds(ok);
+}

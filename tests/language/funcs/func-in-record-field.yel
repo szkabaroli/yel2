@@ -1,0 +1,22 @@
+// ---
+// description: a func kept in a record's field is called after reading it
+// features: [funcs, records]
+// ---
+from "std:testing" include expect;
+
+inc: func(x: s32) -> s32 { x + 1 }
+square: func(x: s32) -> s32 { x * x }
+
+resource Op { label: string, run: func(s32) -> s32, }
+
+main: func() {
+    let ops: list<Op> = [{ label: "inc", run: inc, }, { label: "square", run: square, },];
+    let results: list<s32> = [];
+    for op in ops {
+        let run = op.run;
+        results.push(run(7));
+    }
+    expect.equal(results[0], 8);
+    expect.equal(results[1], 49);
+    expect.equal(ops[1].label, "square");
+}

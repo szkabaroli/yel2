@@ -1,0 +1,11 @@
+// ---
+// description: casts chain left to right
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 300;
+    expect.equal(value as u8 as s32, 44);
+    expect.equal(value as u8 as char, ',');
+}

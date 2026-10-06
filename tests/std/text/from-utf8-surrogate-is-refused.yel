@@ -1,0 +1,10 @@
+// ---
+// description: from-utf8 refuses the code points of surrogates
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([237, 160, 128,]), err(0));
+    expect.equal(from-utf8([237, 159, 191,]), ok("\u{d7ff}"));
+}

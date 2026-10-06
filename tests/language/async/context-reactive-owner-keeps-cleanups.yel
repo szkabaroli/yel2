@@ -1,0 +1,26 @@
+// ---
+// description: a task started under an owner adds its cleanups to that owner even after a wait
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+let added: bool = false;
+let cleaned: bool = false;
+
+background: async func() {
+    wait sleep(1);
+    reactive.on-cleanup({ -> cleaned = true; });
+    added = true;
+}
+
+main: async func() {
+    let owner = reactive.new-owner();
+    reactive.within(owner, { -> let _ = start background(); });
+    loop {
+        if added { break; }
+        wait sleep(1);
+    }
+    expect.holds(!cleaned);
+    reactive.dispose(owner);
+    expect.holds(cleaned);
+}

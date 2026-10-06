@@ -1,0 +1,11 @@
+// ---
+// description: a closure called where it is made gives a fixed-length list the wanted type
+// features: [funcs, closures, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let a: list<u8, 3> = ({ c: char -> [8, 25, 140,] })('e');
+    expect.equal(a[2], 140);
+    expect.equal(a.len(), 3);
+}

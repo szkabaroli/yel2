@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the value: expected an integer, found string
+// features: [control]
+// negative: compile
+// error: 8:34: the value: expected an integer, found string
+// ---
+main: func() {
+    let x = if true { 1 } else { "one" };
+}

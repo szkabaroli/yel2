@@ -1,0 +1,14 @@
+// ---
+// description: an alias names an anonymous record type
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type point = { x: s32, y: s32 };
+
+main: func() {
+    let origin: point = { x: 0, y: 0, };
+    let other = { y: 2, x: 1, };
+    let again: point = other;
+    expect.equal(origin.x + again.x + again.y, 3);
+}

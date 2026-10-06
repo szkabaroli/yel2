@@ -1,0 +1,13 @@
+// ---
+// description: a float past an integer's maximum gives the maximum
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let large: f64 = 1e20;
+    expect.equal(large as s32, s32.MAX);
+    expect.equal(large as u8, 255);
+    expect.equal(large as s64, s64.MAX);
+    expect.equal(large as u64, u64.MAX);
+}

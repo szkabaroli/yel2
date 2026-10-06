@@ -1,0 +1,9 @@
+// ---
+// description: a variant constructor (Shape.dot, Shape.items([1])) is not accepted where Shape & readonly is wanted (docs: a literal is readonly where wanted)
+// features: [readonly]
+// ---
+variant Shape { dot, items(list<s32>), }
+main: func() {
+    let shape: Shape & readonly = Shape.dot;
+    let other: Shape & readonly = Shape.items([1,]);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: integers show their value at the edge of each width, and wrap past it
+// features: [wave]
+// ---
+main: func() {
+    let byte: u8 = 255;
+    let small: s8 = -128;
+    let big: u64 = 18446744073709551615;
+    let least: s64 = -9223372036854775807 - 1;
+    print("{byte + 1} {small - 1} {big} {least} {big + 1}\n");
+}

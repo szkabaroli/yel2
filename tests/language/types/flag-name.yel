@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: Access has no flag delete
+// features: [types]
+// negative: compile
+// error: 9:13: Access has no flag delete
+// ---
+flags Access { read, write, }
+main: func() -> s32 {
+    let a = Access.delete;
+    0
+}

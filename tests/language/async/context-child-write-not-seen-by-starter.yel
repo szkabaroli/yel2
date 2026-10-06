@@ -1,0 +1,19 @@
+// ---
+// description: a started task's write to a @(context) global does not reach its starter
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let depth: s32 = 0;
+
+child: async func() {
+    depth = 99;
+    wait yield-turn();
+}
+
+main: async func() {
+    depth = 1;
+    let future = start child();
+    wait future;
+    expect.equal(depth, 1);
+}

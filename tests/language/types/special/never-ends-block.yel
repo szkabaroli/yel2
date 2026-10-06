@@ -1,0 +1,14 @@
+// ---
+// description: a block ending in a never has any type
+// features: [types, never]
+// ---
+from "std:testing" include expect;
+
+choose: func(flag: bool) -> s32 {
+    let value: s32 = if flag { 4 } else { panic("not allowed"); };
+    value
+}
+
+main: func() {
+    expect.equal(choose(true), 4);
+}

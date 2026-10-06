@@ -1,0 +1,9 @@
+// ---
+// description: a quoted string escapes line feed, carriage return and tab
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{"a\nb\rc\td":?}", "\"a\\nb\\rc\\td\"");
+}

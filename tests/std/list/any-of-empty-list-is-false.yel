@@ -1,0 +1,10 @@
+// ---
+// description: any on an empty list is false
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<s32> = [];
+    expect.holds(!nothing.any({ n -> true }));
+}

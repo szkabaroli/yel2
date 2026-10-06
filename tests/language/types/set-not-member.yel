@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of m: expected "get" | "post", found "delete"
+// features: [types]
+// negative: compile
+// error: 9:21: the value of m: expected "get" | "post", found "delete"
+// ---
+type method = "get" | "post";
+main: func() {
+    let m: method = "delete";
+}

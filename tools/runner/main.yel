@@ -1,0 +1,253 @@
+// A test of tests/language or tests/std, as build.yel runs each, on one backend:
+//
+//   runner <yelc> native <test.yel> <out-dir> <cc> [flags...] -- [libraries...]
+//   runner <yelc> interp <test.yel> <out-dir>
+//
+// A test starts with its header, between two // --- lines:
+//
+//   // ---
+//   // description: what the test checks, one line
+//   // features: [patterns, closures]
+//   // skip: [interp]                 (the backends it is not for)
+//   // exit: 1                        (how it must end: 0 where not given)
+//   // negative: compile              (it must not compile: the error lines after say why)
+//   // error: 12:5: message           (the diagnostic's message at that place of the test)
+//   // error: tests/packages/a/b.yel:2:1: message   (another file's)
+//   // error: message                 (a whole file's, or anywhere)
+//   // help: did you mean total?      (each help and note among its errors)
+//   // ---
+//
+// A test passes where it ends as its exit says and, with a <test>.out beside it, writes that
+// (standard output and error together); natively it runs twice, the second time with a collection before every
+// allocation (YEL_GC_STRESS=1). A negative test passes where yelc reports each error the header
+// names and no other (past one, yelc's last line counts them, which is not one more); only natively,
+// since some errors are the IR's analyses', which the interpreter does not run. Nothing is told
+// where all is so; else what was wanted and what was got, and the exit is 1.
+
+from "std:cli" include environment, exit;
+from "std:filesystem" include types, preopens;
+from "std:process" include process;
+
+// what a test's header says
+resource Header {
+    description: string,
+    skip: list<string>,
+    exit: s64,
+    negative: bool,
+    // its error, help and note lines, as written after the //
+    expected: list<string>,
+}
+
+main: async func() {
+    let given: list<string> = environment.get-arguments();
+    if given.len() < 5 {
+        eprint("runner <yelc> native|interp <test.yel> <out-dir> [<cc> [flags...] -- [libraries...]]\n");
+        exit.exit(err(()));
+    }
+    let (yelc, backend, test, out) = (given[1], given[2], given[3], given[4]);
+    let source = match wait read(test) {
+        some(text) => text,
+        none => failed("{test}: cannot be read"),
+    };
+    let header = match parsed(source) {
+        ok(found) => found,
+        err(why) => failed("{test}: {why}"),
+    };
+    if header.skip.contains(backend) { return; }
+    let name = test.substring(match test.find-last("/") { some(slash) => slash + 1, none => 0, }, test.len() - 4);
+    if header.negative {
+        if backend == "native" { wait negative(yelc, test, out + "/" + name, header); }
+        return;
+    }
+    let expected = wait read(test.substring(0, test.len() - 4) + ".out");
+    if backend == "interp" {
+        wait ran(test, "interpreted", [yelc, "run", test,], [], out + "/" + name, header, expected);
+        return;
+    }
+    if backend != "native" { failed("{test}: no backend {backend}"); }
+    // cc: what comes before -- its flags, after it the libraries, the C between
+    let rest = given.slice(5, given.len());
+    let split = rest.index-of("--");
+    if rest.len() == 0 || split < 0 { failed("runner: native wants <cc> [flags...] -- [libraries...]"); }
+    let translated = out + "/" + name + ".c";
+    let executable = out + "/" + name;
+    let compiling = [yelc, test, translated,];
+    command(test, "compiled", compiling, out + "/" + name + ".compile");
+    let linking = rest.slice(0, split);
+    for one in ["-o", executable, translated,] { linking.push(one); }
+    for one in rest.slice(split + 1, rest.len()) { linking.push(one); }
+    command(test, "linked", linking, out + "/" + name + ".link");
+    wait ran(test, "run", [executable,], [], out + "/" + name, header, expected);
+    wait ran(test, "run under GC stress", [executable,], [("YEL_GC_STRESS", "1"),], out + "/" + name + ".stress", header, expected);
+}
+
+// the header at the start of source, or why there is none
+parsed: func(source: string) -> result<Header, string> {
+    let lines = source.split("\n");
+    if lines.len() == 0 || lines[0] != "// ---" { return err("no header (// --- on its first line)"); }
+    let header: Header = { description: "", skip: [], exit: 0, negative: false, expected: [], };
+    for index in 1..lines.len() {
+        let line = lines[index];
+        if line == "// ---" {
+            if header.description == "" { return err("its header has no description"); }
+            if header.negative && header.expected.len() == 0 { return err("a negative test names no error"); }
+            return ok(header);
+        }
+        if !line.starts-with("// ") { return err("{index + 1}: a header line is a comment (// key: value)"); }
+        let entry = line.substring(3, line.len());
+        let (key, value) = match entry.find(": ") {
+            some(at) => (entry.substring(0, at), entry.substring(at + 2, entry.len()).trim()),
+            none => { return err("{index + 1}: no key: {entry}"); }
+        };
+        if key == "description" {
+            header.description = value;
+        } else if key == "features" {
+            // (what the test is about: for whoever reads it)
+        } else if key == "skip" {
+            header.skip = listed(value);
+        } else if key == "exit" {
+            header.exit = match parse-int(value) {
+                some(number) => number,
+                none => { return err("{index + 1}: exit is a number"); }
+            };
+        } else if key == "negative" {
+            if value != "compile" { return err("{index + 1}: negative is compile"); }
+            header.negative = true;
+        } else if key == "error" || key == "help" || key == "note" {
+            header.expected.push(entry);
+        } else {
+            return err("{index + 1}: no header key {key}");
+        }
+    }
+    err("its header is not closed (// ---)")
+}
+
+// [a, b]: a and b
+listed: func(value: string) -> list<string> {
+    let inner = if value.starts-with("[") && value.ends-with("]") { value.substring(1, value.len() - 1) } else { value };
+    inner.split(",").map({ one -> one.trim() }).filter({ one -> one != "" })
+}
+
+// command run, its output to file: a failure where it cannot run or does not end with 0
+command: func(test: string, what: string, arguments: list<string>, file: string) {
+    match process.run-with(arguments[0], arguments.slice(1, arguments.len()), "", [], file) {
+        ok(ended) => match ended {
+            code(status) => { if status != 0 { failed("{test}: not {what} (exit {status}): {arguments.join(" ")}, see {file}"); } }
+            signal(signalled) => failed("{test}: not {what} (signal {signalled}): {arguments.join(" ")}"),
+        },
+        err(why) => failed("{test}: {why}"),
+    }
+}
+
+// the test run: how it ended as the header says, and what it wrote expected's
+ran: async func(
+    test: string,
+    what: string,
+    arguments: list<string>,
+    variables: list<tuple<string, string>>,
+    at: string,
+    header: Header,
+    expected: option<string>,
+) {
+    // (sh: standard output and error to one file, in the order written)
+    let script = "\"$@\" > \"{at}.out\" 2>&1";
+    let shell = ["-c", script, "sh",];
+    for one in arguments { shell.push(one); }
+    let code = match process.run-with("sh", shell, "", variables, "") {
+        ok(ended) => match ended {
+            code(status) => status,
+            signal(signalled) => 128 + signalled,
+        },
+        err(why) => failed("{test}: {why}"),
+    };
+    let output = (wait read(at + ".out")).unwrap-or("");
+    if code != header.exit { failed("{test} ({what}): ended with {code}, not {header.exit}\n{output}"); }
+    match expected {
+        some(want) => { if output != want { failed("{test} ({what}): its output is not its .out: diff {at}.out {test.substring(0, test.len() - 4)}.out"); } }
+        none => {}
+    }
+}
+
+// a test that must not compile: yelc reports each error its header names, and no others
+negative: async func(yelc: string, test: string, at: string, header: Header) {
+    let told = at + ".err";
+    let compiled = match process.run-with(yelc, [test, at + ".c",], "", [], told) {
+        ok(ended) => match ended {
+            code(status) => status == 0,
+            signal(_) => false,
+        },
+        err(why) => failed("{test}: {why}"),
+    };
+    if compiled { failed("{test}: compiled, expected: {header.expected[0]}"); }
+    let output = (wait read(told)).unwrap-or("");
+    let lines = output.split("\n");
+    let wanted = 0;
+    let well = true;
+    for entry in header.expected {
+        if entry.starts-with("error: ") {
+            let want = entry.substring(7, entry.len());
+            wanted += 1;
+            let (place, message) = match want.find(": ") {
+                some(colon) => (want.substring(0, colon), want.substring(colon + 2, want.len())),
+                none => (want, want),
+            };
+            // (a place in another file, one in the test, or none: the whole line the message)
+            let (where, said) = if place.contains("/") {
+                (place, message)
+            } else if place == want || !all-place(place) {
+                (test, want)
+            } else {
+                ("{test}:{place}", message)
+            };
+            if !lines.contains("error: {said}") || !output.contains("--> {where}") { well = false; }
+        } else {
+            let kind = entry.substring(0, entry.find(": ").unwrap-or(0));
+            if !output.contains("= {kind}: {entry.substring(kind.len() + 2, entry.len())}") { well = false; }
+        }
+    }
+    let errors = lines.filter({ one -> one.starts-with("error: ") }).len();
+    if errors > 1 { errors -= 1; }
+    if errors != wanted { well = false; }
+    if !well { failed("{test}: expected {wanted} errors ({header.expected[0]}), got:\n{output}"); }
+}
+
+// whether text is a place in the test: digits and colons only
+all-place: func(place: string) -> bool {
+    for index in 0..place.len() {
+        let byte = place.byte-at(index);
+        if byte != 58 && (byte < 48 || byte > 57) { return false; }
+    }
+    true
+}
+
+failed: func(message: string) -> never {
+    eprint("{message}\n");
+    exit.exit(err(()))
+}
+
+// a file's bytes (none: it cannot be read)
+read: async func(at: string) -> option<string> {
+    let dirs = preopens.get-directories();
+    for index in 1..dirs.len() { dirs[index].0.drop(); }
+    let root = dirs[0].0;
+    let opened = wait root.open-at(types.path-flags.symlink-follow, at, types.open-flags.create & types.open-flags.directory, types.descriptor-flags.read);
+    root.drop();
+    match opened {
+        ok(file) => {
+            let (bytes, reading) = file.read-via-stream(0);
+            let out = buffer(65536);
+            loop {
+                let chunk = wait streams.read-some(bytes, 65536);
+                if chunk.len() == 0 { break; }
+                out.push-bytes(chunk);
+            }
+            let ended = wait reading;
+            file.drop();
+            match ended {
+                ok(_) => some(out.to-string()),
+                err(_) => none,
+            }
+        }
+        err(_) => none,
+    }
+}

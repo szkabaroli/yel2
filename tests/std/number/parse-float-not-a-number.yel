@@ -1,0 +1,10 @@
+// ---
+// description: parse-float reads nan in any case
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = expect.some(number.parse-float("NaN"));
+    expect.holds(value != value);
+}

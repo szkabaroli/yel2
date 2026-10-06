@@ -1,0 +1,9 @@
+// ---
+// description: set past the end stops the program
+// features: [list]
+// exit: 1
+// ---
+main: func() {
+    let xs = [1, 2,];
+    xs.set(2, 5);
+}

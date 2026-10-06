@@ -1,0 +1,15 @@
+// ---
+// description: let n: T in an arm matches by type
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(value: s32 | string) -> string {
+    match value {
+        let n: s32 => "number {n + 1}",
+        let s: string => "text {s}",
+    }
+}
+main: func() {
+    expect.equal(describe(41), "number 42");
+    expect.equal(describe("hi"), "text hi");
+}

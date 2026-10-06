@@ -1,0 +1,11 @@
+// ---
+// description: uuid.bytes gives 16 bytes, the first of the text first
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id = expect.ok(uuid.parse("00112233-4455-6677-8899-aabbccddeeff"));
+    expect.equal(uuid.bytes(id), [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,]);
+}

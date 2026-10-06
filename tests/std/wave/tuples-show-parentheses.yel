@@ -1,0 +1,9 @@
+// ---
+// description: tuples show their items in parentheses, and compare by their parts
+// features: [wave]
+// ---
+main: func() {
+    let pair = (3, "three");
+    let one = (true,);
+    print("{pair} {pair.0} {pair.1} {one} {(1, (2.5, 'z'))} {pair == (3, "three")}\n");
+}

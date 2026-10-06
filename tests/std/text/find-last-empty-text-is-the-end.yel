@@ -1,0 +1,10 @@
+// ---
+// description: find-last of the empty text is the length
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".find-last(""), some(3));
+    expect.equal("".find-last(""), some(0));
+}

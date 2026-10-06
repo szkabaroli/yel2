@@ -1,0 +1,13 @@
+// ---
+// description: for over a map's values visits each
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let scores: map<string, s32> = map.new();
+    scores.set("a", 1);
+    scores.set("b", 2);
+    let total = 0;
+    for score in scores.values() { total += score; }
+    expect.equal(total, 3);
+}

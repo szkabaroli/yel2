@@ -1,0 +1,15 @@
+// ---
+// description: return gives a value early and the code after it does not run
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+early: func(flag: bool) -> s32 {
+    if flag { return 1; }
+    2
+}
+
+main: func() {
+    expect.equal(early(true), 1);
+    expect.equal(early(false), 2);
+}

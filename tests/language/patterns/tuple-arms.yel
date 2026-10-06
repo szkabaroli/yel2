@@ -1,0 +1,20 @@
+// ---
+// description: a tuple pattern matches item by item; let before it binds each name in it
+// features: [patterns, match, tuples]
+// ---
+from "std:testing" include expect;
+
+pair: func(t: tuple<s32, bool>) -> string {
+    match t {
+        (0, _) => "zero",
+        (let n, true) => "{n} yes",
+        let (n, false) => "{n} no",
+    }
+}
+
+main: func() {
+    expect.equal(pair((0, true)), "zero");
+    expect.equal(pair((0, false)), "zero");
+    expect.equal(pair((4, true)), "4 yes");
+    expect.equal(pair((5, false)), "5 no");
+}

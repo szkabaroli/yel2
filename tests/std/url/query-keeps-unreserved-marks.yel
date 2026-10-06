@@ -1,0 +1,10 @@
+// ---
+// description: query keeps letters, digits and * - . _
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.query([("a*-._", "Z9"),]), "a*-._=Z9");
+}

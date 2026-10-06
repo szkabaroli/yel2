@@ -1,0 +1,10 @@
+// ---
+// description: main may take the argument list and give an exit code
+// features: [syntax,functions]
+// ---
+from "std:testing" include expect;
+
+main: func(argv: list<string>) -> s32 {
+    expect.holds(argv.len() >= 0);
+    0
+}

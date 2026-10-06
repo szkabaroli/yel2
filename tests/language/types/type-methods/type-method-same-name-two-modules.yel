@@ -1,0 +1,26 @@
+// ---
+// description: two modules' types each have their own method of one name
+// features: [types, type-methods]
+// ---
+from "std:testing" include expect;
+
+module squares {
+    resource square { side: s64, }
+
+    made: func(side: s64) -> square { { side: side, } }
+
+    area: func(shape: square) -> s64 { shape.side * shape.side }
+}
+
+module rectangles {
+    resource rectangle { width: s64, height: s64, }
+
+    made: func(width: s64, height: s64) -> rectangle { { width: width, height: height, } }
+
+    area: func(shape: rectangle) -> s64 { shape.width * shape.height }
+}
+
+main: func() {
+    expect.equal(squares.made(3).area(), 9);
+    expect.equal(rectangles.made(2, 5).area(), 10);
+}

@@ -1,0 +1,15 @@
+// ---
+// description: an inclusive range ending at s32's maximum ends
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let turns = 0;
+    let last = 0;
+    for i in 2147483645..=2147483647 {
+        turns += 1;
+        last = i;
+    }
+    expect.equal(turns, 3);
+    expect.equal(last, 2147483647);
+}

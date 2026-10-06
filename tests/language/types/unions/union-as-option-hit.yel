@@ -1,0 +1,13 @@
+// ---
+// description: as? gives some where the union holds the kind
+// features: [types, unions, as]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let who: id = 3;
+    let number: option<s32> = who as? s32;
+    expect.equal(expect.some(number), 3);
+}

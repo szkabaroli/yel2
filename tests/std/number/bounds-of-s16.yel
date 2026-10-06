@@ -1,0 +1,10 @@
+// ---
+// description: s16.MIN and s16.MAX are the least and greatest s16
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(s16.MIN, -32768);
+    expect.equal(s16.MAX, 32767);
+}

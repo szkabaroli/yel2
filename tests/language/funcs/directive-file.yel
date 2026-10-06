@@ -1,0 +1,9 @@
+// ---
+// description: #file is the file it is written in
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.contains-text(#file, "directive-file.yel");
+}

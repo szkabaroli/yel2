@@ -1,0 +1,12 @@
+// ---
+// description: a char interpolates as its own text
+// features: [types, chars, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let letter: char = 'x';
+    expect.equal("{letter}", "x");
+    let arrow: char = '→';
+    expect.equal("{arrow}", "→");
+}

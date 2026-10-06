@@ -1,0 +1,10 @@
+// ---
+// description: negating a zero shows -0, natively and interpreted
+// features: [types, floats, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: f64 = 0.0;
+    expect.equal("{-zero}", "-0");
+}

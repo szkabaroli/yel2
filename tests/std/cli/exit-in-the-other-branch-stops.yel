@@ -1,0 +1,11 @@
+// ---
+// description: exit in the branch taken ends the program
+// features: [cli]
+// exit: 1
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    let value: s32 = if false { 3 } else { exit.exit(err(())) };
+    print("never {value}\n");
+}

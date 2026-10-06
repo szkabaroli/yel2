@@ -1,0 +1,12 @@
+// ---
+// description: a condition may be any bool expression
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 7;
+    let label = if n > 5 && n < 10 { "mid" } else { "out" };
+    expect.equal(label, "mid");
+    let other = if n < 5 || n == 7 { "yes" } else { "no" };
+    expect.equal(other, "yes");
+}

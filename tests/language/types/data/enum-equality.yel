@@ -1,0 +1,12 @@
+// ---
+// description: enum values are equal where they are the same case
+// features: [types, enums]
+// ---
+from "std:testing" include expect;
+
+enum Color { red, green, blue, }
+
+main: func() {
+    expect.holds(Color.red == Color.red);
+    expect.holds(Color.red != Color.blue);
+}

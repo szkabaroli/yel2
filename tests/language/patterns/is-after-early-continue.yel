@@ -1,0 +1,16 @@
+// ---
+// description: after an if that continues, the name is narrowed in the rest of the body
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post";
+writes: func(m: "post") -> string { "write {m}" }
+main: func() {
+    let methods: list<method> = ["get", "post", "get",];
+    let out: list<string> = [];
+    for m in methods {
+        if m is "get" { continue; }
+        out.push(writes(m));
+    }
+    expect.equal(out, ["write post",]);
+}

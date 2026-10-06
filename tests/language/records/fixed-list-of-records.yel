@@ -1,0 +1,17 @@
+// ---
+// description: a fixed-length list of records is a value of values
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let corners: list<Point, 2> = [{ x: 0, y: 0, }, { x: 5, y: 5, },];
+    let copy = corners;
+    let moved = copy[1];
+    moved.x = 6;
+    copy[1] = moved;
+    expect.equal(corners[1].x, 5);
+    expect.equal(copy[1].x, 6);
+}

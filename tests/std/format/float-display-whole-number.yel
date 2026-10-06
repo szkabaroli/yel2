@@ -1,0 +1,9 @@
+// ---
+// description: a float with no fraction shows without one
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{2.0}", "2");
+}

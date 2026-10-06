@@ -1,0 +1,15 @@
+// ---
+// description: a block ending in return has any type
+// features: [types, never]
+// ---
+from "std:testing" include expect;
+
+sign: func(n: s32) -> string {
+    let word: string = if n < 0 { return "negative"; } else { "not negative" };
+    word
+}
+
+main: func() {
+    expect.equal(sign(-1), "negative");
+    expect.equal(sign(1), "not negative");
+}

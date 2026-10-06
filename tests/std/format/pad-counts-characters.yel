@@ -1,0 +1,10 @@
+// ---
+// description: pad takes the width in characters, not bytes
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.pad("é", 3, "_", ">"), "__é");
+    expect.equal(format.pad("😀", 2, "_", "<"), "😀_");
+}

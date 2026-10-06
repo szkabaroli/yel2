@@ -1,0 +1,17 @@
+// ---
+// description: nested options are matched one level at a time
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+show: func(v: option<option<s32>>) -> string {
+    match v {
+        some(some(n)) => "value {n}",
+        some(none) => "inner none",
+        none => "outer none",
+    }
+}
+main: func() {
+    expect.equal(show(some(some(3))), "value 3");
+    expect.equal(show(some(none)), "inner none");
+    expect.equal(show(none), "outer none");
+}

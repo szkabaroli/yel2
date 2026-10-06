@@ -1,0 +1,9 @@
+// ---
+// description: lines takes both kinds of line end in one text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("one\r\ntwo\nthree".lines(), ["one", "two", "three",]);
+}

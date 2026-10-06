@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: push: none takes this first argument (list<s32, 3>); one takes each of list<T>, buffer
+// features: [records, fixed-lists]
+// negative: compile
+// error: 9:5: push: none takes this first argument (list<s32, 3>); one takes each of list<T>, buffer
+// ---
+main: func() {
+    let v: list<s32, 3> = [1, 2, 3];
+    v.push(4);
+}

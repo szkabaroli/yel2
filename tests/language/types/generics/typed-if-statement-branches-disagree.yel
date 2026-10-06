@@ -1,0 +1,12 @@
+// ---
+// description: an if as a statement: its branches need not agree
+// features: [types]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let items = [1, 2,];
+    let seen = "";
+    if items.len() > 1 { seen = "many"; } else { items.len(); }
+    expect.equal(seen, "many");
+}

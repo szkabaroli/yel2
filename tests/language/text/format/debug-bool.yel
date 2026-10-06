@@ -1,0 +1,9 @@
+// ---
+// description: ? on a bool is true or false
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{true:?}", "true");
+}

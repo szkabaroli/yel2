@@ -1,0 +1,15 @@
+// ---
+// description: showing a value inside a generic func is made for each type
+// features: [types, generics, display]
+// ---
+from "std:testing" include expect;
+
+show: func<T>(value: T) -> string { "<{value}>" }
+
+main: func() {
+    expect.equal(show(1), "<1>");
+    expect.equal(show("a"), "<a>");
+    expect.equal(show([1, 2,]), "<[1, 2]>");
+    let found: option<s32> = some(1);
+    expect.equal(show(found), "<some(1)>");
+}

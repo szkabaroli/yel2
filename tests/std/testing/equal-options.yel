@@ -1,0 +1,11 @@
+// ---
+// description: expect.equal passes for equal options
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(some(1), some(1));
+    let nothing: option<s32> = none;
+    expect.equal(nothing, none);
+}

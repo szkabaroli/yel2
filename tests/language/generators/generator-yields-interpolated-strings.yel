@@ -1,0 +1,15 @@
+// ---
+// description: a generator yields strings built from its state
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+lines: func(count: s32) -> seq<string> {
+    for number in 1..=count { yield "line {number} of {count}"; }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for line in lines(2) { seen.push(line); }
+    expect.equal(seen, ["line 1 of 2", "line 2 of 2",]);
+}

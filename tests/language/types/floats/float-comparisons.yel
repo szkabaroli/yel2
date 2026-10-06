@@ -1,0 +1,16 @@
+// ---
+// description: ordering of ordinary floats
+// features: [types, floats, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let small: f64 = -2.5;
+    let large: f64 = 2.5;
+    expect.holds(small < large);
+    expect.holds(small <= large);
+    expect.holds(large > small);
+    expect.holds(large >= small);
+    expect.holds(small != large);
+    expect.holds(large >= 2.5 && large <= 2.5);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: parse-float reads a sign before inf
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("-inf"), some(-inf));
+}

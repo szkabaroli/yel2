@@ -1,0 +1,11 @@
+// ---
+// description: an interpolated u32 zero and ten
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: u32 = 0;
+    let ten: u32 = 10;
+    expect.equal("{zero} {ten}", "0 10");
+}

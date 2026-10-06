@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: wait for is only in an async func
+// features: [async, streams]
+// negative: compile
+// error: 9:5: wait is only in an async func: make main async (name: async func(…))
+// ---
+main: func() {
+    let (items, out) = stream-pair(2);
+    wait for item in items { }
+}

@@ -1,0 +1,10 @@
+// ---
+// description: \u{10FFFF} is the largest scalar value, four bytes
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "\u{10FFFF}";
+    expect.equal(text.len(), 4);
+}

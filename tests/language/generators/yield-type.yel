@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a value yielded: expected s32, found string
+// features: [generators]
+// negative: compile
+// error: 8:20: a value yielded: expected s32, found string
+// ---
+numbers: func() -> seq<s32> {
+    yield 1; yield "two";
+}
+main: func() {}

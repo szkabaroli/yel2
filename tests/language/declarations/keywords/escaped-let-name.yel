@@ -1,0 +1,11 @@
+// ---
+// description: a keyword is a let name written with a percent sign
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let %if = 7;
+    let %let = %if + 1;
+    expect.equal(%let, 8);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a buffer made with a large room starts empty
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(1000);
+    expect.equal(b.len(), 0);
+    b.push("x");
+    expect.equal(b.to-string(), "x");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: uuid.parse takes a string, not a number
+// features: [encoding, uuid]
+// negative: compile
+// error: 10:25: argument 1 of std:encoding/uuid.parse: expected string, found an integer
+// ---
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id = uuid.parse(5);
+}

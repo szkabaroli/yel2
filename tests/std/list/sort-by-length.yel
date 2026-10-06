@@ -1,0 +1,11 @@
+// ---
+// description: sort takes any order a func gives, such as the length
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let words = ["ccc", "a", "bb", "dddd",];
+    words.sort({ a, b -> a.len() > b.len() });
+    expect.equal(words, ["dddd", "ccc", "bb", "a",]);
+}

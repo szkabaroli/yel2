@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a literal pattern: expected an integer, found string
+// features: [patterns]
+// negative: compile
+// error: 9:23: a literal pattern: expected an integer, found string
+// ---
+main: func() {
+    let n = 1;
+    let r = match n { "one" => 1, _ => 0, };
+}

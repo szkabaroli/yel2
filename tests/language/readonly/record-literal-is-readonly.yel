@@ -1,0 +1,11 @@
+// ---
+// description: a record literal is readonly where that is wanted
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Team { name: string, members: list<string>, }
+main: func() {
+    let team: Team & readonly = { name: "core", members: ["ada", "grace",], };
+    expect.equal(team.name, "core");
+    expect.equal(team.members.len(), 2);
+}

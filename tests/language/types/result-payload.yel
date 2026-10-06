@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: ok carries no payload in a result<_, string>
+// features: [types]
+// negative: compile
+// error: 8:32: ok carries no payload in a result<_, string>
+// ---
+main: func() -> s32 {
+    let r: result<_, string> = ok(1);
+    0
+}

@@ -1,0 +1,10 @@
+// ---
+// description: params does not split at an encoded ampersand
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("a=1%262"), [("a", "1&2"),]);
+}

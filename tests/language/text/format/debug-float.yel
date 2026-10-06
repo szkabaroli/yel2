@@ -1,0 +1,10 @@
+// ---
+// description: ? on a float shows its digits
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 2.5;
+    expect.equal("{value:?}", "2.5");
+}

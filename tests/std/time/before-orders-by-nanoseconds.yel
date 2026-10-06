@@ -1,0 +1,11 @@
+// ---
+// description: before orders instants of the same second by their nanoseconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.holds(time.before(time.from-unix-millis(1001), time.from-unix-millis(1002)));
+    expect.holds(!time.before(time.from-unix-millis(1002), time.from-unix-millis(1001)));
+}

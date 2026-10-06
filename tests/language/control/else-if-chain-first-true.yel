@@ -1,0 +1,17 @@
+// ---
+// description: an else-if chain takes the first branch whose condition holds
+// features: [control]
+// ---
+from "std:testing" include expect;
+grade: func(score: s32) -> string {
+    if score >= 90 { "a" }
+    else if score >= 80 { "b" }
+    else if score >= 70 { "c" }
+    else { "f" }
+}
+main: func() {
+    expect.equal(grade(95), "a");
+    expect.equal(grade(85), "b");
+    expect.equal(grade(75), "c");
+    expect.equal(grade(10), "f");
+}

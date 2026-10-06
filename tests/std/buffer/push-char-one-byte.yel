@@ -1,0 +1,11 @@
+// ---
+// description: push-char writes an ASCII char as one byte
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push-char('a');
+    expect.equal(b.to-bytes(), [97,]);
+}

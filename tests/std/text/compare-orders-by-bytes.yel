@@ -1,0 +1,11 @@
+// ---
+// description: compare is negative, zero or positive by byte order
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(compare("a", "b") < 0);
+    expect.holds(compare("b", "a") > 0);
+    expect.equal(compare("abc", "abc"), 0);
+}

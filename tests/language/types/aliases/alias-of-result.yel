@@ -1,0 +1,16 @@
+// ---
+// description: an alias names a result type
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type outcome = result<s32, string>;
+
+attempt: func(good: bool) -> outcome {
+    if good { ok(1) } else { err("bad") }
+}
+
+main: func() {
+    expect.equal(expect.ok(attempt(true)), 1);
+    expect.equal(expect.err(attempt(false)), "bad");
+}

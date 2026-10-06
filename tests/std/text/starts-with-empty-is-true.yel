@@ -1,0 +1,10 @@
+// ---
+// description: every string starts with the empty string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("hello".starts-with(""));
+    expect.holds("".starts-with(""));
+}

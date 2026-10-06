@@ -1,0 +1,14 @@
+// ---
+// description: a closure within a closure reaches out through each environment
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+apply-twice: func(f: func(s32) -> s32, x: s32) -> s32 { f(f(x)) }
+
+main: func() {
+    let base = 10;
+    let adder = { x: s32 -> apply-twice({ y -> y + base + x }, 0) };
+    expect.equal(adder(1), 22);
+    expect.equal(adder(2), 24);
+}

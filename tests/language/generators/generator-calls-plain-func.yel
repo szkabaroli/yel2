@@ -1,0 +1,17 @@
+// ---
+// description: a generator may call a plain func between its yields
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+square: func(x: s32) -> s32 { x * x }
+
+squares: func(limit: s32) -> seq<s32> {
+    for x in 0..limit { yield square(x); }
+}
+
+main: func() {
+    let total = 0;
+    for value in squares(4) { total += value; }
+    expect.equal(total, 14);
+}

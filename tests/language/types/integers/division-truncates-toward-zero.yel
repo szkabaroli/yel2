@@ -1,0 +1,14 @@
+// ---
+// description: signed division rounds toward zero
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let seven: s32 = 7;
+    let minus-seven: s32 = -7;
+    expect.equal(seven / 2, 3);
+    expect.equal(minus-seven / 2, -3);
+    expect.equal(seven / -2, -3);
+    expect.equal(minus-seven / -2, 3);
+}

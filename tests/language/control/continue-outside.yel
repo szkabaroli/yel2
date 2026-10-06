@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: continue outside a loop
+// features: [control]
+// negative: compile
+// error: 8:5: continue outside a loop
+// ---
+main: func() {
+    continue;
+}

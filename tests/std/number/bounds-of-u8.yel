@@ -1,0 +1,10 @@
+// ---
+// description: u8.MIN and u8.MAX are the least and greatest u8
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(u8.MIN, 0);
+    expect.equal(u8.MAX, 255);
+}

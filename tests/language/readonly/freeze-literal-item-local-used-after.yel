@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: readonly is wanted here: inner is used again after (once readonly, use the readonly name)
+// features: [readonly]
+// negative: compile
+// error: 9:45: readonly is wanted here: inner is used again after (once readonly, use the readonly name)
+// ---
+main: func() {
+    let inner: list<s32> = [1,];
+    let rows: list<list<s32>> & readonly = [inner,];
+    inner.push(2);
+}

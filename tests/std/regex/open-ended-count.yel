@@ -1,0 +1,26 @@
+// ---
+// description: regex /a(2,)/ on "aaaaa b aa": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /a{2,}/;
+    let text = "aaaaa b aa";
+    expect.equal(shown(regex-under-test.find(text)), "\"aaaaa\"@0-5[]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\"aaaaa\"@0-5[] \"aa\"@8-10[]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "<aaaaa> b <aa>");
+}

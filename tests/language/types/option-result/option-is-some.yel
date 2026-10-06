@@ -1,0 +1,14 @@
+// ---
+// description: is-some and is-none tell which
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let present: option<string> = some("x");
+    let absent: option<string> = none;
+    expect.holds(present.is-some());
+    expect.holds(!present.is-none());
+    expect.holds(absent.is-none());
+    expect.holds(!absent.is-some());
+}

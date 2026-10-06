@@ -1,0 +1,14 @@
+// ---
+// description: is-utf8 is false for a string with a stray byte
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let pieces = buffer(4);
+    pieces.push("ab");
+    pieces.push-byte(255);
+    let broken = pieces.to-string();
+    expect.holds(!is-utf8(broken));
+    expect.equal(text.utf8-error(broken), 2);
+}

@@ -1,0 +1,8 @@
+// ---
+// description: a field's name is its resource's once
+// features: [errors]
+// negative: compile
+// error: 7:1: resource Counter has the field value twice
+// ---
+resource Counter { value: s32, value: s32, }
+main: func() {}

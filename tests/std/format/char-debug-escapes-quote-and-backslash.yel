@@ -1,0 +1,10 @@
+// ---
+// description: a quoted char escapes the single quote and the backslash
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{'\'':?}", "'\\''");
+    expect.equal("{'\\':?}", "'\\\\'");
+}

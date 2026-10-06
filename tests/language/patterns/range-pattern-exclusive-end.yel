@@ -1,0 +1,19 @@
+// ---
+// description: an exclusive range pattern leaves out its end
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+class: func(n: s32) -> string {
+    match n {
+        0..10 => "digit",
+        10..=99 => "two digits",
+        _ => "other",
+    }
+}
+main: func() {
+    expect.equal(class(0), "digit");
+    expect.equal(class(9), "digit");
+    expect.equal(class(10), "two digits");
+    expect.equal(class(99), "two digits");
+    expect.equal(class(100), "other");
+}

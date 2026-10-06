@@ -1,0 +1,13 @@
+// ---
+// description: an anonymous record's integer fields take the wanted widths
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+type small = { low: u8, high: u8 };
+
+main: func() {
+    let value: small = { low: 255, high: 1, };
+    expect.equal(value.low + 1, 0);
+    expect.equal(value.high, 1);
+}

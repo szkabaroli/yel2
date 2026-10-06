@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the match has no arm for false: add one, or a _ arm
+// features: [patterns]
+// negative: compile
+// error: 9:13: the match has no arm for false: add one, or a _ arm
+// ---
+main: func() {
+    let flag = true;
+    let n = match flag { true => 1, };
+}

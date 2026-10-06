@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: expected '=', found ';'
+// features: [syntax,statements]
+// negative: compile
+// error: 8:14: expected '=', found ';'
+// ---
+main: func() {
+    let first;
+}

@@ -1,0 +1,17 @@
+// ---
+// description: records named in a list literal are copied
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let b: Point = { x: 10, y: 20, };
+    let points: list<Point> = [a, b,];
+    a.x = 7;
+    b.y = 8;
+    expect.equal(points[0], { x: 1, y: 2, });
+    expect.equal(points[1], { x: 10, y: 20, });
+}

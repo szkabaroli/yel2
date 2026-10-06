@@ -1,0 +1,14 @@
+// ---
+// description: does not compile: a record's field is set in a variable or a field, where the record is (a record is a value: this one is a copy)
+// features: [records]
+// negative: compile
+// error: 11:5: a record's field is set in a variable or a field, where the record is (a record is a value: this one is a copy)
+// error: 13:5: a record's field is set in a variable or a field, where the record is (a record is a value: this one is a copy)
+// ---
+record Point { x: s32, y: s32, }
+make: func() -> Point { { x: 0, y: 0, } }
+main: func() {
+    make().x = 1;
+    let points: list<Point> = [make(),];
+    points[0].x = 2;
+}

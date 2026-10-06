@@ -1,0 +1,10 @@
+// ---
+// description: a map shows as map and its length
+// features: [wave]
+// ---
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    m.set("b", 2);
+    print("{m}\n");
+}

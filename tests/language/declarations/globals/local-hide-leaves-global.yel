@@ -1,0 +1,15 @@
+// ---
+// description: a hiding local leaves the global's value alone
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let count: s64 = 5;
+
+read: func() -> s64 { count }
+
+main: func() {
+    let count = 100;
+    count += 1;
+    expect.equal(read(), 5);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: the m flag makes ^ and $ match at each line
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/^\w+$/m.find-all("one\ntwo").map({ m -> m.text }), ["one", "two",]);
+}

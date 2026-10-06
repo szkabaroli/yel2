@@ -1,0 +1,9 @@
+// ---
+// description: lines cuts at each line feed
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("one\ntwo\nthree".lines(), ["one", "two", "three",]);
+}

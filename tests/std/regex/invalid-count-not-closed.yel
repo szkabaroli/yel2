@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /a{2/ has a count that is not closed
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /a{2/: a count not closed at 1
+// ---
+main: func() {
+    let found = /a{2/;
+}

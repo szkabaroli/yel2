@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the operand of !: expected bool, found an integer
+// features: [control]
+// negative: compile
+// error: 8:14: the operand of !: expected bool, found an integer
+// ---
+main: func() {
+    let x = !5;
+}

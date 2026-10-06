@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: wait takes an async func's call or a future, not a sync func's call
+// features: [async]
+// negative: compile
+// error: 9:13: wait takes an async func's call or a future, found s32
+// ---
+plain: func() -> s32 { 1 }
+main: async func() {
+    let n = wait plain();
+}

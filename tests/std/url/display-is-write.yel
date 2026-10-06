@@ -1,0 +1,12 @@
+// ---
+// description: a URL shown in a string is written as write gives it
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://h:81/a?b#c"));
+    expect.equal("{u}", url.write(u));
+    expect.equal(url.display(u), "https://h:81/a?b#c");
+}

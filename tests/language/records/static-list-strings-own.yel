@@ -1,0 +1,15 @@
+// ---
+// description: a constant list of strings is its own per evaluation
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+words: func() -> list<string> { ["a", "b", "c",] }
+
+main: func() {
+    let first = words();
+    first[0] = "changed";
+    first.push("d");
+    expect.equal(words()[0], "a");
+    expect.equal(words().len(), 3);
+}

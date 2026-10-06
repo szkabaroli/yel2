@@ -1,0 +1,16 @@
+// ---
+// description: a typed binding then a wildcard for the rest
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(value: s32 | string | bool) -> string {
+    match value {
+        let n: s32 => "number",
+        _ => "other",
+    }
+}
+main: func() {
+    expect.equal(describe(1), "number");
+    expect.equal(describe("a"), "other");
+    expect.equal(describe(false), "other");
+}

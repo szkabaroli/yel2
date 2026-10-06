@@ -1,0 +1,10 @@
+// ---
+// description: a literal local is made readonly
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let xs: list<s32> = [1, 2,];
+    let frozen: list<s32> & readonly = xs;
+    expect.equal(frozen.len(), 2);
+}

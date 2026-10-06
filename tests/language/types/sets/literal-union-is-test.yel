@@ -1,0 +1,13 @@
+// ---
+// description: is on a literal union tests one value
+// features: [types, sets, is]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post";
+
+main: func() {
+    let which: method = "get";
+    expect.holds(which is "get");
+    expect.holds(!(which is "post"));
+}

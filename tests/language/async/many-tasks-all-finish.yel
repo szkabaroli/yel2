@@ -1,0 +1,20 @@
+// ---
+// description: a hundred started tasks all finish
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+resource Tally { total: s32, }
+
+add: async func(tally: Tally, x: s32) {
+    wait yield-turn();
+    tally.total += x;
+}
+
+main: async func() {
+    let tally: Tally = { total: 0, };
+    let futures: list<future<()>> = [];
+    for x in 1..=100 { futures.push(start add(tally, x)); }
+    for future in futures { wait future; }
+    expect.equal(tally.total, 5050);
+}

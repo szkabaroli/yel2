@@ -1,0 +1,12 @@
+// ---
+// description: push-byte puts one byte at the end
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(1);
+    b.push-byte(104);
+    b.push-byte(105);
+    expect.equal(b.to-string(), "hi");
+}

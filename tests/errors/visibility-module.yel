@@ -1,3 +1,0 @@
-// error: 2:1: module tools is private to package test:vis-lib
-from "../vis-lib" include tools;
-main: func() -> s32 { tools.count() }

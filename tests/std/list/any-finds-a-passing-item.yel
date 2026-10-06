@@ -1,0 +1,10 @@
+// ---
+// description: any is true where some item passes
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds([1, 2, 3,].any({ n -> n == 2 }));
+    expect.holds(![1, 2, 3,].any({ n -> n > 5 }));
+}

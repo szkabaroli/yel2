@@ -1,0 +1,9 @@
+// ---
+// description: a tuple shows its items in parentheses
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{(1, "a")} {(true,)}", "(1, \"a\") (true)");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: for over a string's chars
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let count = 0;
+    for c in "héllo".chars() { count += 1; }
+    expect.equal(count, 5);
+}

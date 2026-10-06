@@ -1,0 +1,16 @@
+// ---
+// description: an arm's binding a closure captures is that turn's own, not the last turn's
+// features: [patterns, match, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let fs: list<func() -> s32> = [];
+    for i in 0..3 {
+        match some(i * 10) {
+            some(let v) => fs.push({ v + 1 }),
+            none => {}
+        }
+    }
+    expect.equal(fs.map({ f -> f() }), [1, 11, 21,]);
+}

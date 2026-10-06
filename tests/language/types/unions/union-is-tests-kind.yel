@@ -1,0 +1,16 @@
+// ---
+// description: is on a union tells which kind it holds
+// features: [types, unions, is]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let number: id = 1;
+    let text: id = "x";
+    expect.holds(number is s32);
+    expect.holds(!(number is string));
+    expect.holds(text is string);
+    expect.holds(!(text is s32));
+}

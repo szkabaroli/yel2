@@ -1,0 +1,29 @@
+// ---
+// description: a case's pattern matches its payload by a nested pattern, a binding, or a literal, in the arms' order
+// features: [patterns, match, variants]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+variant Shape { dot(Point), circle(s32), square(s32), none-shape, }
+
+shape: func(s: Shape) -> string {
+    match s {
+        dot({ x: 0, y }) => "a dot above the origin, {y} up",
+        dot(p) => "a dot at {p.x},{p.y}",
+        circle(r) => "a circle of {r}",
+        square(1) => "a unit square",
+        square(side) => "a square of {side}",
+        none-shape => "no shape",
+    }
+}
+
+main: func() {
+    expect.equal(shape(Shape.dot({ x: 0, y: 5, })), "a dot above the origin, 5 up");
+    expect.equal(shape(Shape.dot({ x: 1, y: 2, })), "a dot at 1,2");
+    expect.equal(shape(Shape.circle(3)), "a circle of 3");
+    expect.equal(shape(Shape.square(1)), "a unit square");
+    expect.equal(shape(Shape.square(7)), "a square of 7");
+    expect.equal(shape(Shape.none-shape), "no shape");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: find-all gives nothing where the regex matches nowhere
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/x/.find-all("abc").len(), 0);
+}

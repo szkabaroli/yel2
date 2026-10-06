@@ -1,0 +1,10 @@
+// ---
+// description: the flags i, m and s can be used together
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(/^a.b$/ims.test("x\nA\nB\ny"));
+    expect.holds(/a.b/is.test("A\nB"));
+}

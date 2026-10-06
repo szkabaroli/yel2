@@ -1,0 +1,10 @@
+// ---
+// description: expect.none stops the program for a some, showing its value
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(some(7));
+}

@@ -1,0 +1,16 @@
+// ---
+// description: chars compare by code point
+// features: [types, chars, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let low: char = 'a';
+    let high: char = 'b';
+    expect.holds(low < high);
+    expect.holds(low <= high);
+    expect.holds(high > low);
+    expect.holds(high >= low);
+    expect.holds(low != high);
+    expect.holds('Z' < 'a');
+}

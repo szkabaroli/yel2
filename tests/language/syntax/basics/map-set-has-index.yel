@@ -1,0 +1,13 @@
+// ---
+// description: a map: set, has, index, and a missing key is not there
+// features: [syntax,maps]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let table = map.new();
+    table.set("a", 1);
+    expect.holds(table.has("a"));
+    expect.holds(!table.has("b"));
+    expect.equal(table["a"], 1);
+}

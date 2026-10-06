@@ -1,0 +1,13 @@
+// ---
+// description: a func that never returns can end a branch
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+fail: func(reason: string) -> never { expect.fail(reason) }
+
+pick: func(ok: bool) -> s32 { if ok { 1 } else { fail("unreachable here") } }
+
+main: func() {
+    expect.equal(pick(true), 1);
+}

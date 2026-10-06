@@ -1,0 +1,11 @@
+// ---
+// description: for over a list of tuples reads each by index
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let pairs = [(1, "a"), (2, "b"),];
+    let out = "";
+    for pair in pairs { out = out + "{pair.0}{pair.1}"; }
+    expect.equal(out, "1a2b");
+}

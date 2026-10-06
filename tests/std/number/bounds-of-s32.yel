@@ -1,0 +1,10 @@
+// ---
+// description: s32.MIN and s32.MAX are the least and greatest s32
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(s32.MIN, -2147483648);
+    expect.equal(s32.MAX, 2147483647);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: an empty list shows as brackets
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<s32> = [];
+    expect.equal("{nothing}", "[]");
+}

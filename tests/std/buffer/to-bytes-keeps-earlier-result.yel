@@ -1,0 +1,13 @@
+// ---
+// description: a list handed out earlier does not change as the buffer grows
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push("ab");
+    let bytes = b.to-bytes();
+    b.push("cd");
+    expect.equal(bytes, [97, 98,]);
+}

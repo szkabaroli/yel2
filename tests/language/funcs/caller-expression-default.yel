@@ -1,0 +1,13 @@
+// ---
+// description: #caller-expression as a default is the text of the argument
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+text-of: func(value: s32, written: string = #caller-expression(value)) -> string { written }
+
+main: func() {
+    expect.equal(text-of(2 + 3), "2 + 3");
+    let total = 4;
+    expect.equal(text-of(total), "total");
+}

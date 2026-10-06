@@ -1,0 +1,11 @@
+// ---
+// description: a local built here and not used after is made readonly without a copy
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let words: list<string> = [];
+    for w in ["x", "yy", "zzz",] { words.push(w + w); }
+    let frozen: list<string> & readonly = words;
+    expect.equal(frozen, ["xx", "yyyy", "zzzzzz",]);
+}

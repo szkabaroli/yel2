@@ -1,0 +1,23 @@
+// ---
+// description: a closure kept while much garbage is made still sees its captured values
+// features: [memory, closures]
+// ---
+from "std:testing" include expect;
+
+make-label: func(n: s32) -> func() -> string {
+    let name = "label {n}";
+    { -> name }
+}
+
+main: func() {
+    let labels: list<func() -> string> = [];
+    for n in 0..20 { labels.push(make-label(n)); }
+    let garbage = 0;
+    for i in 0..50000 {
+        let junk = "junk {i}";
+        garbage += junk.len() as s32;
+    }
+    expect.holds(garbage > 0);
+    expect.equal(labels[0](), "label 0");
+    expect.equal(labels[19](), "label 19");
+}

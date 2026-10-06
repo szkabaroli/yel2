@@ -1,0 +1,28 @@
+// ---
+// description: the loser of a race is not stopped: its effects still happen
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+quick: async func() -> s32 {
+    wait yield-turn();
+    log.push("quick");
+    1
+}
+
+slow: async func() -> string {
+    for turn in 0..5 { wait yield-turn(); }
+    log.push("slow");
+    "slow"
+}
+
+main: async func() {
+    let first = start quick();
+    let second = start slow();
+    let winner = wait first | second;
+    expect.equal(log, ["quick",]);
+    wait second;
+    expect.equal(log, ["quick", "slow",]);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: uuid.version reads the version digit of version 1
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(uuid.version(expect.ok(uuid.parse("c232ab00-9414-11ec-b3c8-9f6bdeced846"))), 1);
+}

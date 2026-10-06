@@ -1,0 +1,11 @@
+// ---
+// description: a char global starts as the nul char
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let letter: char;
+
+main: func() {
+    expect.equal(letter as u32, 0);
+}

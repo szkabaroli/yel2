@@ -1,0 +1,11 @@
+// ---
+// description: a list shows as WAVE: its items in brackets
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{[1, 2, 3]}", "[1, 2, 3]");
+    let names = ["a", "b"];
+    expect.equal("{names}", "[\"a\", \"b\"]");
+}

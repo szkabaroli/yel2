@@ -1,5 +1,0 @@
-// error: 4:15: unexpected 'a' after an interpolation's expression
-main: func() {
-    let a = 1;
-    print("{a a}\n");
-}

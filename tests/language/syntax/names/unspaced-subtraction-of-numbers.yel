@@ -1,0 +1,12 @@
+// ---
+// description: 5-1 with a number first is a subtraction
+// features: [syntax,names]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(5-1, 4);
+    let n = 5;
+    expect.equal(n -1, 4);
+    expect.equal(n- 1, 4);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: a field is set and compound-assigned in place
+// features: [types, records]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+main: func() {
+    let point: Point = { x: 3, y: 4, };
+    point.x = 10;
+    point.y += 1;
+    expect.equal("{point}", "\{x: 10, y: 5\}");
+}

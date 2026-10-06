@@ -1,0 +1,11 @@
+// ---
+// description: let destructures a call's result
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+record Pair { first: s32, second: s32, }
+make: func() -> Pair { { first: 1, second: 2, } }
+main: func() {
+    let { first, second } = make();
+    expect.equal(first * 10 + second, 12);
+}

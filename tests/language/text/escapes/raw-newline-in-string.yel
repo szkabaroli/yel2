@@ -1,0 +1,12 @@
+// ---
+// description: a string may hold a line break written out
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a
+b";
+    expect.equal(text.len(), 3);
+    expect.equal(text.byte-at(1), 10);
+}

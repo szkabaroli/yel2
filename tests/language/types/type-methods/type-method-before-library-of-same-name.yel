@@ -1,0 +1,21 @@
+// ---
+// description: a module's method is found before std's func of the same name
+// features: [types, type-methods]
+// ---
+from "std:testing" include expect;
+
+module shapes {
+    resource square { side: s64, }
+
+    made: func(side: s64) -> square { { side: side, } }
+
+    // the length of its outline
+    len: func(shape: square) -> s64 { 4 * shape.side }
+}
+
+main: func() {
+    let shape = shapes.made(3);
+    expect.equal(shape.len(), 12);
+    let items = [1, 2,];
+    expect.equal(items.len(), 2);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a func is not assigned: only a local or a global is
+// features: [errors]
+// negative: compile
+// error: 10:5: inc is a func: only a local or a global is assigned
+// ---
+inc: func(x: s32) -> s32 { x + 1 }
+dec: func(x: s32) -> s32 { x - 1 }
+main: func() {
+    inc = dec;
+}

@@ -1,0 +1,9 @@
+// ---
+// description: join keeps empty items as empty pieces
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(join(["", "", "",], "."), "..");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: the text of a random UUID has 4 as its version digit and 8 to b as its variant digit
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let text = uuid.to-string(uuid.random());
+    expect.equal(text.byte-at(14), 52);
+    expect.holds("89ab".contains(text.slice(19, 20)));
+}

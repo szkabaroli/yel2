@@ -1,0 +1,14 @@
+// ---
+// description: a generic func called with several integer types does each one's arithmetic
+// features: [types, generics, integers]
+// ---
+from "std:testing" include expect;
+
+double: func<T>(value: T) -> T { value }
+
+main: func() {
+    let narrow: u8 = 200;
+    let wide: u64 = 200;
+    expect.equal(double(narrow) + 100, 44);
+    expect.equal(double(wide) + 100, 300);
+}

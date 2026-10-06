@@ -1,0 +1,11 @@
+// ---
+// description: uuid.to-string writes digits a to f in lower case
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id: uuid.id = { high: 0xABCDEF0123456789, low: 0xFEDCBA9876543210, };
+    expect.equal(uuid.to-string(id), "abcdef01-2345-6789-fedc-ba9876543210");
+}

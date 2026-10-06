@@ -1,0 +1,10 @@
+// ---
+// description: the largest u64 shows in decimal
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top = 0 as u64 - 1;
+    expect.equal("{top}", "18446744073709551615");
+}

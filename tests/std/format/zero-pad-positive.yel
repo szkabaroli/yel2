@@ -1,0 +1,9 @@
+// ---
+// description: zero-pad puts zeros before the digits
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.zero-pad("42", 5), "00042");
+}

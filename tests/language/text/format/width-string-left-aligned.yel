@@ -1,0 +1,10 @@
+// ---
+// description: a string with a width is left-aligned by default
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    expect.equal("[{name:6}]", "[yel   ]");
+}

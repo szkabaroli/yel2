@@ -1,0 +1,13 @@
+// ---
+// description: spaces at the end of a line stay in the text
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        a  
+        b
+        """;
+    expect.equal(text, "a  \nb");
+}

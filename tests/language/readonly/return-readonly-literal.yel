@@ -1,0 +1,9 @@
+// ---
+// description: a func gives back a readonly literal
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+initials: func() -> list<"a" | "b"> & readonly { ["a", "b", "a",] }
+main: func() {
+    expect.equal(initials(), ["a", "b", "a",]);
+}

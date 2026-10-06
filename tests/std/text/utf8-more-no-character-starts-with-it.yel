@@ -1,0 +1,12 @@
+// ---
+// description: utf8-more is -1 for a byte no character starts with
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(text.utf8-more(128), -1);
+    expect.equal(text.utf8-more(193), -1);
+    expect.equal(text.utf8-more(245), -1);
+    expect.equal(text.utf8-more(255), -1);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a func with two type parameters
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+pair-up: func<A, B>(first: A, second: B) -> tuple<A, B> { (first, second) }
+
+main: func() {
+    let (number, text) = pair-up(1, "one");
+    expect.equal(number, 1);
+    expect.equal(text, "one");
+    let (flag, letter) = pair-up(true, 'x');
+    expect.holds(flag);
+    expect.equal(letter, 'x');
+}

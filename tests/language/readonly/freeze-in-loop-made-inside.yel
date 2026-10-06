@@ -1,0 +1,15 @@
+// ---
+// description: a value made inside the loop turn may be made readonly there
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let sizes: list<s64> = [];
+    for i in 0..3 {
+        let xs: list<s32> = [];
+        for j in 0..i { xs.push(j); }
+        let frozen: list<s32> & readonly = xs;
+        sizes.push(frozen.len());
+    }
+    expect.equal(sizes, [0, 1, 2,]);
+}

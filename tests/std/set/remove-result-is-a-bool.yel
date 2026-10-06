@@ -1,0 +1,12 @@
+// ---
+// description: remove gives a bool, true or false
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<s32> = set.new();
+    s.add(3);
+    expect.equal(s.remove(3), true);
+    expect.equal(s.remove(3), false);
+}

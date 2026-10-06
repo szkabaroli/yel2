@@ -1,0 +1,12 @@
+// ---
+// description: between counts the nanoseconds below a second
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let first: time.instant = { seconds: 5, nanoseconds: 900000000, };
+    let second: time.instant = { seconds: 6, nanoseconds: 100000000, };
+    expect.equal(time.between(first, second), time.milliseconds(200));
+}

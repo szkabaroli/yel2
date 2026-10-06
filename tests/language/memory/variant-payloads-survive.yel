@@ -1,0 +1,26 @@
+// ---
+// description: variants holding strings and lists keep their payloads across collections
+// features: [memory, gc]
+// ---
+from "std:testing" include expect;
+
+variant Node { text(string), items(list<s32>), number(s32), }
+
+main: func() {
+    let nodes: list<Node> = [];
+    for i in 0..30 {
+        if i % 3 == 0 { nodes.push(Node.text("t{i}")); }
+        else if i % 3 == 1 { nodes.push(Node.items([i, i + 1,])); }
+        else { nodes.push(Node.number(i)); }
+    }
+    for i in 0..30000 { let junk = "junk {i}"; }
+    let total = 0;
+    for node in nodes {
+        match node {
+            text(t) => { total += t.len() as s32; }
+            items(xs) => { total += xs[0] + xs[1]; }
+            number(n) => { total += n; }
+        }
+    }
+    expect.equal(total, 481);
+}

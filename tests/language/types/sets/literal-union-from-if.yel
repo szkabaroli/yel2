@@ -1,0 +1,13 @@
+// ---
+// description: an if whose branches are each a value of the union
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post" | "put";
+
+main: func() {
+    let current: method = "post";
+    let picked: method = if current == "post" { "put" } else { "get" };
+    expect.equal(picked, "put");
+}

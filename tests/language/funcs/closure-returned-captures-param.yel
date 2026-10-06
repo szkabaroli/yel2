@@ -1,0 +1,15 @@
+// ---
+// description: a returned closure keeps a captured parameter
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+adder: func(amount: s32) -> func(s32) -> s32 { { x -> x + amount } }
+
+main: func() {
+    let add-five = adder(5);
+    let add-ten = adder(10);
+    expect.equal(add-five(1), 6);
+    expect.equal(add-ten(1), 11);
+    expect.equal(add-five(add-ten(0)), 15);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: an escaped brace starts no interpolation
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    expect.equal("\{name\}", "\{name\}");
+    expect.equal("\{name\}".len(), 6);
+    expect.equal("\{{name}\}", "\{yel\}");
+}

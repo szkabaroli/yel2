@@ -1,0 +1,10 @@
+// ---
+// description: params decodes percent escapes in names and values
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("%C3%A9=%E2%82%AC"), [("é", "€"),]);
+}

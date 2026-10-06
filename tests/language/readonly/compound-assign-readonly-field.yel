@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: .count of a Counter & readonly: a readonly value's fields are not assigned
+// features: [readonly]
+// negative: compile
+// error: 10:5: .count of a Counter & readonly: a readonly value's fields are not assigned
+// ---
+resource Counter { count: s32, }
+main: func() {
+    let counter: Counter & readonly = { count: 1, };
+    counter.count += 1;
+}

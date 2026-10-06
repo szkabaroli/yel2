@@ -1,0 +1,14 @@
+// ---
+// description: is narrows the tested name in the then branch
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post";
+reads: func(m: "get") -> string { "read {m}" }
+run: func(m: method) -> string {
+    if m is "get" { reads(m) } else { "not a read" }
+}
+main: func() {
+    expect.equal(run("get"), "read get");
+    expect.equal(run("post"), "not a read");
+}

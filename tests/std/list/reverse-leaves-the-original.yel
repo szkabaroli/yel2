@@ -1,0 +1,12 @@
+// ---
+// description: reverse makes a new list and leaves the first one
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2, 3,];
+    let backwards = xs.reverse();
+    expect.equal(xs, [1, 2, 3,]);
+    expect.equal(backwards, [3, 2, 1,]);
+}

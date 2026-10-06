@@ -1,0 +1,21 @@
+// ---
+// description: a match through option and result in one pattern
+// features: [types, result, match]
+// ---
+from "std:testing" include expect;
+
+describe: func(found: option<result<s32, string>>) -> string {
+    match found {
+        some(ok(0)) => "zero",
+        some(ok(value)) => "ok {value}",
+        some(err(reason)) => "err {reason}",
+        none => "nothing",
+    }
+}
+
+main: func() {
+    expect.equal(describe(some(ok(0))), "zero");
+    expect.equal(describe(some(ok(4))), "ok 4");
+    expect.equal(describe(some(err("e"))), "err e");
+    expect.equal(describe(none), "nothing");
+}

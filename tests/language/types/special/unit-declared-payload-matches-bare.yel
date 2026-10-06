@@ -1,0 +1,22 @@
+// ---
+// description: a case declared with a () payload is matched bare
+// features: [types, unit, match]
+// ---
+from "std:testing" include expect;
+
+variant Signal { idle, ping(()), level(u32), }
+
+describe: func(signal: Signal) -> string {
+    match signal {
+        idle => "idle",
+        ping => "ping",
+        level(n) => "level {n}",
+    }
+}
+
+main: func() {
+    expect.equal(describe(Signal.idle), "idle");
+    expect.equal(describe(Signal.ping(())), "ping");
+    expect.equal(describe(Signal.ping), "ping");
+    expect.equal(describe(Signal.level(3)), "level 3");
+}

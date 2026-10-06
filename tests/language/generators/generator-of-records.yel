@@ -1,0 +1,20 @@
+// ---
+// description: a generator yields records
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+diagonal: func(count: s32) -> seq<Point> {
+    for index in 0..count {
+        let point: Point = { x: index, y: index, };
+        yield point;
+    }
+}
+
+main: func() {
+    let total = 0;
+    for point in diagonal(4) { total += point.x + point.y; }
+    expect.equal(total, 12);
+}

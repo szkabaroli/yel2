@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a range pattern's start: expected an integer, found char
+// features: [patterns]
+// negative: compile
+// error: 8:23: a range pattern's start: expected an integer, found char
+// ---
+main: func() {
+    let r = match 5 { 'a'..='z' => 1, _ => 0, };
+}

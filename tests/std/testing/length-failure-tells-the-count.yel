@@ -1,0 +1,10 @@
+// ---
+// description: expect.length tells how many items it found
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.length([1, 2,], 5);
+}

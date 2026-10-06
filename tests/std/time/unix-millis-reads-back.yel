@@ -1,0 +1,11 @@
+// ---
+// description: unix-millis gives the milliseconds from-unix-millis was given
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.unix-millis(time.from-unix-millis(1759660496789)), 1759660496789);
+    expect.equal(time.unix-millis(time.from-unix-millis(0)), 0);
+}

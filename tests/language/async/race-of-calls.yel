@@ -1,0 +1,22 @@
+// ---
+// description: a race may take calls directly, not only futures
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+quick: async func() -> s32 {
+    wait yield-turn();
+    1
+}
+
+slow: async func() -> string {
+    for turn in 0..10 { wait yield-turn(); }
+    "slow"
+}
+
+main: async func() {
+    match wait quick() | slow() {
+        let number: s32 => expect.equal(number, 1),
+        let text: string => expect.fail("the slow one won"),
+    }
+}

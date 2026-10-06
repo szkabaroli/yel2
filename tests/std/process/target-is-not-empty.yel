@@ -1,0 +1,21 @@
+// ---
+// description: target names the triple the program was built for
+// features: [process]
+// ---
+from "std:testing" include expect;
+from "std:process" include process;
+
+// how a child ended: its code, or minus its signal
+status: func(ended: result<process.ended, string>) -> s64 {
+    match ended {
+        ok(code(number)) => number,
+        ok(signal(number)) => -number,
+        err(_) => -1000,
+    }
+}
+
+main: func() {
+    let triple = process.target();
+    expect.holds(triple.len() > 0);
+    expect.holds(triple.contains("-"));
+}

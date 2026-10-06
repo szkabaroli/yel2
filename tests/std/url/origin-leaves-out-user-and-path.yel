@@ -1,0 +1,11 @@
+// ---
+// description: origin has no user, path, query or fragment
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://user:pw@h/a/b?c#d"));
+    expect.equal(url.origin(u), "https://h");
+}

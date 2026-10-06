@@ -1,0 +1,9 @@
+// ---
+// description: slice past the end stops the program
+// features: [list]
+// exit: 1
+// ---
+main: func() {
+    let xs = [1, 2, 3,];
+    print("{xs.slice(1, 5)}\n");
+}

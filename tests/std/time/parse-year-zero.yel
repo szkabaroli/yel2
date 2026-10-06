@@ -1,0 +1,10 @@
+// ---
+// description: time.parse of "0000-01-01T00:00:00Z" gives -62167219200000 milliseconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.unix-millis(expect.ok(time.parse("0000-01-01T00:00:00Z"))), -62167219200000);
+}

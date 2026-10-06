@@ -1,0 +1,10 @@
+// ---
+// description: every string contains the empty text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("hello".contains(""));
+    expect.holds("".contains(""));
+}

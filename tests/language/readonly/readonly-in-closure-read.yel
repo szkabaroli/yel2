@@ -1,0 +1,10 @@
+// ---
+// description: a closure may read a readonly list
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let fixed: list<s32> & readonly = [4, 5,];
+    let first: func() -> s32 = { fixed[0] };
+    expect.equal(first(), 4);
+}

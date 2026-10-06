@@ -1,0 +1,21 @@
+// ---
+// description: a union with a negative literal
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type direction = -1 | 0 | 1;
+
+name: func(step: direction) -> string {
+    match step {
+        -1 => "back",
+        0 => "stay",
+        1 => "forward",
+    }
+}
+
+main: func() {
+    expect.equal(name(-1), "back");
+    expect.equal(name(0), "stay");
+    expect.equal(name(1), "forward");
+}

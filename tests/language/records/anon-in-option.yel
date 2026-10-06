@@ -1,0 +1,14 @@
+// ---
+// description: an anonymous record in an option
+// features: [records, options]
+// ---
+from "std:testing" include expect;
+
+type point = { x: s32, y: s32 };
+
+main: func() {
+    let nested = { id: 7, at: { x: 1, y: 1, }, };
+    let found: option<point> = some(nested.at);
+    let got = expect.some(found);
+    expect.equal(got, { x: 1, y: 1, });
+}

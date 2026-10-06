@@ -1,0 +1,9 @@
+// ---
+// description: to-radix puts a minus sign before a negative number
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-radix(-255, 16, false), "-ff");
+}

@@ -1,0 +1,17 @@
+// ---
+// description: an arm whose pattern binds the name it matches: the arm's name is the payload
+// features: [memory, patterns]
+// ---
+from "std:testing" include expect;
+
+unwrap: func(x: option<string>) -> string {
+    match x {
+        some(x) => x,
+        none => "-",
+    }
+}
+
+main: func() {
+    expect.equal(unwrap(some("hi")), "hi");
+    expect.equal(unwrap(none), "-");
+}

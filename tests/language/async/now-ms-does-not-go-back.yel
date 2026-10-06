@@ -1,0 +1,12 @@
+// ---
+// description: now-ms never goes back
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let before = now-ms();
+    wait yield-turn();
+    let after = now-ms();
+    expect.holds(after >= before);
+}

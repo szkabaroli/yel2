@@ -1,0 +1,10 @@
+// ---
+// description: two calls of get-random-bytes give different bytes
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include random;
+
+main: func() {
+    expect.not-equal(random.get-random-bytes(16), random.get-random-bytes(16));
+}

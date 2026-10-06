@@ -1,0 +1,11 @@
+// ---
+// description: ^ and $ together match a whole text only
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(/^abc$/.test("abc"));
+    expect.holds(!/^abc$/.test("abcd"));
+    expect.holds(!/^abc$/.test("xabc"));
+}

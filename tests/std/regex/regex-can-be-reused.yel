@@ -1,0 +1,12 @@
+// ---
+// description: one regex can search several texts
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let digits = /\d+/;
+    expect.equal(expect.some(digits.find("a1")).text, "1");
+    expect.equal(expect.some(digits.find("bb22")).text, "22");
+    expect.none(digits.find("none"));
+}

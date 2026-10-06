@@ -1,0 +1,12 @@
+// ---
+// description: {x:?} shows an integer as it is
+// features: [types, integers, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: u16 = 65535;
+    expect.equal("{value:?}", "65535");
+    let negative: s32 = -1;
+    expect.equal("{negative:?}", "-1");
+}

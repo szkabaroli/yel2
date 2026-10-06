@@ -1,0 +1,46 @@
+// ---
+// description: effects made inside an effect are let go before it runs again
+// features: [observable, reactive]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let outer = fresh();
+    let inner = fresh();
+    let log: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ ->
+            let n = outer.id;
+            let _ = reactive.effect({ ->
+                log.push("inner {n}: {inner.name}");
+                { -> log.push("inner {n} let go"); }
+            });
+            { -> }
+        });
+    });
+    inner.name = "r";
+    reactive.flush();
+    outer.id = 2;
+    reactive.flush();
+    expect.equal(log, [
+        "inner 1: ada", "inner 1 let go", "inner 1: r", "inner 1 let go", "inner 2: r",
+    ]);
+    reactive.dispose(owner);
+    expect.equal(log.len(), 6);
+    expect.equal(log[5], "inner 2 let go");
+}

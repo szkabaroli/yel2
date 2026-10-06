@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: inner is not declared
+// features: [control]
+// negative: compile
+// error: 11:13: inner is not declared
+// ---
+main: func() {
+    {
+        let inner = 1;
+    }
+    let x = inner;
+}

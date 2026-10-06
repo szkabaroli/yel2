@@ -1,0 +1,13 @@
+// ---
+// description: a format spec works in a multiline string
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 5;
+    let text = """
+        [{value:03}]
+        """;
+    expect.equal(text, "[005]");
+}

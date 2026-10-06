@@ -1,0 +1,11 @@
+// ---
+// description: a comparison is a bool
+// features: [types, bools]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let ordered: bool = 3 < 4;
+    let same: bool = "a" == "a";
+    expect.holds(ordered && same);
+}

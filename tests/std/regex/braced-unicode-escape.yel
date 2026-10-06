@@ -1,0 +1,26 @@
+// ---
+// description: regex /\u(1F600)/ on "x😀y": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /\u{1F600}/;
+    let text = "x😀y";
+    expect.equal(shown(regex-under-test.find(text)), "\"😀\"@1-5[]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\"😀\"@1-5[]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "x<😀>y");
+}

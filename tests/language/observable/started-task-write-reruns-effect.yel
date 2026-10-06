@@ -1,0 +1,35 @@
+// ---
+// description: an effect may start a task that later writes the state it read
+// features: [observable, async]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Page { id: s32, user: string, }
+
+fetch-user: async func(id: s32) -> string {
+    wait yield-turn();
+    "user {id}"
+}
+
+settle: async func(page: Page, id: s32) {
+    let user = wait fetch-user(id);
+    page.user = user;
+    reactive.flush();
+}
+
+main: async func() {
+    let page: Page = { id: 1, user: "", };
+    let shown: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ ->
+            let id = page.id;
+            let _ = start settle(page, id);
+            { -> }
+        });
+        let _ = reactive.effect({ -> shown.push(page.user); { -> } });
+    });
+    for turn in 0..5 { wait yield-turn(); }
+    expect.equal(shown, ["", "user 1",]);
+    reactive.dispose(owner);
+}

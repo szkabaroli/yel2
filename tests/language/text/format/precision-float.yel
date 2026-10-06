@@ -1,0 +1,12 @@
+// ---
+// description: a precision gives that many digits after the point
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 3.14159;
+    expect.equal("{value:.2}", "3.14");
+    expect.equal("{value:.4}", "3.1416");
+    expect.equal("{value:.1}", "3.1");
+}

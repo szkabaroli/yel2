@@ -1,0 +1,13 @@
+// ---
+// description: an expression in a multiline string's interpolation
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count = 2;
+    let text = """
+        total {count * 21}
+        """;
+    expect.equal(text, "total 42");
+}

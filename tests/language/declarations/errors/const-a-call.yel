@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a const's value is a literal: a number, a string, a char or a bool (or a directive: #embed(path), #file, #line)
+// features: [declarations,consts]
+// negative: compile
+// error: 8:1: a const's value is a literal: a number, a string, a char or a bool (or a directive: #embed(path), #file, #line)
+// ---
+size: func() -> s32 { 1 }
+const LIMIT = size();
+
+main: func() {}

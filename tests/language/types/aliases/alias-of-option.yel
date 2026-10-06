@@ -1,0 +1,15 @@
+// ---
+// description: an alias names an option type
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type level = 1 | 2 | 3;
+type maybe-level = option<level>;
+
+main: func() {
+    let present: maybe-level = some(1);
+    let absent: maybe-level = none;
+    expect.equal(expect.some(present), 1);
+    expect.none(absent);
+}

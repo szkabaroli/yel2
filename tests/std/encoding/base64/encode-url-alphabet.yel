@@ -1,0 +1,10 @@
+// ---
+// description: base64.encode-url uses - and _
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    expect.equal(base64.encode-url([0xFB, 0xFF, 0x00,]), "-_8A");
+}

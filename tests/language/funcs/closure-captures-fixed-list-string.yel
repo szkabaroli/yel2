@@ -1,0 +1,13 @@
+// ---
+// description: a fixed-length list a closure captures is the scope's, written in place
+// features: [funcs, closures, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names: list<string, 3> = ["a", "b", "c",];
+    let rename = { -> names[2] = "z"; };
+    rename();
+    expect.equal(names[2], "z");
+    expect.equal(names[0], "a");
+}

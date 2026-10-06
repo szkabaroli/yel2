@@ -1,0 +1,13 @@
+// ---
+// description: an alias works in parameters and results
+// features: [declarations,types]
+// ---
+from "std:testing" include expect;
+
+type offset = s16;
+
+shift: func(by: offset) -> offset { by + 1 }
+
+main: func() {
+    expect.equal(shift(2) as s32, 3);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: byte-at gives -1 past the end
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".byte-at(3), -1);
+    expect.equal("abc".byte-at(100), -1);
+    expect.equal("".byte-at(0), -1);
+}

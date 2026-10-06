@@ -1,0 +1,13 @@
+// ---
+// description: the bounds of a range are evaluated once, before the first turn
+// features: [control]
+// ---
+from "std:testing" include expect;
+let evaluations: s32;
+limit: func() -> s32 { evaluations += 1; 3 }
+main: func() {
+    let turns = 0;
+    for i in 0..limit() { turns += 1; }
+    expect.equal(turns, 3);
+    expect.equal(evaluations, 1);
+}

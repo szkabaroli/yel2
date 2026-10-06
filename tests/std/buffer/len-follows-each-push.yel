@@ -1,0 +1,14 @@
+// ---
+// description: len grows with each push
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(0);
+    expect.equal(b.len(), 0);
+    b.push("abc");
+    expect.equal(b.len(), 3);
+    b.push-char('é');
+    expect.equal(b.len(), 5);
+}

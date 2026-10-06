@@ -1,0 +1,12 @@
+// ---
+// description: set adds a key with its value
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    expect.equal(m.len(), 1);
+    expect.equal(m.get("a"), some(1));
+}

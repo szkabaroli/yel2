@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the right of &&: expected bool, found an integer
+// features: [control]
+// negative: compile
+// error: 8:21: the right of &&: expected bool, found an integer
+// ---
+main: func() {
+    let x = true && 1;
+}

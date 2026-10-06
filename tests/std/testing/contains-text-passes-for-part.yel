@@ -1,0 +1,9 @@
+// ---
+// description: expect.contains-text passes where the text holds the part
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.contains-text("hello world", "o w");
+}

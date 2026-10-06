@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned reads zero
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-unsigned("0"), some(0));
+}

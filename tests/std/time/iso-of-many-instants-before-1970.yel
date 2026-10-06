@@ -1,0 +1,24 @@
+// ---
+// description: time.to-iso and time.weekday of 7 instants, before 1970
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let rows: list<tuple<s64, string, s64>> = [
+        (-143702072829, "1965-06-12T18:45:27.171Z", 6),
+        (-281692075013, "1961-01-27T16:12:04.987Z", 5),
+        (-355840053960, "1958-09-22T11:32:26.040Z", 1),
+        (-318525201968, "1959-11-28T08:46:38.032Z", 6),
+        (-396745191574, "1957-06-06T01:00:08.426Z", 4),
+        (-176053612290, "1964-06-03T08:13:07.710Z", 3),
+        (-425916837606, "1956-07-03T09:46:02.394Z", 2),
+    ];
+    for row in rows {
+        let (millis, iso, weekday) = row;
+        let at = time.from-unix-millis(millis);
+        expect.equal(time.to-iso(at), iso);
+        expect.equal(time.weekday(time.to-date-time(at)), weekday);
+    }
+}

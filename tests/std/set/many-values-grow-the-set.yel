@@ -1,0 +1,12 @@
+// ---
+// description: a set keeps every value as it grows
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<s32> = set.new();
+    for value in 0..500 { s.add(value % 250); }
+    expect.equal(s.len(), 250);
+    expect.equal(s.values()[249], 249);
+}

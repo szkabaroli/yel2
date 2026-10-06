@@ -1,0 +1,12 @@
+// ---
+// description: a new map has no keys
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    expect.equal(m.len(), 0);
+    expect.equal(m.keys().len(), 0);
+    expect.equal(m.values().len(), 0);
+}

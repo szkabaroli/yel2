@@ -1,0 +1,10 @@
+// ---
+// description: expect.near tells the tolerance when floats are too far apart
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.near(1.0, 1.5, 0.1);
+}

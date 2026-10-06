@@ -1,0 +1,14 @@
+// ---
+// description: signed remainder has the sign of the dividend
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let seven: s32 = 7;
+    let minus-seven: s32 = -7;
+    expect.equal(seven % 3, 1);
+    expect.equal(minus-seven % 3, -1);
+    expect.equal(seven % -3, 1);
+    expect.equal(minus-seven % -3, -1);
+}

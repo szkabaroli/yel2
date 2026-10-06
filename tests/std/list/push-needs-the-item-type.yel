@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: list.push takes an item of the list's type
+// features: [list]
+// negative: compile
+// error: 9:18: argument 2 of yel:std/list.push: expected an integer, found string
+// ---
+main: func() {
+    let numbers = [1, 2,];
+    numbers.push("x");
+}

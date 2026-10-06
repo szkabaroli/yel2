@@ -1,0 +1,11 @@
+// ---
+// description: a program's own func is what the method call form calls as well
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+repeat: func(s: string, n: s32) -> string { "(own repeat)" }
+
+main: func() {
+    expect.equal("ab".repeat(3), "(own repeat)");
+}

@@ -1,0 +1,16 @@
+// ---
+// description: an or-pattern of enum cases
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+enum Color { red, orange, yellow, green, blue, }
+warm: func(c: Color) -> bool {
+    match c {
+        red | orange | yellow => true,
+        green | blue => false,
+    }
+}
+main: func() {
+    expect.holds(warm(Color.orange));
+    expect.holds(!warm(Color.blue));
+}

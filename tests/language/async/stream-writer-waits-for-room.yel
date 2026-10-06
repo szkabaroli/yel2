@@ -1,0 +1,27 @@
+// ---
+// description: a writer of a full stream waits until the reader makes room
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+produce: async func(out: writer<s32>) {
+    wait out.write(1);
+    log.push("wrote 1");
+    wait out.write(2);
+    log.push("wrote 2");
+    out.close();
+}
+
+main: async func() {
+    let (items, out) = stream-pair(1);
+    let producer = start produce(out);
+    wait yield-turn();
+    wait yield-turn();
+    expect.equal(log, ["wrote 1",]);
+    expect.equal(expect.some(wait items.read()), 1);
+    wait producer;
+    expect.equal(log, ["wrote 1", "wrote 2",]);
+    expect.equal(expect.some(wait items.read()), 2);
+}

@@ -1,0 +1,20 @@
+// ---
+// description: records made in an inner loop and summed in the outer one
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Vec { x: s32, y: s32, }
+
+main: func() {
+    let total = 0;
+    for row in 0..100 {
+        let sum: Vec = { x: 0, y: 0, };
+        for column in 0..100 {
+            let step: Vec = { x: row, y: column, };
+            sum = { x: sum.x + step.x, y: sum.y + step.y, };
+        }
+        total += sum.x + sum.y;
+    }
+    expect.equal(total, 495000 + 495000);
+}

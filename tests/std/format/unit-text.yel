@@ -1,0 +1,9 @@
+// ---
+// description: the unit value shows as unit
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{()}", "unit");
+}

@@ -1,0 +1,18 @@
+// ---
+// description: a guard reads the arm's bindings
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+resource Point { x: s32, y: s32, }
+describe: func(p: Point) -> string {
+    match p {
+        let { x, y } if x == y => "diagonal",
+        let { x, y } if x > y => "below",
+        _ => "above",
+    }
+}
+main: func() {
+    expect.equal(describe({ x: 2, y: 2, }), "diagonal");
+    expect.equal(describe({ x: 3, y: 2, }), "below");
+    expect.equal(describe({ x: 1, y: 2, }), "above");
+}

@@ -1,6 +1,0 @@
-// error: 5:5: .name of a Team & readonly: a readonly value's fields are not assigned
-resource Team { name: string, members: list<string>, }
-main: func() {
-    let team: Team & readonly = { name: "core", members: [], };
-    team.name = "other";
-}

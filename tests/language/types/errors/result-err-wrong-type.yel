@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: err's payload: expected string, found an integer
+// features: [types, result]
+// negative: compile
+// error: 7:49: err's payload: expected string, found an integer
+// ---
+main: func() { let a: result<s32, string> = err(1); }

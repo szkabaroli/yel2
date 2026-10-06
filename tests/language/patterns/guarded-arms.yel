@@ -1,0 +1,32 @@
+// ---
+// description: a let arm's guard decides whether it matches; an arm after it is tried where it does not
+// features: [patterns, match]
+// ---
+from "std:testing" include expect;
+
+const LIMIT = 10;
+
+resource Point { x: s32, y: s32, }
+
+size: func(n: s32) -> string {
+    match n {
+        let k if k < LIMIT => "under {LIMIT}",
+        LIMIT => "the limit",
+        _ => "big",
+    }
+}
+
+diagonal: func(p: Point) -> bool {
+    match p {
+        let q if q.x == q.y => true,
+        _ => false,
+    }
+}
+
+main: func() {
+    expect.equal(size(5), "under 10");
+    expect.equal(size(10), "the limit");
+    expect.equal(size(11), "big");
+    expect.holds(diagonal({ x: 2, y: 2, }));
+    expect.holds(!diagonal({ x: 1, y: 2, }));
+}

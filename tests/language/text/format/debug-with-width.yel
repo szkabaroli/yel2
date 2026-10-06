@@ -1,0 +1,10 @@
+// ---
+// description: a width goes with ?
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "ab";
+    expect.equal("[{name:5?}]", "[\"ab\" ]");
+}

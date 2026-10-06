@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix reads binary digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("1010", 2), some(10));
+}

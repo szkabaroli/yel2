@@ -1,0 +1,11 @@
+// ---
+// description: || keeps an out-of-range index from being read
+// features: [control]
+// ---
+from "std:testing" include expect;
+empty-or-zero: func(items: list<s32>) -> bool { items.len() == 0 || items[0] == 0 }
+main: func() {
+    expect.holds(empty-or-zero([]));
+    expect.holds(empty-or-zero([0, 1,]));
+    expect.holds(!empty-or-zero([4,]));
+}

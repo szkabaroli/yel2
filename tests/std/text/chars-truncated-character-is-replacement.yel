@@ -1,0 +1,12 @@
+// ---
+// description: chars shows each byte of a cut-short character as U+FFFD
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let pieces = buffer(2);
+    pieces.push-byte(226);
+    pieces.push-byte(130);
+    expect.equal(pieces.to-string().chars(), ['\u{fffd}', '\u{fffd}',]);
+}

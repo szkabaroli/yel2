@@ -1,0 +1,8 @@
+// ---
+// description: assert stops the program with the message given in place of the condition
+// features: [core]
+// exit: 1
+// ---
+main: func() {
+    assert(1 > 2, "one is not above two");
+}

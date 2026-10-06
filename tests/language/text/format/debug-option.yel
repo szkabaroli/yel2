@@ -1,0 +1,10 @@
+// ---
+// description: ? on an option quotes the string inside
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let present: option<string> = some("a");
+    expect.equal("{present:?}", "some(\"a\")");
+}

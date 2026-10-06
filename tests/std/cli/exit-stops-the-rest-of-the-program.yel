@@ -1,0 +1,11 @@
+// ---
+// description: nothing after exit runs
+// features: [cli]
+// exit: 3
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    exit.exit-with-code(3);
+    print("never\n");
+}

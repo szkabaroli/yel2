@@ -1,0 +1,10 @@
+// ---
+// description: uuid.parse tells where a digit is not hex
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(expect.err(uuid.parse("550e8400-e29b-41d4-a716-44665544000g")), "not a hex digit at byte 35");
+}

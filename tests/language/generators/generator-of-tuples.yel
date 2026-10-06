@@ -1,0 +1,18 @@
+// ---
+// description: a generator yields tuples
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+indexed: func(limit: s32) -> seq<tuple<s32, string>> {
+    for index in 0..limit { yield (index, "item{index}"); }
+}
+
+main: func() {
+    let seen: list<string> = [];
+    for pair in indexed(2) {
+        let (index, item) = pair;
+        seen.push("{index}={item}");
+    }
+    expect.equal(seen, ["0=item0", "1=item1",]);
+}

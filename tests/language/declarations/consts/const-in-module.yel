@@ -1,0 +1,14 @@
+// ---
+// description: a const in a module is reached through the module
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+module limits {
+    const TOP = 100;
+    top: func() -> s32 { TOP }
+}
+
+main: func() {
+    expect.equal(limits.top(), 100);
+}

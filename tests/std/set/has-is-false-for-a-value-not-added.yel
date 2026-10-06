@@ -1,0 +1,11 @@
+// ---
+// description: has is false for a value that was not added
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<s32> = set.new();
+    s.add(1);
+    expect.holds(!s.has(2));
+}

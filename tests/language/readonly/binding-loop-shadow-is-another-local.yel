@@ -1,0 +1,16 @@
+// ---
+// description: a loop's let of the same name is another local
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let a: list<s32> = [1,];
+    let b: list<s32> = [];
+    for i in 0..1 {
+        let b = a;
+        b.push(i);
+    }
+    let still: list<s32> & readonly = b;
+    expect.equal(still, []);
+    expect.equal(a, [1, 0,]);
+}

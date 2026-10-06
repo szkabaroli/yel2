@@ -1,0 +1,14 @@
+// ---
+// description: each turn of a for loop gives a closure its own item
+// features: [funcs, closures, loops]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let names = ["ada", "alan", "grace",];
+    let greets: list<func() -> string> = [];
+    for name in names { greets.push({ "hi {name}" }); }
+    expect.equal(greets[0](), "hi ada");
+    expect.equal(greets[1](), "hi alan");
+    expect.equal(greets[2](), "hi grace");
+}

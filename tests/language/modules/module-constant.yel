@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: s64.MAXX: module s64 has no constant MAXX (a module's func is called, and its types are named in types)
+// features: [modules]
+// negative: compile
+// error: 9:16: s64.MAXX: module s64 has no constant MAXX (a module's func is called, and its types are named in types)
+// error: 10:22: the value of narrow: expected s8, found s64
+// ---
+main: func() -> s32 {
+    let wide = s64.MAXX;
+    let narrow: s8 = s64.MAX;
+    0
+}

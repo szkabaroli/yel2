@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: the right of <: expected Color, found an integer
+// features: [types, enums]
+// negative: compile
+// error: 8:36: the right of <: expected Color, found an integer
+// ---
+enum Color { red, green, }
+main: func() { let a = Color.red < 1; }

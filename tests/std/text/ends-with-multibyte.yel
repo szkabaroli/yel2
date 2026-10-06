@@ -1,0 +1,10 @@
+// ---
+// description: ends-with compares whole bytes of a multibyte suffix
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("café".ends-with("é"));
+    expect.holds(!"café".ends-with("e"));
+}

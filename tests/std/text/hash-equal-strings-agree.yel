@@ -1,0 +1,10 @@
+// ---
+// description: strings with equal bytes hash alike
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(hash("hello"), hash("hel" + "lo"));
+    expect.equal(hash(""), hash(""));
+}

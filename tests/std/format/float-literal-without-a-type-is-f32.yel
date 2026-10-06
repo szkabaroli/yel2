@@ -1,0 +1,10 @@
+// ---
+// description: a float literal with no type is an f32, which shows fewer digits
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let third = 1.0 / 3.0;
+    expect.equal("{third}", "0.33333334");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: expected ';', found 'let'
+// features: [syntax,statements]
+// negative: compile
+// error: 8:18: expected ';', found 'let'
+// ---
+main: func() {
+    let first = 1
+    let second = 2;
+}

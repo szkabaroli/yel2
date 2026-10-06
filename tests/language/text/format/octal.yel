@@ -1,0 +1,10 @@
+// ---
+// description: o shows an integer in octal
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{255:o}", "377");
+    expect.equal("{8:o}", "10");
+}

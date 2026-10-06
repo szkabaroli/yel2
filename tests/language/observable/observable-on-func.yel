@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: @(observable) goes on a resource, not a func
+// features: [observable]
+// negative: compile
+// error: 7:15: @(observable) goes on a resource: it tells who reads and writes its fields
+// ---
+@(observable) work: func() {}
+main: func() {}

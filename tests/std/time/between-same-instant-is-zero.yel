@@ -1,0 +1,11 @@
+// ---
+// description: between an instant and itself is zero
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let at = time.from-unix-millis(77);
+    expect.equal(time.between(at, at).nanoseconds, 0);
+}

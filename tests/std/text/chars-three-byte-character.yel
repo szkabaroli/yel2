@@ -1,0 +1,9 @@
+// ---
+// description: chars reads a three byte character as one
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("€".chars(), ['€',]);
+}

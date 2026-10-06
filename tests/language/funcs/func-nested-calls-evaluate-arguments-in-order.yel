@@ -1,0 +1,22 @@
+// ---
+// description: arguments are evaluated left to right
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+let trail: list<s32>;
+
+note: func(value: s32) -> s32 {
+    trail.push(value);
+    value
+}
+
+add: func(a: s32, b: s32, c: s32) -> s32 { a + b + c }
+
+main: func() {
+    let sum = add(note(1), note(2), note(3));
+    expect.equal(sum, 6);
+    expect.equal(trail[0], 1);
+    expect.equal(trail[1], 2);
+    expect.equal(trail[2], 3);
+}

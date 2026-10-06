@@ -1,0 +1,9 @@
+// ---
+// description: find-from with a negative start finds as from 0
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("banana".find-from("ban", -3), some(0));
+}

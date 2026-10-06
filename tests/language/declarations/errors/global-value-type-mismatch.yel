@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the global's value: expected s32, found string
+// features: [declarations,globals]
+// negative: compile
+// error: 7:18: the global's value: expected s32, found string
+// ---
+let count: s32 = "text";
+
+main: func() {}

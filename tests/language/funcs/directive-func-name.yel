@@ -1,0 +1,12 @@
+// ---
+// description: #func is the func it is written in
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+here: func() -> string { #func }
+
+main: func() {
+    expect.equal(here(), "here");
+    expect.equal(#func, "main");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: n-1 with no spaces is one name
+// features: [syntax,names]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let n-1 = 10;
+    let n = 3;
+    expect.equal(n-1, 10);
+    expect.equal(n - 1, 2);
+}

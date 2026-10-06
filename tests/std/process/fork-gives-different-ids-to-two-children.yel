@@ -1,0 +1,34 @@
+// ---
+// description: two forks give two different child ids
+// features: [process]
+// ---
+from "std:testing" include expect;
+from "std:process" include process;
+
+// how a child ended: its code, or minus its signal
+status: func(ended: result<process.ended, string>) -> s64 {
+    match ended {
+        ok(code(number)) => number,
+        ok(signal(number)) => -number,
+        err(_) => -1000,
+    }
+}
+
+main: func() {
+    let first = 0;
+    let second = 0;
+    match process.fork() {
+        ok(none) => process.end(0),
+        ok(some(child)) => { first = child; }
+        err(problem) => expect.fail(problem),
+    }
+    match process.fork() {
+        ok(none) => process.end(0),
+        ok(some(child)) => { second = child; }
+        err(problem) => expect.fail(problem),
+    }
+    expect.not-equal(first, second);
+    expect.holds(first > 0);
+    expect.equal(status(process.wait(first)), 0);
+    expect.equal(status(process.wait(second)), 0);
+}

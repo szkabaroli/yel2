@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: yield is in a generator's body (a func that gives back a seq<T>), not a closure's
+// features: [generators]
+// negative: compile
+// error: 7:29: yield is in a generator's body (a func that gives back a seq<T>), not a closure's
+// ---
+main: func() { let f = { -> yield 1; }; }

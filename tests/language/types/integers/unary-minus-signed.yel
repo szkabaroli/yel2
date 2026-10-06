@@ -1,0 +1,12 @@
+// ---
+// description: unary minus negates a signed integer
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s16 = 12;
+    expect.equal(-value, -12);
+    expect.equal(-(-value), 12);
+    expect.equal(-(value - 20), 8);
+}

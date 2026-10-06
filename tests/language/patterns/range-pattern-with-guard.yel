@@ -1,0 +1,17 @@
+// ---
+// description: a guard narrows a range arm
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+which: func(n: s32) -> string {
+    match n {
+        let k if k % 2 == 0 && k < 100 => "small even",
+        0..=100 => "small",
+        _ => "big",
+    }
+}
+main: func() {
+    expect.equal(which(4), "small even");
+    expect.equal(which(5), "small");
+    expect.equal(which(500), "big");
+}

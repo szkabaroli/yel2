@@ -1,0 +1,27 @@
+// ---
+// description: two stages of tasks joined by streams
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+generate: async func(out: writer<s32>) {
+    for x in 1..=5 { wait out.write(x); }
+    out.close();
+}
+
+double: async func(items: stream<s32>, out: writer<s32>) {
+    wait for x in items { wait out.write(x * 2); }
+    out.close();
+}
+
+main: async func() {
+    let (raw, raw-out) = stream-pair(2);
+    let (doubled, doubled-out) = stream-pair(2);
+    let first = start generate(raw-out);
+    let second = start double(raw, doubled-out);
+    let seen: list<s32> = [];
+    wait for x in doubled { seen.push(x); }
+    expect.equal(seen, [2, 4, 6, 8, 10,]);
+    wait first;
+    wait second;
+}

@@ -1,0 +1,16 @@
+// ---
+// description: does not compile: the value of fz: expected list<s32> & readonly, found list<s32>
+// features: [funcs]
+// negative: compile
+// error: 12:36: the value of fz: expected list<s32> & readonly, found list<s32>
+// ---
+fresh-list: func() -> list<s32> { [] }
+
+main: func() {
+    let shared: list<s32> = [1,];
+    let fresh-list = { -> shared };
+    let fz: list<s32> & readonly = fresh-list();
+    print("fz {fz}\n");
+    shared.push(2);
+    print("fz {fz}\n");
+}

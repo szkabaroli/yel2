@@ -1,0 +1,14 @@
+// ---
+// description: an alias of an alias names the final type
+// features: [declarations,types]
+// ---
+from "std:testing" include expect;
+
+type first = u8;
+type second = first;
+
+main: func() {
+    let value: second = 250;
+    let plain: u8 = value;
+    expect.equal(plain as s32, 250);
+}

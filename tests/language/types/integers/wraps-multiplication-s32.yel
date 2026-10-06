@@ -1,0 +1,11 @@
+// ---
+// description: s32 multiplication wraps (the maximum squared is 1)
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: s32 = s32.MAX;
+    expect.equal(top * top, 1);
+    expect.equal(top * 2, -2);
+}

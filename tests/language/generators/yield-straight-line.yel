@@ -1,0 +1,17 @@
+// ---
+// description: a generator with only yields in sequence
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+three: func() -> seq<string> {
+    yield "a";
+    yield "b";
+    yield "c";
+}
+
+main: func() {
+    let seen = "";
+    for item in three() { seen = "{seen}{item}"; }
+    expect.equal(seen, "abc");
+}

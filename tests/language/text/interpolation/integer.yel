@@ -1,0 +1,13 @@
+// ---
+// description: an integer shows in decimal, a negative with its sign
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count = 42;
+    let below = -7;
+    expect.equal("{count}", "42");
+    expect.equal("{below}", "-7");
+    expect.equal("{0}", "0");
+}

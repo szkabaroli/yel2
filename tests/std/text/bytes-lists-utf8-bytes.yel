@@ -1,0 +1,9 @@
+// ---
+// description: bytes gives each UTF-8 byte of the string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("A€".bytes(), [65, 226, 130, 172,]);
+}

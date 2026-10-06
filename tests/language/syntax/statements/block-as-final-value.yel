@@ -1,0 +1,12 @@
+// ---
+// description: a block's value is its last expression
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = { let inner = 4; inner * 2 };
+    expect.equal(value, 8);
+    let nested = { { 3 } };
+    expect.equal(nested, 3);
+}

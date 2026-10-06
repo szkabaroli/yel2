@@ -1,0 +1,9 @@
+// ---
+// description: an interpolated s64 least, which has no positive
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{s64.MIN}", "-9223372036854775808");
+}

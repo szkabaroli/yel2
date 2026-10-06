@@ -1,0 +1,11 @@
+// ---
+// description: format writes a year past 9999 with a sign and six digits
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when: time.date-time = { year: 12345, month: 1, day: 1, hour: 0, minute: 0, second: 0, nanosecond: 0, offset: 0, };
+    expect.equal(time.format(when), "+012345-01-01T00:00:00Z");
+}

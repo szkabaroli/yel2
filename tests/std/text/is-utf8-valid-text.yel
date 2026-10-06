@@ -1,0 +1,10 @@
+// ---
+// description: is-utf8 is true for well-formed text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(is-utf8("héllo 😀 €"));
+    expect.holds(is-utf8(""));
+}

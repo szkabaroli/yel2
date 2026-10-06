@@ -1,0 +1,10 @@
+// ---
+// description: xs[i] reads the item at an index
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = ["a", "b", "c",];
+    expect.equal(xs[1], "b");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: & keeps the bits both have
+// features: [types, integers, bitwise]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let flags: u8 = 0b11001100;
+    expect.equal(flags & 0b10101010, 0b10001000);
+    expect.equal(flags & 0, 0);
+    expect.equal(flags & 255, flags);
+}

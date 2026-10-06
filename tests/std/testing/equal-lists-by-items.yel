@@ -1,0 +1,9 @@
+// ---
+// description: expect.equal passes for two lists with the same items
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2,], [1, 2,]);
+}

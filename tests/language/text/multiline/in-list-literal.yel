@@ -1,0 +1,14 @@
+// ---
+// description: a multiline string may be an item of a list literal
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let items = ["""
+        one
+        two
+        """,];
+    expect.equal(items.len(), 1);
+    expect.equal(items[0], "one\ntwo");
+}

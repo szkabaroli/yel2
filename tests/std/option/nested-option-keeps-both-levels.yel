@@ -1,0 +1,12 @@
+// ---
+// description: an option of an option is told apart from none
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let inner: option<option<s32>> = some(none);
+    expect.holds(inner.is-some());
+    let outer: option<option<s32>> = none;
+    expect.holds(outer.is-none());
+}

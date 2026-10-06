@@ -1,0 +1,9 @@
+// ---
+// description: to-radix writes s64's greatest
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-radix(s64.MAX, 16, false), "7fffffffffffffff");
+}

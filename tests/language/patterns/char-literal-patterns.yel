@@ -1,0 +1,15 @@
+// ---
+// description: char literals as patterns
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+vowel: func(c: char) -> bool {
+    match c {
+        'a' | 'e' | 'i' | 'o' | 'u' => true,
+        _ => false,
+    }
+}
+main: func() {
+    expect.holds(vowel('e'));
+    expect.holds(!vowel('x'));
+}

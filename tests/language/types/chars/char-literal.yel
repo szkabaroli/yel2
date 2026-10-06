@@ -1,0 +1,11 @@
+// ---
+// description: a char literal is a Unicode scalar value
+// features: [types, chars]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let letter: char = 'a';
+    expect.equal(letter, 'a');
+    expect.equal(letter as u32, 97);
+}

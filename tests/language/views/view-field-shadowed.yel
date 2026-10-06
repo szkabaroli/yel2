@@ -1,0 +1,19 @@
+// ---
+// description: does not compile: count is a field of the view: name the local otherwise
+// features: [views]
+// negative: compile
+// error: 14:32: count is a field of the view: name the local otherwise
+// error: 16:13: item is a field of the view: name the for's variable otherwise
+// ---
+module m {
+    view Shadow {
+        count: s32 = 0;
+        item: string = "";
+        VStack {
+            Button {
+                on.click: { -> let count = 2; }
+            }
+            for item in ["a",] key(item) { "{item}" }
+        }
+    }
+}

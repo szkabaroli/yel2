@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: b in a spec: expected an integer, found f64
+// features: [text,format]
+// negative: compile
+// error: 9:16: b in a spec: expected an integer, found f64
+// ---
+main: func() {
+    let value: f64 = 1.5;
+    let text = "{value:b}";
+}

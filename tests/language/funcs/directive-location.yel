@@ -1,0 +1,12 @@
+// ---
+// description: #location holds the line, column and func where it is written
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let place = #location;
+    expect.equal(place.line, 8);
+    expect.equal(place.func, "main");
+    expect.contains-text(place.file, "directive-location.yel");
+}

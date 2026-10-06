@@ -1,0 +1,9 @@
+// ---
+// description: trim leaves whitespace inside alone
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("  a  b  ".trim(), "a  b");
+}

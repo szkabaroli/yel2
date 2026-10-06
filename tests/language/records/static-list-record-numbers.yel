@@ -1,0 +1,28 @@
+// ---
+// description: a constant list of records keeps each number as written
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+record row { count: s64, small: s8, big: u64, ratio: f64, half: f32, }
+
+rows: func() -> list<row> {
+    [
+        { count: 3, small: -7, big: 18446744073709551615, ratio: 0.1, half: 1.5, },
+        { count: -9223372036854775807, small: 127, big: 0, ratio: -2.25e10, half: -0.5, },
+    ]
+}
+
+main: func() {
+    let all = rows();
+    expect.equal(all[0].count, 3);
+    expect.equal(all[0].small, -7);
+    expect.equal(all[0].big, 18446744073709551615);
+    expect.equal(all[0].ratio, 0.1);
+    expect.equal(all[0].half, 1.5);
+    expect.equal(all[1].count, -9223372036854775807);
+    expect.equal(all[1].small, 127);
+    expect.equal(all[1].big, 0);
+    expect.equal(all[1].ratio, -2.25e10);
+    expect.equal(all[1].half, -0.5);
+}

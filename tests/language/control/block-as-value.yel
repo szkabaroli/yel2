@@ -1,0 +1,9 @@
+// ---
+// description: a block's last expression is its value
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = { let a = 3; let b = 4; a * b };
+    expect.equal(n, 12);
+}

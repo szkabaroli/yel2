@@ -1,0 +1,14 @@
+// ---
+// description: << shifts bits toward the top, dropping what leaves the type
+// features: [types, integers, shifts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let one: u8 = 1;
+    expect.equal(one << 3, 8);
+    let top: u8 = 200;
+    expect.equal(top << 1, 144);
+    let wide: u64 = 1;
+    expect.equal(wide << 63, 9223372036854775808);
+}

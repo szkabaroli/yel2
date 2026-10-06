@@ -1,0 +1,14 @@
+// ---
+// description: an interpolation may call a func or a method
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+double: func(value: s32) -> s32 { value * 2 }
+
+main: func() {
+    let items = ["a", "b", "c"];
+    expect.equal("{double(21)}", "42");
+    expect.equal("{items.len()}", "3");
+    expect.equal("{items.join("-")}", "a-b-c");
+}

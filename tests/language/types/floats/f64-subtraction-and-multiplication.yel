@@ -1,0 +1,12 @@
+// ---
+// description: f64 - and *
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 2.5;
+    expect.equal(value - 0.5, 2.0);
+    expect.equal(value * 4.0, 10.0);
+    expect.equal(value * -1.0, -2.5);
+}

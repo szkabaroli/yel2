@@ -1,0 +1,11 @@
+// ---
+// description: an if without an else runs its block only when the condition holds
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let count = 0;
+    if true { count += 1; }
+    if false { count += 10; }
+    expect.equal(count, 1);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a float global starts at 0.0
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let level: f64;
+
+main: func() {
+    expect.equal(level, 0.0);
+}

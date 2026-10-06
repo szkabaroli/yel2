@@ -1,0 +1,11 @@
+// ---
+// description: closing quotes right after the opening line give the empty string
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+    """;
+    expect.equal(text.len(), 0);
+}

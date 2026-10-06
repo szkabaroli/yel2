@@ -1,0 +1,13 @@
+// ---
+// description: a multiline string of one line has no line break
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        only
+        """;
+    expect.equal(text, "only");
+    expect.equal(text.len(), 4);
+}

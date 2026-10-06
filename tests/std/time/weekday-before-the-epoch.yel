@@ -1,0 +1,11 @@
+// ---
+// description: weekday works for a date before 1970
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = expect.ok(time.parse-date-time("1969-12-31"));
+    expect.equal(time.weekday(when), 3);
+}

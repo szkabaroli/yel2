@@ -1,0 +1,19 @@
+// ---
+// description: json.write writes an array on one line with no spaces
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let item = json.value.array([json.value.number("1"), json.value.text("a"), json.value.null,]);
+    expect.equal(json.write(item), "[1,\"a\",null]");
+}

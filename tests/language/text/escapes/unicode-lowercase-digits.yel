@@ -1,0 +1,9 @@
+// ---
+// description: the hex digits of \u{..} may be either case
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("\u{ab}", "\u{AB}");
+}

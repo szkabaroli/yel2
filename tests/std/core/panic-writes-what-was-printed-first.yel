@@ -1,0 +1,9 @@
+// ---
+// description: what a program printed before a panic is written first
+// features: [core]
+// exit: 1
+// ---
+main: func() {
+    print("first\n");
+    panic("then");
+}

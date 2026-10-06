@@ -1,0 +1,9 @@
+// ---
+// description: infinity and nan show as words
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{inf} {-inf} {nan}", "inf -inf nan");
+}

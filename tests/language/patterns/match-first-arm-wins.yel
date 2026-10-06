@@ -1,0 +1,10 @@
+// ---
+// description: the first arm that fits is taken
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 1;
+    let word = match n { 1 => "first", 1 | 2 => "second", _ => "third", };
+    expect.equal(word, "first");
+}

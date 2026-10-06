@@ -1,0 +1,11 @@
+// ---
+// description: parse-date-time of a date alone is midnight
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = expect.ok(time.parse-date-time("2026-10-05"));
+    expect.equal((when.hour, when.minute, when.second, when.nanosecond), (0, 0, 0, 0));
+}

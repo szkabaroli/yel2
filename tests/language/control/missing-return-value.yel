@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value: expected s32, found ()
+// features: [control]
+// negative: compile
+// error: 8:5: the value: expected s32, found ()
+// ---
+f: func() -> s32 {
+    let x = 1;
+}
+main: func() {}

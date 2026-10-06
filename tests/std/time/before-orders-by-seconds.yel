@@ -1,0 +1,11 @@
+// ---
+// description: before is true where the first instant has fewer seconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.holds(time.before(time.from-unix-millis(1000), time.from-unix-millis(2000)));
+    expect.holds(!time.before(time.from-unix-millis(2000), time.from-unix-millis(1000)));
+}

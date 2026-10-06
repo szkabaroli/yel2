@@ -1,0 +1,18 @@
+// ---
+// description: closures kept in a list and called after much garbage
+// features: [memory, closures, gc]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let adders: list<func(s32) -> s32> = [];
+    for i in 0..10 {
+        let label = "adder {i}";
+        let offset = i * 100;
+        adders.push({ x: s32 -> x + offset + label.len() as s32 });
+    }
+    for i in 0..30000 { let junk = "junk {i}"; }
+    let total = 0;
+    for adder in adders { total += adder(1); }
+    expect.equal(total, 4580);
+}

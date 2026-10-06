@@ -1,0 +1,72 @@
+package test:vis-lib;
+
+// Visibility, by declaration and level: each kind of declaration visible (whoever reaches it),
+// @(private) (this package's files) and @(private="file") (this file). This file uses all of them;
+// more.yel (the package's other file) uses the visible and package-private ones; tests/packages/visibility
+// (another package) the visible ones; tests/language/modules/visibility-*.yel what may not be named.
+
+module api {
+    resource Point { x: s32, y: s32, }
+    @(private) resource Pair { a: s32, b: s32, }
+    @(private="file") resource Cell { n: s32, }
+
+    variant Shape { dot, circle(s32), }
+    @(private) variant Step { forward(s32), back, }
+    @(private="file") variant Bit { zero, one, }
+
+    flags Access { read, write, }
+    @(private) flags Mode { fast, safe, }
+
+    type Meters = s32;
+    @(private) type Feet = s32;
+    @(private="file") type Inches = s32;
+
+    origin: func() -> Point { { x: 0, y: 0, } }
+
+    area: func(s: Shape) -> s32 {
+        match s {
+            dot => 0,
+            circle(r) => 3 * r * r,
+        }
+    }
+
+    // the same file: each level named
+    all-levels: func() -> s32 {
+        let p: Pair = { a: 1, b: 2, };
+        let c: Cell = { n: 3, };
+        let s = Step.forward(4);
+        let bit = Bit.one;
+        let m: Meters = 5;
+        let f: Feet = 6;
+        let i: Inches = 7;
+        let steps = match s {
+            forward(n) => n,
+            back => 0,
+        };
+        let bits = match bit {
+            zero => 0,
+            one => 1,
+        };
+        p.a + p.b + c.n + steps + bits + m + f + i + LIMIT + SECRET + MINE + scale(1) + twice(1)
+    }
+
+    @(private) scale: func(n: s32) -> s32 { n * 10 }
+    @(private="file") twice: func(n: s32) -> s32 { n * 2 }
+
+    // a package-private func may name a package-private type
+    @(private) pair: func(a: s32, b: s32) -> Pair { { a: a, b: b, } }
+}
+
+// the package's top level: visible (its own files, as any top level), package-private, file-private
+const LIMIT: s32 = 100;
+@(private) const SECRET: s32 = 1000;
+@(private="file") const MINE: s32 = 10000;
+
+let visits: s32;
+@(private) let total: s32;
+@(private="file") let mine: s32 = 1;
+
+// a private module: this package's
+@(private) module tools {
+    count: func() -> s32 { 3 }
+}

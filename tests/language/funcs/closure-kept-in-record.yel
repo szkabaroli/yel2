@@ -1,0 +1,16 @@
+// ---
+// description: a closure kept in a record's field is called after reading it
+// features: [funcs, closures, records]
+// ---
+from "std:testing" include expect;
+
+resource Button { label: string, on-click: func(), }
+
+main: func() {
+    let clicks = 0;
+    let button: Button = { label: "ok", on-click: { clicks += 1; }, };
+    let handler = button.on-click;
+    handler();
+    handler();
+    expect.equal(clicks, 2);
+}

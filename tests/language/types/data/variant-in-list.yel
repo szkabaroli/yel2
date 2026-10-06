@@ -1,0 +1,14 @@
+// ---
+// description: a list of variants iterated and shown
+// features: [types, variants]
+// ---
+from "std:testing" include expect;
+
+variant Shape { dot, circle(s32), }
+
+main: func() {
+    let shapes = [Shape.dot, Shape.circle(2),];
+    let text = "";
+    for shape in shapes { text = text + "{shape};"; }
+    expect.equal(text, "dot;circle(2);");
+}

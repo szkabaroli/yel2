@@ -1,0 +1,12 @@
+// ---
+// description: nan is a float literal that is not equal to itself
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = nan;
+    expect.holds(value != value);
+    expect.holds(!(value == value));
+    expect.holds(!(value < 1.0));
+}

@@ -1,0 +1,11 @@
+// ---
+// description: \u{..} past 0xFFFF is four bytes
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "\u{1F600}";
+    expect.equal(text, "😀");
+    expect.equal(text.len(), 4);
+}

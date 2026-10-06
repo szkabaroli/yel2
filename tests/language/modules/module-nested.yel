@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: module outer holds a module: modules are one layer
+// features: [modules]
+// negative: compile
+// error: 8:5: module outer holds a module: modules are one layer
+// ---
+module outer {
+    module inner { }
+}
+main: func() -> s32 { 0 }

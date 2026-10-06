@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a func value (func(s32) -> s32) cannot cross a component's boundary: WIT has none
+// features: [wit]
+// negative: compile
+// error: a func value (func(s32) -> s32) cannot cross a component's boundary: WIT has none
+// ---
+module api {
+    apply: func(f: func(s32) -> s32) -> s32 { f(1) }
+}

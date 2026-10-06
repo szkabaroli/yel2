@@ -1,0 +1,11 @@
+// ---
+// description: hex and binary of a u64 with its top bit set show its digits, not "-1"
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top = 0 as u64 - 1;
+    expect.equal("{top:x}", "ffffffffffffffff");
+    expect.equal("{top}", "18446744073709551615");
+}

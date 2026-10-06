@@ -1,0 +1,12 @@
+// ---
+// description: an enum named variant is an enum, its case shown by name
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+enum variant { first, second, }
+
+main: func() {
+    expect.equal("{variant.second:?}", "second");
+    expect.equal("{variant.first:?}", "first");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: parse-unsigned refuses spaces
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned(" 1"));
+    expect.none(number.parse-unsigned("1 "));
+}

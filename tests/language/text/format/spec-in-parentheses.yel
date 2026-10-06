@@ -1,0 +1,10 @@
+// ---
+// description: a parenthesized expression takes a spec
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = -1;
+    expect.equal("{(value as u8):x}", "ff");
+}

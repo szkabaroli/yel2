@@ -1,0 +1,19 @@
+// ---
+// description: each value is made only when the loop asks for it
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+counting: func() -> seq<s32> {
+    for x in 0..3 {
+        log.push("make {x}");
+        yield x;
+    }
+}
+
+main: func() {
+    for value in counting() { log.push("use {value}"); }
+    expect.equal(log, ["make 0", "use 0", "make 1", "use 1", "make 2", "use 2",]);
+}

@@ -1,0 +1,20 @@
+// ---
+// description: an async func waiting for another that waits too: a chain of frames
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+double: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x * 2
+}
+
+sum-doubles: async func(xs: list<s32>) -> s32 {
+    let total = 0;
+    for x in xs { total += wait double(x); }
+    total
+}
+
+main: async func() {
+    expect.equal(wait sum-doubles([1, 2, 3,]), 12);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: a regex shows all its flags
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{/x/ims}", "/x/ims");
+}

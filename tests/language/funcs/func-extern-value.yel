@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: print is an extern: an extern is not a value yet
+// features: [funcs]
+// negative: compile
+// error: 8:13: print is an extern: an extern is not a value yet
+// ---
+main: func() {
+    let f = print;
+}

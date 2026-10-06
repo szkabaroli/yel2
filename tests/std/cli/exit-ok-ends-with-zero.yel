@@ -1,0 +1,10 @@
+// ---
+// description: exit of ok ends the program with 0
+// features: [cli]
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    print("before\n");
+    exit.exit(ok);
+}

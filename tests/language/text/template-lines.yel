@@ -1,0 +1,19 @@
+// ---
+// description: does not compile: missing is not declared
+// features: [text]
+// negative: compile
+// error: 14:17: missing is not declared
+// error: 17:17: wrong is not declared
+// ---
+// a C template spans lines: what follows it is on the line after its last, and an interpolation on
+// a later line of one is where it is written
+main: func() {
+    let text = c"
+        int f(void) { return 0; }
+    ";
+    let after = missing;
+    let more = c"
+        first line
+        second {wrong} line
+    ";
+}

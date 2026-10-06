@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a is not declared
+// features: [patterns]
+// negative: compile
+// error: 9:55: a is not declared
+// help: did you mean b?
+// ---
+main: func() {
+    let r = match (1, 2) { (let a, 0) | (0, let b) => a, _ => 0, };
+}

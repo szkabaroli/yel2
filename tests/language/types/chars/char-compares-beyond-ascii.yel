@@ -1,0 +1,11 @@
+// ---
+// description: a non-ASCII char is above every ASCII one
+// features: [types, chars, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds('~' < 'é');
+    expect.holds('é' < '→');
+    expect.holds('→' < '\u{1F600}');
+}

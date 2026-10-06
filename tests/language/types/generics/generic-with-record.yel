@@ -1,0 +1,15 @@
+// ---
+// description: a generic func over a record type
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+same: func<T>(value: T) -> T { value }
+
+main: func() {
+    let point: Point = { x: 3, y: 4, };
+    let back = same(point);
+    expect.equal(back.x + back.y, 7);
+}

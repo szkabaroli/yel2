@@ -1,0 +1,10 @@
+// ---
+// description: uuid.time-ordered makes a version 7 UUID
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(uuid.version(uuid.time-ordered()), 7);
+}

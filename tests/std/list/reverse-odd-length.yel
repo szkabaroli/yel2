@@ -1,0 +1,9 @@
+// ---
+// description: reverse gives the items last first
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([4, 1, 9, 3, 5,].reverse(), [5, 3, 9, 1, 4,]);
+}

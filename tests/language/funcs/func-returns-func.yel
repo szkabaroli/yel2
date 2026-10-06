@@ -1,0 +1,14 @@
+// ---
+// description: a func returns a func
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+inc: func(x: s32) -> s32 { x + 1 }
+
+get: func() -> func(s32) -> s32 { inc }
+
+main: func() {
+    let f = get();
+    expect.equal(f(41), 42);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: map takes a func that has a name
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+double: func(n: s32) -> s32 { n * 2 }
+
+main: func() {
+    expect.equal([1, 2, 3,].map(double), [2, 4, 6,]);
+}

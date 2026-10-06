@@ -1,0 +1,16 @@
+// ---
+// description: an alias names a list type
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type names = list<string>;
+
+count: func(items: names) -> s64 { items.len() }
+
+main: func() {
+    let items: names = ["a", "b",];
+    expect.equal(count(items), 2);
+    let plain: list<string> = items;
+    expect.equal(plain.len(), 2);
+}

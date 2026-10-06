@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: a range's end: expected u8, found s32
+// features: [control]
+// negative: compile
+// error: 10:19: a range's end: expected u8, found s32
+// ---
+main: func() {
+    let low: u8 = 1;
+    let high: s32 = 5;
+    for i in low..high { }
+}

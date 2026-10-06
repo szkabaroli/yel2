@@ -1,0 +1,15 @@
+// ---
+// description: a block that starts a statement is the statement: what follows is separate
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+negated: func() -> s32 {
+    let total = 0;
+    { total += 3; }
+    -total
+}
+
+main: func() {
+    expect.equal(negated(), -3);
+}

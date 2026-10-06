@@ -1,0 +1,39 @@
+// streams and futures through a component's imports: tests/components/stream-api's exports, plugged in (wac)
+
+from "test:streams" include api;
+
+feed: async func(out: writer<s32>, xs: list<s32>) {
+    for x in xs { wait out.write(x); }
+    out.close();
+}
+
+ten: async func() -> s32 { 10 }
+
+main: async func() {
+    // the host's stream, read as it comes
+    let squares = wait api.squares(6);
+    wait for x in squares { print("{x} "); }
+    print("\n");
+    // a stream given the other component, which reads it
+    let (mine, out) = stream-pair(1);
+    start feed(out, [1, 2, 3, 4, 5,]);
+    print("total {wait api.total(mine)}\n");
+    // futures: one given, one taken
+    let f = wait api.later(7);
+    print("later {wait f}\n");
+    print("plus {wait api.plus(start ten(), 5)}\n");
+    // nested: a record's stream and future, an option's stream, a list of streams given
+    let fd = wait api.both(4);
+    wait for x in fd.values { print("{x} "); }
+    print("count {wait fd.count}\n");
+    match wait api.maybe(3) {
+        some(s) => { wait for x in s { print("{x} "); } }
+        none => print("none"),
+    }
+    print("{wait api.maybe(0)}\n");
+    let (a, aw) = stream-pair(1);
+    let (b, bw) = stream-pair(1);
+    start feed(aw, [1, 2,]);
+    start feed(bw, [10, 20, 30,]);
+    print("totals {wait api.totals([a, b,])}\n");
+}

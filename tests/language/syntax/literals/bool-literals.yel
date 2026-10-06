@@ -1,0 +1,11 @@
+// ---
+// description: true and false are bool literals
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(true);
+    expect.holds(!false);
+    expect.not-equal(true, false);
+}

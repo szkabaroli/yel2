@@ -1,0 +1,11 @@
+// ---
+// description: parse-float refuses an exponent with no digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("1e"));
+    expect.none(number.parse-float("1e+"));
+    expect.none(number.parse-float("1E-"));
+}

@@ -1,0 +1,18 @@
+// ---
+// description: a closure made in a loop turn keeps that turn's bindings
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let makers: list<func() -> s32> = [];
+    let k = 0;
+    loop {
+        let seen = k * 10;
+        makers.push({ seen });
+        k += 1;
+        if k == 3 { break; }
+    }
+    let got: list<s32> = [];
+    for maker in makers { got.push(maker()); }
+    expect.equal(got, [0, 10, 20,]);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: == compares integers by value
+// features: [types, integers, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let a: u16 = 300;
+    let b: u16 = 100;
+    expect.holds(a == b * 3);
+    expect.holds(a != b);
+    expect.holds(a - 200 == b);
+}

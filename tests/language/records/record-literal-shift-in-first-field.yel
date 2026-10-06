@@ -1,0 +1,14 @@
+// ---
+// description: a shift's << in a record literal's first field is no type's <
+// features: [records, shifts]
+// ---
+from "std:testing" include expect;
+
+make: func(c: bool) -> { a: s32, b: char } {
+    if c { }
+    { a: ((0 as s32) << (32 as s64)), b: if true { 'x' } else { 'y' }, }
+}
+
+main: func() {
+    expect.equal(make(true).a, 0);
+}

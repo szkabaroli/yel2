@@ -1,0 +1,11 @@
+// ---
+// description: exit-with-code ends the program with the code given
+// features: [cli]
+// exit: 7
+// ---
+from "std:cli" include environment, exit;
+
+main: func() {
+    print("before\n");
+    exit.exit-with-code(7);
+}

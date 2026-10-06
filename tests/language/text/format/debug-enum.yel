@@ -1,0 +1,11 @@
+// ---
+// description: ? on an enum case is its name
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+enum color { red, green, }
+
+main: func() {
+    expect.equal("{color.green:?}", "green");
+}

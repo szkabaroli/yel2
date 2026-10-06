@@ -1,0 +1,19 @@
+// ---
+// description: a global in a module is private to its funcs and starts as its literal
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+module counter {
+    let total: u32 = 7;
+
+    bump: func(by: u32) -> u32 {
+        total += by;
+        total
+    }
+}
+
+main: func() {
+    expect.equal(counter.bump(3), 10);
+    expect.equal(counter.bump(1), 11);
+}

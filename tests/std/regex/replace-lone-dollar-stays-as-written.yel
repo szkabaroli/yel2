@@ -1,0 +1,10 @@
+// ---
+// description: replace keeps a $ that no reference follows
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/a/.replace("a", "$"), "$");
+    expect.equal(/a/.replace("a", "$x"), "$x");
+}

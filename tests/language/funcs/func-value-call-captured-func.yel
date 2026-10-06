@@ -1,0 +1,13 @@
+// ---
+// description: a func captured by a closure is called from it
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+inc: func(x: s32) -> s32 { x + 1 }
+
+main: func() {
+    let f = inc;
+    let apply = { x: s32 -> f(f(x)) };
+    expect.equal(apply(1), 3);
+}

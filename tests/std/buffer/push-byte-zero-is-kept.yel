@@ -1,0 +1,14 @@
+// ---
+// description: push-byte keeps a zero byte inside the text
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push-byte(97);
+    b.push-byte(0);
+    b.push-byte(98);
+    expect.equal(b.len(), 3);
+    expect.equal(b.to-bytes(), [97, 0, 98,]);
+}

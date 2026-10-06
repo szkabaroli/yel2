@@ -1,0 +1,17 @@
+// ---
+// description: start is allowed in a sync func, which never waits
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let touched: bool = false;
+
+touch: async func() { touched = true; }
+
+begin: func() -> future<()> { start touch() }
+
+main: async func() {
+    let future = begin();
+    wait future;
+    expect.holds(touched);
+}

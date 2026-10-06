@@ -1,0 +1,17 @@
+// ---
+// description: a union of a literal type and another kind
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+describe: func(value: "a" | "b" | s32) -> string {
+    match value {
+        "a" => "letter a",
+        "b" => "letter b",
+        let n: s32 => "number {n}",
+    }
+}
+main: func() {
+    expect.equal(describe("a"), "letter a");
+    expect.equal(describe("b"), "letter b");
+    expect.equal(describe(3), "number 3");
+}

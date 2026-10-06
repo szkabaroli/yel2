@@ -1,0 +1,80 @@
+// what std:lint's recommended rules find (yelc lint, its lint.yel beside it adding a rule of its
+// own): an include, a const, a type, a func, a parameter and locals never used, and what each
+// rule must not tell (what is used, a func used only by itself told once)
+
+from "std:process" include process;
+from "std:cli" include exit;
+
+const UNUSED-LIMIT = 3;
+const LIMIT = 10;
+
+record point { x: s32, y: s32, }
+record never-named { a: s32, }
+
+variant shape { dot, ring(s32), }
+
+helper: func(value: s32, extra: s32) -> s32 { value * 2 }
+
+lonely: func() -> s32 { lonely() }
+
+todo: func() {}
+
+kept: func(_ignored: s32) -> shape { shape.ring(LIMIT) }
+
+main: func() {
+    let unused = 4;
+    let used = helper(LIMIT, 0);
+    let p: point = { x: used, y: 1, };
+    match kept(0) {
+        ring(radius) => print("{radius}\n"),
+        dot => {}
+    }
+    match some(1) {
+        some(inner) => {}
+        none => {}
+    }
+    todo();
+    print("{classify(3)} {leave(true)} {go(1, 2)}\n");
+    if used > 100 { print("{stop()}\n"); }
+    print("{p.x}\n");
+    exit.exit(ok(()));
+}
+
+// what the other rules find: an arm after a catch-all, a duplicate arm, code after a return and
+// after a panic, a self-assignment, constant conditions, a loop that breaks at once, a short name
+// (and what they must not: a guarded catch-all, an else after a return in the then, a name of two)
+classify: func(count: s32) -> string {
+    match count {
+        0 => "none",
+        1 | 2 => "few",
+        2 => "two",
+        let many if many > 100 => "lots",
+        let other => "some {other}",
+        5 => "five",
+    }
+}
+
+leave: func(flag: bool) -> s32 {
+    if flag {
+        return 1;
+    } else {
+        print("on\n");
+    }
+    let total = 0;
+    total = total;
+    if true { total += 1; }
+    if total == total { total += 1; }
+    loop {
+        break;
+    }
+    return total;
+    print("after\n");
+    total
+}
+
+stop: func() -> s32 {
+    panic("stopped");
+    0
+}
+
+go: func(x: s32, ok: s32) -> s32 { x + ok }

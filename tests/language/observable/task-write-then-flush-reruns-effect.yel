@@ -1,0 +1,23 @@
+// ---
+// description: a task writing observable state and flushing reruns the effect that read it
+// features: [observable, async]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Page { title: string, }
+
+load: async func(page: Page) {
+    wait yield-turn();
+    page.title = "loaded";
+    reactive.flush();
+}
+
+main: async func() {
+    let page: Page = { title: "loading", };
+    let seen: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { -> let _ = reactive.effect({ -> seen.push(page.title); { -> } }); });
+    wait load(page);
+    expect.equal(seen, ["loading", "loaded",]);
+    reactive.dispose(owner);
+}

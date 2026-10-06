@@ -1,0 +1,11 @@
+// ---
+// description: len counts UTF-8 bytes: two for e-acute, four for an emoji
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("héllo".len(), 6);
+    expect.equal("😀".len(), 4);
+    expect.equal("€".len(), 3);
+}

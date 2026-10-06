@@ -1,0 +1,13 @@
+// ---
+// description: a type alias is the type it names: both mix freely
+// features: [declarations,types]
+// ---
+from "std:testing" include expect;
+
+type count = s64;
+
+main: func() {
+    let ticks: count = 3;
+    let more: s64 = ticks + 4;
+    expect.equal(more, 7);
+}

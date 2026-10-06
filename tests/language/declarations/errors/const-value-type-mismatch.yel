@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the const's value: expected s32, found string
+// features: [declarations,consts]
+// negative: compile
+// error: 7:20: the const's value: expected s32, found string
+// ---
+const LIMIT: s32 = "text";
+
+main: func() {}

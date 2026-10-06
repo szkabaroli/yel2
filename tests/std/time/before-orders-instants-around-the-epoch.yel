@@ -1,0 +1,10 @@
+// ---
+// description: before orders an instant before the epoch ahead of one after it
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.holds(time.before(time.from-unix-millis(-1), time.from-unix-millis(0)));
+}

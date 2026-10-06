@@ -1,0 +1,9 @@
+// ---
+// description: parse-int reads a long run of leading zeros
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int("00000000000000000000000000005"), some(5));
+}

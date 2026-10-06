@@ -1,0 +1,11 @@
+// ---
+// description: a char range type holds chars of the range
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type digit = '0'..='9';
+value-of: func(d: digit) -> s32 { (d as s32) - 48 }
+main: func() {
+    let d: digit = '7';
+    expect.equal(value-of(d), 7);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: as? from s32 to a narrower integer checks the range
+// features: [types, unions, as]
+// ---
+from "std:testing" include expect;
+
+type percent = 0..=100;
+
+main: func() {
+    let fine: s32 = 50;
+    let high: s32 = 150;
+    expect.equal(expect.some(fine as? percent), 50);
+    expect.none(high as? percent);
+}

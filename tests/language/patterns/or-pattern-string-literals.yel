@@ -1,0 +1,15 @@
+// ---
+// description: an or-pattern of strings
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+yes: func(answer: string) -> bool {
+    match answer {
+        "y" | "yes" | "ok" => true,
+        _ => false,
+    }
+}
+main: func() {
+    expect.holds(yes("ok"));
+    expect.holds(!yes("no"));
+}

@@ -1,0 +1,19 @@
+// ---
+// description: a func that only reads takes readonly and mutable lists alike
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+longest: func(xs: list<string>) -> string {
+    let best = "";
+    for x in xs {
+        if x.len() > best.len() { best = x; }
+    }
+    best
+}
+main: func() {
+    let fixed: list<string> & readonly = ["ada", "grace", "barbara",];
+    let open = ["linus",];
+    open.push("dennis");
+    expect.equal(longest(fixed), "barbara");
+    expect.equal(longest(open), "dennis");
+}

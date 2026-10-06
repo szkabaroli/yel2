@@ -1,0 +1,13 @@
+// ---
+// description: a value added twice is in the set once
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<s32> = set.new();
+    s.add(4);
+    s.add(4);
+    expect.equal(s.len(), 1);
+    expect.equal(s.values(), [4,]);
+}

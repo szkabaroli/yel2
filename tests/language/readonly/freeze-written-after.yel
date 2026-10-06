@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: readonly is wanted here: xs is used again after (once readonly, use the readonly name)
+// features: [readonly]
+// negative: compile
+// error: 9:40: readonly is wanted here: xs is used again after (once readonly, use the readonly name)
+// ---
+main: func() {
+    let xs: list<s32> = [1,];
+    let frozen: list<s32> & readonly = xs;
+    xs.push(2);
+}

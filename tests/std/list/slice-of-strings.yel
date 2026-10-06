@@ -1,0 +1,9 @@
+// ---
+// description: slice works on a list of strings
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(["a", "b", "c",].slice(1, 3), ["b", "c",])
+}

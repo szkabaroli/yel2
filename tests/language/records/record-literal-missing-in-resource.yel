@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: resource Counter has the fields { value, name }, given { value }
+// features: [records, resources]
+// negative: compile
+// error: 9:22: resource Counter has the fields { value, name }, given { value }
+// ---
+resource Counter { value: s32, name: string, }
+main: func() {
+    let c: Counter = { value: 1, };
+}

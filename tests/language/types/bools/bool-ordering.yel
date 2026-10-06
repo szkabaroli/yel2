@@ -1,0 +1,13 @@
+// ---
+// description: false is below true
+// features: [types, bools, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(false < true);
+    expect.holds(false <= false);
+    expect.holds(true > false);
+    expect.holds(true >= true);
+    expect.holds(!(true < false));
+}

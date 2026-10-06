@@ -1,0 +1,20 @@
+package test:vis-lib;
+
+// the package's other file: the visible and the package-private (@(private)) declarations of
+// api.yel, each kind; its file-private ones are not here (tests/language/modules/visibility-file.yel)
+
+module more {
+    package-levels: func() -> s32 {
+        let p = api.pair(1, 2);
+        let s = api.Step.back;
+        let f: api.Feet = 3;
+        let modes = api.Mode.fast;
+        let steps = match s {
+            forward(n) => n,
+            back => 10,
+        };
+        visits += 1;
+        total += 2;
+        p.a + p.b + steps + f + api.scale(1) + LIMIT + SECRET + tools.count() + visits + total
+    }
+}

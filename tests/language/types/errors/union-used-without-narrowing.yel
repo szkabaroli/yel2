@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: +: expected a number, found s32 | string
+// features: [types, unions]
+// negative: compile
+// error: 8:41: +: expected a number, found s32 | string
+// ---
+type id = s32 | string;
+main: func() { let who: id = 1; let n = who + 1; }

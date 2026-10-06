@@ -1,0 +1,9 @@
+// ---
+// description: an interpolated one digit number
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{7}{-7}", "7-7");
+}

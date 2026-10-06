@@ -1,0 +1,14 @@
+// ---
+// description: a + b as T is a + (b as T)
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let wide: s64 = 10;
+    let narrow: s32 = 5;
+    expect.equal(wide + narrow as s64, 15);
+    let first: s32 = 7;
+    let second: s32 = 2;
+    expect.equal(first + second as s32 * 2, 11);
+}

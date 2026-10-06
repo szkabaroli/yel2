@@ -1,0 +1,13 @@
+// ---
+// description: a closure reads a variable's latest value
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let level = 1;
+    let show = { -> level };
+    expect.equal(show(), 1);
+    level = 5;
+    expect.equal(show(), 5);
+}

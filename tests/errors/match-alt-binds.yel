@@ -1,6 +1,0 @@
-// error: 4:5: n is bound under a |, where a pattern binds nothing
-// a let's alternatives bind nothing (a match arm's may: an arm for each)
-main: func() {
-    let (let n, 0) | (0, let n) = (1, 0);
-    print("{n}\n");
-}

@@ -1,0 +1,7 @@
+// ---
+// description: an option holding a string shows it quoted
+// features: [wave]
+// ---
+main: func() {
+    print("{some("hi")}\n");
+}

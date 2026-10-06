@@ -1,0 +1,20 @@
+// ---
+// description: two locals holding the same record share it when one is stored
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Cell { n: s32, }
+
+main: func() {
+    let kept: list<Cell> = [];
+    for i in 0..3 {
+        let cell: Cell = { n: i, };
+        let alias = cell;
+        alias.n += 100;
+        kept.push(cell);
+    }
+    expect.equal(kept[0].n, 100);
+    expect.equal(kept[1].n, 101);
+    expect.equal(kept[2].n, 102);
+}

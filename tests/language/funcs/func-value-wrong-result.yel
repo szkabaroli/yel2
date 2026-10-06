@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the value of f: expected func(s32) -> string, found func(s32) -> s32
+// features: [funcs]
+// negative: compile
+// error: 9:34: the value of f: expected func(s32) -> string, found func(s32) -> s32
+// ---
+inc: func(x: s32) -> s32 { x + 1 }
+main: func() {
+    let f: func(s32) -> string = inc;
+}

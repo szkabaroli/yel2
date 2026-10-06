@@ -1,0 +1,14 @@
+// ---
+// description: a fixed-length list's item is changed by a closure called twice
+// features: [funcs, closures, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count: list<s32, 2> = [0, 0,];
+    let bump = { -> count[0] = count[0] + 1; };
+    bump();
+    bump();
+    expect.equal(count[0], 2);
+    expect.equal(count[1], 0);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: parse-unsigned refuses a number past u64's greatest
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned("18446744073709551616"));
+    expect.none(number.parse-unsigned("99999999999999999999"));
+}

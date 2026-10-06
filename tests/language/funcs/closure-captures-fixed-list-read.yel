@@ -1,0 +1,12 @@
+// ---
+// description: a closure reads the scope's later write of a fixed-length list
+// features: [funcs, closures, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let slots: list<s32, 2> = [1, 2,];
+    let first = { -> slots[0] };
+    slots[0] = 50;
+    expect.equal(first(), 50);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix of 10 reads as parse-int does
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("123", 10), number.parse-int("123"));
+}

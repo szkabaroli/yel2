@@ -1,0 +1,10 @@
+// ---
+// description: a range of integers may build chars with as
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let letters = "";
+    for code in 97..=101 { letters = letters + "{code as char}"; }
+    expect.equal(letters, "abcde");
+}

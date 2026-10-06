@@ -1,0 +1,15 @@
+// ---
+// description: an alias names a func type
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type binary = func(s32, s32) -> s32;
+
+apply: func(operation: binary, left: s32, right: s32) -> s32 { operation(left, right) }
+
+add: func(left: s32, right: s32) -> s32 { left + right }
+
+main: func() {
+    expect.equal(apply(add, 2, 3), 5);
+}

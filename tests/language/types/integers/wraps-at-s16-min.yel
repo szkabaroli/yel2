@@ -1,0 +1,11 @@
+// ---
+// description: s16 subtraction wraps from its minimum to its maximum, and negation of the minimum is itself
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let bottom: s16 = s16.MIN;
+    expect.equal(bottom - 1, s16.MAX);
+    expect.equal(-bottom, s16.MIN);
+}

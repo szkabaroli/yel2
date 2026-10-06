@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: unexpected 'a' after an interpolation's expression
+// features: [text]
+// negative: compile
+// error: 9:15: unexpected 'a' after an interpolation's expression
+// ---
+main: func() {
+    let a = 1;
+    print("{a a}\n");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: a char cast to u8 keeps the low byte of its code point
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('→' as u8, 146);
+    expect.equal('A' as u8, 65);
+}

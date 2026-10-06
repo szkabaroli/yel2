@@ -1,0 +1,11 @@
+// ---
+// description: regex.group gives a named group's text
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found = expect.some(/(?<year>\d{4})-(?<month>\d\d)/.find("2026-10"));
+    expect.equal(regex.group(found, "year"), some("2026"));
+    expect.equal(regex.group(found, "month"), some("10"));
+}

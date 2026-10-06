@@ -1,0 +1,11 @@
+// ---
+// description: a string inside an interpolation may interpolate in turn
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count = 1;
+    expect.equal("{"inner {count + 1}"}", "inner 2");
+    expect.equal("a {"b {"c {count}"}"}", "a b c 1");
+}

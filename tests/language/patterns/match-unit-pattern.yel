@@ -1,0 +1,13 @@
+// ---
+// description: the unit value is matched by ()
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let r: result<_, string> = ok(());
+    let text = match r {
+        ok(_) => "fine",
+        err(e) => e,
+    };
+    expect.equal(text, "fine");
+}

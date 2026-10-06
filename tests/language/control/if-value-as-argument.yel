@@ -1,0 +1,10 @@
+// ---
+// description: an if as a value given to a func
+// features: [control]
+// ---
+from "std:testing" include expect;
+double: func(n: s32) -> s32 { n * 2 }
+main: func() {
+    let flag = false;
+    expect.equal(double(if flag { 1 } else { 5 }), 10);
+}

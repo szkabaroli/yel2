@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the match has no arm for { x: true, y: false }: add one, or a _ arm
+// features: [patterns]
+// negative: compile
+// error: 9:13: the match has no arm for { x: true, y: false }: add one, or a _ arm
+// ---
+main: func() {
+    let p = { x: true, y: true, };
+    let n = match p { { x: true, y: true } => 1, { x: false, y: _ } => 2, };
+}

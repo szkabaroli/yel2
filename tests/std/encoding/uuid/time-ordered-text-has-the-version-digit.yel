@@ -1,0 +1,10 @@
+// ---
+// description: the text of a version 7 UUID has 7 as its version digit
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(uuid.to-string(uuid.time-ordered()).byte-at(14), 55);
+}

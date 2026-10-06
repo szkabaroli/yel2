@@ -1,0 +1,11 @@
+// ---
+// description: an option holding a list
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found: option<list<s32>> = some([1, 2,]);
+    expect.equal(expect.some(found).len(), 2);
+    expect.equal("{found}", "some([1, 2])");
+}

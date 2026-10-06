@@ -1,0 +1,10 @@
+// ---
+// description: filter keeps the items keep says to keep
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let evens = [1, 2, 3, 4, 5, 6,].filter({ n -> n % 2 == 0 });
+    expect.equal(evens, [2, 4, 6,]);
+}

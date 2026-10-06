@@ -1,0 +1,9 @@
+// ---
+// description: to-radix writes s64's least in binary
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-radix(s64.MIN, 2, false), "-1" + "0".repeat(63));
+}

@@ -1,0 +1,11 @@
+// ---
+// description: #line is the line it is written on
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let here = #line;
+    expect.equal(here, 8);
+    expect.equal(#line, 10);
+}

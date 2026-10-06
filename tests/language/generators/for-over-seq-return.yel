@@ -1,0 +1,26 @@
+// ---
+// description: return from a func inside a for over a seq stops the generator
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+let made: s32 = 0;
+
+counting: func() -> seq<s32> {
+    for x in 0..100 {
+        made += 1;
+        yield x;
+    }
+}
+
+first-above: func(floor: s32) -> s32 {
+    for value in counting() {
+        if value > floor { return value; }
+    }
+    -1
+}
+
+main: func() {
+    expect.equal(first-above(4), 5);
+    expect.equal(made, 6);
+}

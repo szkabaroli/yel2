@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: no func area
+// features: [types, type-methods]
+// negative: compile
+// error: 11:35: no func area
+// ---
+module shapes {
+    resource square { side: s64, }
+    area: func(s: square) -> s64 { s.side }
+}
+main: func() { let n = 3; let a = n.area(); }

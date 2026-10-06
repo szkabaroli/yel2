@@ -1,0 +1,12 @@
+// ---
+// description: push puts an item at the end
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs: list<s32> = [];
+    xs.push(1);
+    xs.push(2);
+    expect.equal(xs, [1, 2,]);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a record literal as a func's value after an if statement
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+make: func(c: bool) -> { a: s32, b: char } {
+    if c { }
+    { a: 1, b: if c { 'x' } else { 'y' }, }
+}
+
+main: func() {
+    expect.equal(make(true).b, 'x');
+    expect.equal(make(false).b, 'y');
+    expect.equal(make(true).a, 1);
+}

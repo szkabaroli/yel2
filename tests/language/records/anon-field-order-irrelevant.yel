@@ -1,0 +1,13 @@
+// ---
+// description: an anonymous record's fields may be written in any order
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+type point = { x: s32, y: s32 };
+
+main: func() {
+    let a = { x: 1, y: 2, };
+    let b: point = { y: 2, x: 1, };
+    expect.holds(a == b);
+}

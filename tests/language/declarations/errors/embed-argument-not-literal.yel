@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: #embed takes the file's path, a string written out: #embed("motd.txt")
+// features: [declarations,directives]
+// negative: compile
+// error: 9:16: #embed takes the file's path, a string written out: #embed("motd.txt")
+// ---
+main: func() {
+    let name = "a.txt";
+    let text = #embed(name);
+}

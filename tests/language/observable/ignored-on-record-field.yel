@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: @(ignored) on a record's field
+// features: [observable]
+// negative: compile
+// error: 7:27: @(ignored) is for a field of an @(observable) resource: Point is not one
+// ---
+record Point { @(ignored) x: s32, y: s32, }
+main: func() {}

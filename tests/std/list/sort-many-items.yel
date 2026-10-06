@@ -1,0 +1,13 @@
+// ---
+// description: sort puts a long list in order
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs: list<s32> = [];
+    for index in 0..100 { xs.push((index * 37) % 101); }
+    xs.sort({ a, b -> a < b });
+    for index in 1..100 { expect.holds(xs[index - 1] <= xs[index]); }
+    expect.equal(xs.len(), 100);
+}

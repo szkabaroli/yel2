@@ -1,0 +1,13 @@
+// ---
+// description: a readonly list may be read: len, index, join, contains
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let fixed: list<string> & readonly = ["ada", "grace", "barbara",];
+    expect.equal(fixed.len(), 3);
+    expect.equal(fixed[0], "ada");
+    expect.equal(fixed.join("-"), "ada-grace-barbara");
+    expect.holds(fixed.contains("grace"));
+    expect.holds(!fixed.contains("linus"));
+}

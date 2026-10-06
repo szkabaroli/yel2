@@ -1,0 +1,10 @@
+// ---
+// description: {name} puts a variable's text in the string
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    expect.equal("hello {name}", "hello yel");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: parse-int refuses a number of very many digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int("123456789012345678901234567890"));
+}

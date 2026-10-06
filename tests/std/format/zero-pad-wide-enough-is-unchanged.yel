@@ -1,0 +1,10 @@
+// ---
+// description: zero-pad leaves a number that is as wide as the width
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.zero-pad("12345", 3), "12345");
+    expect.equal(format.zero-pad("-12", 3), "-12");
+}

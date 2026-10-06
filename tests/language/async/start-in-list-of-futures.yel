@@ -1,0 +1,18 @@
+// ---
+// description: futures kept in a list and waited for one by one
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+square: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x * x
+}
+
+main: async func() {
+    let futures: list<future<s32>> = [];
+    for x in 1..=4 { futures.push(start square(x)); }
+    let total = 0;
+    for future in futures { total += wait future; }
+    expect.equal(total, 30);
+}

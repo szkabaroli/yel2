@@ -1,0 +1,13 @@
+// ---
+// description: let with nested record patterns
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+record Point { x: s32, y: s32, }
+record Line { from: Point, to: Point, }
+main: func() {
+    let line: Line = { from: { x: 1, y: 2, }, to: { x: 3, y: 4, }, };
+    let { from: { x: fx, y: _ }, to: { y: ty, x: _ } } = line;
+    expect.equal(fx, 1);
+    expect.equal(ty, 4);
+}

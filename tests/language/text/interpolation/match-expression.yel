@@ -1,0 +1,10 @@
+// ---
+// description: a match expression works inside an interpolation
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let code = 2;
+    expect.equal("{match code { 1 => "one", 2 => "two", _ => "many", }}", "two");
+}

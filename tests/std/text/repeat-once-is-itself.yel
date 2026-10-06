@@ -1,0 +1,9 @@
+// ---
+// description: repeat once is the string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("ab".repeat(1), "ab");
+}

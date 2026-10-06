@@ -1,0 +1,20 @@
+// ---
+// description: a method taking more arguments after its receiver
+// features: [types, type-methods]
+// ---
+from "std:testing" include expect;
+
+module counters {
+    resource counter { total: s32, }
+
+    made: func() -> counter { { total: 0, } }
+
+    bump: func(target: counter, by: s32) { target.total += by; }
+}
+
+main: func() {
+    let tally = counters.made();
+    tally.bump(2);
+    tally.bump(5);
+    expect.equal(tally.total, 7);
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a func named async is a func, called without a wait
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+async: func(n: s64) -> s64 { n + 1 }
+
+main: func() {
+    expect.equal(async(1), 2);
+}

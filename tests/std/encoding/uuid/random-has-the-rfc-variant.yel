@@ -1,0 +1,10 @@
+// ---
+// description: uuid.random sets the two top bits of the last half to 10
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    for index in 0..20 { expect.equal(uuid.random().low >> 62, 2); }
+}

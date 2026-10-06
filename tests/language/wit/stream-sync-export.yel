@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: a stream or a future crosses WIT only in an async func's type: make nums async
+// features: [wit]
+// negative: compile
+// error: 8:5: a stream or a future crosses WIT only in an async func's type: make nums async
+// ---
+module api {
+    nums: func() -> stream<s32> {
+        let (s, w) = stream-pair(1);
+        s
+    }
+}

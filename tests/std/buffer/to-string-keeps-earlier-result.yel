@@ -1,0 +1,14 @@
+// ---
+// description: a string handed out earlier keeps its bytes as the buffer grows
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(2);
+    b.push("ab");
+    let first = b.to-string();
+    b.push("cdefghijklmnopqrstuvwxyz");
+    expect.equal(first, "ab");
+    expect.equal(b.to-string().len(), 26);
+}

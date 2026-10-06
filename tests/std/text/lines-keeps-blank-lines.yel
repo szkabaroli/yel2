@@ -1,0 +1,9 @@
+// ---
+// description: lines keeps empty lines between others
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a\n\nb".lines(), ["a", "", "b",]);
+}

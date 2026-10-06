@@ -1,0 +1,13 @@
+// ---
+// description: an alias may be declared after the func that uses it
+// features: [declarations,types]
+// ---
+from "std:testing" include expect;
+
+make: func() -> later { 9 }
+
+type later = s32;
+
+main: func() {
+    expect.equal(make(), 9);
+}

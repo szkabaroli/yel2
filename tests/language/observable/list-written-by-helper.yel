@@ -1,0 +1,30 @@
+// ---
+// description: a func that writes the list it is given tells readers of the field
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+add: func(items: list<string>, item: string) { items.push(item); }
+
+main: func() {
+    let profile = fresh();
+    let told = 0;
+    let watch = observe.track({ -> let _ = profile.items; }, { -> told += 1; });
+    add(profile.items, "two");
+    expect.equal(told, 1);
+    expect.equal(profile.items, ["two",]);
+}

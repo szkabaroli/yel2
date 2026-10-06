@@ -1,0 +1,12 @@
+// ---
+// description: char literals with escapes
+// features: [types, chars]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('\n' as u32, 10);
+    expect.equal('\t' as u32, 9);
+    expect.equal('\\' as u32, 92);
+    expect.equal('\'' as u32, 39);
+}

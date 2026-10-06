@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex flag x is not one of i, m and s
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /a/x: no flag x: the flags are i, m and s
+// ---
+main: func() {
+    let found = /a/x;
+}

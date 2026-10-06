@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: func run is declared twice
+// features: [declarations,funcs]
+// negative: compile
+// error: 8:1: func run is declared twice
+// ---
+run: func(value: s64) -> s64 { value }
+run: func(value: s64) -> s64 { value }
+
+main: func() {}

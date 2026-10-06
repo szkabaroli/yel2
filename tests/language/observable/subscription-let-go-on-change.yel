@@ -1,0 +1,49 @@
+// ---
+// description: an effect that opens a stream for an id lets the old one go when the id changes
+// features: [observable, async, streams]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Feed {
+    id: u32,
+    last: string,
+    @(ignored) run: u64,
+}
+
+pump: async func(feed: Feed, run: u64, messages: stream<string>) {
+    wait for message in messages {
+        if feed.run != run { return; }
+        feed.last = message;
+        reactive.flush();
+    }
+}
+
+source: func(id: u32) -> stream<string> {
+    let (messages, out) = stream-pair(4);
+    let _ = start emit(out, id);
+    messages
+}
+
+emit: async func(out: writer<string>, id: u32) {
+    wait yield-turn();
+    wait out.write("from {id}");
+    out.close();
+}
+
+main: async func() {
+    let feed: Feed = { id: 1, last: "", run: 0, };
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ ->
+            let id = feed.id;
+            feed.run += 1;
+            let _ = start pump(feed, feed.run, source(id));
+            { -> feed.run += 1; }
+        });
+    });
+    feed.id = 2;
+    reactive.flush();
+    for turn in 0..6 { wait yield-turn(); }
+    expect.equal(feed.last, "from 2");
+    reactive.dispose(owner);
+}

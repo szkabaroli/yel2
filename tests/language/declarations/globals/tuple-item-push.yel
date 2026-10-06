@@ -1,0 +1,13 @@
+// ---
+// description: a list inside a tuple global may be pushed to
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let pair: tuple<s32, list<s64>>;
+
+main: func() {
+    pair.1.push(5);
+    expect.equal(pair.1.len(), 1);
+    expect.equal(pair.1[0], 5);
+}

@@ -1,0 +1,18 @@
+// ---
+// description: a stream may carry options, read as option of option
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(4);
+    let nothing: option<s32> = none;
+    wait out.write(some(1));
+    wait out.write(nothing);
+    out.close();
+    let first = expect.some(wait items.read());
+    expect.equal(expect.some(first), 1);
+    let second = expect.some(wait items.read());
+    expect.none(second);
+    expect.none(wait items.read());
+}

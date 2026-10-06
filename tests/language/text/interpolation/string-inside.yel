@@ -1,0 +1,10 @@
+// ---
+// description: a string literal inside an interpolation holds its own quotes
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a{"b"}c", "abc");
+    expect.equal("{"x y"}", "x y");
+}

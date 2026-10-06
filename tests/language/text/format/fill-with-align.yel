@@ -1,0 +1,12 @@
+// ---
+// description: a fill character comes before the alignment
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    expect.equal("[{name:->6}]", "[---yel]");
+    expect.equal("[{name:*<6}]", "[yel***]");
+    expect.equal("[{name:-^7}]", "[--yel--]");
+}

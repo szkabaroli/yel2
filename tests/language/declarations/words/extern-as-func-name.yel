@@ -1,0 +1,11 @@
+// ---
+// description: a func named extern is a func, not an extern declaration
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+extern: func() -> string { "not an extern" }
+
+main: func() {
+    expect.equal(extern(), "not an extern");
+}

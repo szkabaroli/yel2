@@ -1,0 +1,10 @@
+// ---
+// description: parse-float refuses spaces
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float(" 1"));
+    expect.none(number.parse-float("1 "));
+}

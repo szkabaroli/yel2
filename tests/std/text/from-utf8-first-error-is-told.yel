@@ -1,0 +1,9 @@
+// ---
+// description: from-utf8 tells the first break only
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([97, 98, 255, 255,]), err(2));
+}

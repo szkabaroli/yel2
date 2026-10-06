@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /(a)\1/ uses a back reference, which is not compiled
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /(a)\1/: \1: back references are not compiled
+// ---
+main: func() {
+    let found = /(a)\1/;
+}

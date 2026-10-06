@@ -1,0 +1,12 @@
+// ---
+// description: loop is a name where no brace follows it
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+record cycle { loop: s32, }
+
+main: func() {
+    let one: cycle = { loop: 4, };
+    expect.equal(one.loop, 4);
+}

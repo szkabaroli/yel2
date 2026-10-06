@@ -1,0 +1,15 @@
+// ---
+// description: does not compile: a handler is an on. attribute, a closure: on.click: { -> … }
+// features: [views]
+// negative: compile
+// error: 11:17: a handler is an on. attribute, a closure: on.click: { -> … }
+// ---
+module m {
+    view Old {
+        VStack {
+            Button {
+                on click { }
+            }
+        }
+    }
+}

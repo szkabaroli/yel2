@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: std has no package missing
+// features: [std]
+// negative: compile
+// error: 8:1: no package std:missing
+// note: looked for missing/ in runtime/std, and for WASI's wasi:missing in runtime/wit
+// ---
+from "std:missing" include thing;
+
+main: func() {
+    let value = 1;
+}

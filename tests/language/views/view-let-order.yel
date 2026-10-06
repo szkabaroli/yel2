@@ -1,0 +1,17 @@
+// ---
+// description: does not compile: total reads later, declared after it: a field's value reads only those declared before it
+// features: [views]
+// negative: compile
+// error: 11:26: total reads later, declared after it: a field's value reads only those declared before it
+// error: 13:37: self-made reads itself: a field's value reads only those declared before it
+// ---
+module counts-view {
+    view Counts {
+        items: list<string> = [];
+        let total: s32 = later;
+        let later: s32 = items.len() as s32;
+        @(private) self-made: s32 = self-made;
+
+        VStack { }
+    }
+}

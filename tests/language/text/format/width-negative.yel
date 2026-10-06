@@ -1,0 +1,11 @@
+// ---
+// description: a width counts the sign of a negative integer
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = -42;
+    expect.equal("[{value:6}]", "[   -42]");
+    expect.equal("[{value:<6}]", "[-42   ]");
+}

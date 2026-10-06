@@ -1,0 +1,14 @@
+// ---
+// description: an if as a value inside the branch of another
+// features: [control]
+// ---
+from "std:testing" include expect;
+pick: func(a: bool, b: bool) -> s32 {
+    if a { if b { 1 } else { 2 } } else { if b { 3 } else { 4 } }
+}
+main: func() {
+    expect.equal(pick(true, true), 1);
+    expect.equal(pick(true, false), 2);
+    expect.equal(pick(false, true), 3);
+    expect.equal(pick(false, false), 4);
+}

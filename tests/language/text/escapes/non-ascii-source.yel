@@ -1,0 +1,11 @@
+// ---
+// description: non-ASCII text written in a string is kept as UTF-8
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "héllo wörld €";
+    expect.equal(text.len(), 17);
+    expect.equal(text.byte-at(1), 195);
+}

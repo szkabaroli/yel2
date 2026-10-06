@@ -1,0 +1,23 @@
+// ---
+// description: a race with a future already done gives it without waiting for the other
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+now: async func() -> s32 { 1 }
+
+later: async func() -> string {
+    for turn in 0..10 { wait yield-turn(); }
+    "later"
+}
+
+main: async func() {
+    let first = start now();
+    let second = start later();
+    wait yield-turn();
+    match wait first | second {
+        let number: s32 => expect.equal(number, 1),
+        let text: string => expect.fail("the later one won"),
+    }
+    wait second;
+}

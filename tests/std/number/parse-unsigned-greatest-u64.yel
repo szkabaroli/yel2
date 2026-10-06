@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned reads the greatest u64
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-unsigned("18446744073709551615"), some(u64.MAX));
+}

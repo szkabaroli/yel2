@@ -1,0 +1,26 @@
+// ---
+// description: ok(()) matches ok(()) and bare ok
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+run: func(fails: bool) -> result<(), string> {
+    if fails { return err("failed"); }
+    ok(())
+}
+
+main: func() {
+    let result = run(false);
+    let paren = false;
+    match result {
+        ok(()) => { paren = true; }
+        err(_) => {}
+    }
+    expect.holds(paren);
+    let bare = false;
+    match result {
+        ok => { bare = true; }
+        err(_) => {}
+    }
+    expect.holds(bare);
+}

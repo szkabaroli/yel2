@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a Node has no zero value for the global head to start as
+// features: [declarations]
+// negative: compile
+// error: 8:1: a Node has no zero value for the global head to start as
+// ---
+resource Node { value: s64, }
+let head: Node;
+main: func() {}

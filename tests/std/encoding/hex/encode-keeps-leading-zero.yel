@@ -1,0 +1,10 @@
+// ---
+// description: hex.encode writes a leading zero for a small byte
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(hex.encode([1,]), "01");
+}

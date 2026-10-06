@@ -1,0 +1,17 @@
+// ---
+// description: a module's own func of a name is a method before the standard library's
+// features: [funcs, methods]
+// ---
+from "std:testing" include expect;
+
+module mine {
+    contains: func(x: s32) -> bool { x > 0 }
+    run: func() {
+        let xs = ["x", "y",];
+        expect.holds(xs.contains("y"));
+        expect.holds(contains(3));
+        expect.holds(!contains(-3));
+    }
+}
+
+main: func() { mine.run(); }

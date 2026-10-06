@@ -1,0 +1,11 @@
+// ---
+// description: chars order as their code points do as integers
+// features: [types, chars]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let first: char = 'é';
+    let second: char = 'z';
+    expect.holds((first as u32 > second as u32) == (first > second));
+}

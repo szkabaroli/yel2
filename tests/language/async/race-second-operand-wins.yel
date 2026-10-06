@@ -1,0 +1,25 @@
+// ---
+// description: the second operand of a race may be the winner
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+quick: async func() -> string {
+    wait yield-turn();
+    "quick"
+}
+
+slow: async func() -> s32 {
+    for turn in 0..10 { wait yield-turn(); }
+    2
+}
+
+main: async func() {
+    let first = start slow();
+    let second = start quick();
+    match wait first | second {
+        let number: s32 => expect.fail("the slow one won"),
+        let text: string => expect.equal(text, "quick"),
+    }
+    wait first;
+}

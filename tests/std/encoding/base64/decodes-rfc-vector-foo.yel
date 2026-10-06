@@ -1,0 +1,10 @@
+// ---
+// description: base64.decode of 'Zm9v'
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    expect.equal(expect.ok(base64.decode("Zm9v")), "foo".bytes());
+}

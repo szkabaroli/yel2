@@ -1,0 +1,11 @@
+// ---
+// description: sort takes the opposite order from a greater-than
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [5, 3, 9, 1, 4,];
+    xs.sort({ a, b -> a > b });
+    expect.equal(xs, [9, 5, 4, 3, 1,]);
+}

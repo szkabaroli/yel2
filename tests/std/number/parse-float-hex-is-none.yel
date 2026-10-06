@@ -1,0 +1,9 @@
+// ---
+// description: parse-float refuses a hex number
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("0x10"));
+}

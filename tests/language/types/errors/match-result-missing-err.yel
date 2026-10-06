@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: the match has no arm for err(_): add one, or a _ arm
+// features: [types, result]
+// negative: compile
+// error: 9:5: the match has no arm for err(_): add one, or a _ arm
+// ---
+main: func() {
+    let a: result<s32, string> = ok(1);
+    match a {
+        ok(v) => {}
+    }
+}

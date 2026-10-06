@@ -1,0 +1,15 @@
+// ---
+// description: a generic func is compiled for each type it is called with
+// features: [types, generics]
+// ---
+from "std:testing" include expect;
+
+first-or: func<T>(items: list<T>, fallback: T) -> T {
+    if items.len() > 0 { items[0] } else { fallback }
+}
+
+main: func() {
+    expect.equal(first-or([3, 4,], 0), 3);
+    expect.equal(first-or([], "none"), "none");
+    expect.equal(first-or([true,], false), true);
+}

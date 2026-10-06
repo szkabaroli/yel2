@@ -1,0 +1,12 @@
+// ---
+// description: a u64 cast to a float is not read as negative
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: u64 = 18446744073709551615;
+    expect.holds(top as f64 > 1.0e19);
+    let high: u32 = 4294967295;
+    expect.equal(high as f64, 4294967295.0);
+}

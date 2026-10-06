@@ -1,0 +1,11 @@
+// ---
+// description: the loop variable of a range has the bounds' type
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let start: s64 = 5;
+    let sum: s64 = 0;
+    for i in start..8 { sum += i; }
+    expect.equal(sum, 18);
+}

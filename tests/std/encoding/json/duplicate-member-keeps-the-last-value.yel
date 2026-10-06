@@ -1,0 +1,18 @@
+// ---
+// description: json.parse keeps the last value of a name given twice
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    expect.equal(again("\{\"x\":1,\"x\":2\}"), "\{\"x\":2\}");
+}

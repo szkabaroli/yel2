@@ -1,8 +1,0 @@
-// error: 4:38: readonly is wanted here: stream-items may give back a value another name has (make it in the func, or give back one no one else has)
-main: async func() {
-    let (s, w) = stream-pair(8);
-    let seen: list<s32> & readonly = stream-items(s);
-    print("seen {seen}\n");
-    wait w.write(5);
-    print("seen {seen}\n");
-}

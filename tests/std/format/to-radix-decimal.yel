@@ -1,0 +1,9 @@
+// ---
+// description: to-radix writes base 10
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-radix(1234, 10, false), "1234");
+}

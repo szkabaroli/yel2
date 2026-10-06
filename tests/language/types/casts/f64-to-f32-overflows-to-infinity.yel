@@ -1,0 +1,11 @@
+// ---
+// description: an f64 past f32's range cast to f32 is an infinity
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let large: f64 = 1e300;
+    expect.equal(large as f32, inf);
+    expect.equal(-large as f32, -inf);
+}

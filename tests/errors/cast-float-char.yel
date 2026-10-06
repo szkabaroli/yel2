@@ -1,5 +1,0 @@
-// error: 4:13: f64 as char: as gives a char only from an integer, and a float only from a number
-main: func() {
-    let x: f64 = 65.0;
-    let c = x as char;
-}

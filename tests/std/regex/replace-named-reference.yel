@@ -1,0 +1,9 @@
+// ---
+// description: replace takes $<name> as the text of a named group
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/(?<word>\w+)/.replace-all("a b", "[$<word>]"), "[a] [b]");
+}

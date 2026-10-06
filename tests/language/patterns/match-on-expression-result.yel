@@ -1,0 +1,10 @@
+// ---
+// description: the matched value may be any expression
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let xs = [1, 2, 3,];
+    let text = match xs.len() { 3 => "three", _ => "other", };
+    expect.equal(text, "three");
+}

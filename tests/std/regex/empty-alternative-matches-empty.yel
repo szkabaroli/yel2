@@ -1,0 +1,9 @@
+// ---
+// description: an empty alternative lets the group match nothing
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(/a(b|)c/.find("ac")).text, "ac");
+}

@@ -1,0 +1,13 @@
+// ---
+// description: set on a key that is there replaces its value
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    m.set("a", 2);
+    expect.equal(m["a"], 2);
+    expect.equal(m.len(), 1);
+}

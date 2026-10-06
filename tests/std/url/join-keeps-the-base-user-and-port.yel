@@ -1,0 +1,12 @@
+// ---
+// description: join keeps the user, password and port of its base
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let base = expect.ok(url.parse("https://ada:pw@h:8443/a/b"));
+    let joined = expect.ok(url.join(base, "c?x=1"));
+    expect.equal(url.write(joined), "https://ada:pw@h:8443/a/c?x=1");
+}

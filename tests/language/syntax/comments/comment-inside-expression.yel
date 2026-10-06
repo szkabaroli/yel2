@@ -1,0 +1,12 @@
+// ---
+// description: a comment may sit between the parts of one expression
+// features: [syntax,comments]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let total = 1 + // one
+        2 + // two
+        3;
+    expect.equal(total, 6);
+}

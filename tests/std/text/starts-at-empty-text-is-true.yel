@@ -1,0 +1,11 @@
+// ---
+// description: starts-at with empty text is true at any place inside or at the end
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("hello".starts-at(0, ""));
+    expect.holds("hello".starts-at(5, ""));
+    expect.holds(!"hello".starts-at(6, ""));
+}

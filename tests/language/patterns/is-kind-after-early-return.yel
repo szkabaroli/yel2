@@ -1,0 +1,13 @@
+// ---
+// description: after returning on a kind the rest is the other kind
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+length: func(value: s32 | string) -> s64 {
+    if value is s32 { return -1; }
+    value.len()
+}
+main: func() {
+    expect.equal(length(5), -1);
+    expect.equal(length("four"), 4);
+}

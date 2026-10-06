@@ -1,0 +1,20 @@
+// ---
+// description: records that never leave their func (inlined into the loop) give the right sums
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Vec { x: s32, y: s32, }
+
+add: func(a: Vec, b: Vec) -> Vec { { x: a.x + b.x, y: a.y + b.y, } }
+
+scale: func(v: Vec, k: s32) -> Vec { { x: v.x * k, y: v.y * k, } }
+
+main: func() {
+    let total = 0;
+    for i in 0..10000 {
+        let v = add({ x: i, y: 1, }, scale({ x: 2, y: 3, }, i % 7));
+        total += v.x + v.y;
+    }
+    expect.equal(total, 50154970);
+}

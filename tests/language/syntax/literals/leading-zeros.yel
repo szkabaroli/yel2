@@ -1,0 +1,11 @@
+// ---
+// description: leading zeros do not make an integer octal: 007 is 7
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(007, 7);
+    expect.equal(010, 10);
+    expect.equal(000, 0);
+}

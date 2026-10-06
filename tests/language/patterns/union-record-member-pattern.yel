@@ -1,0 +1,18 @@
+// ---
+// description: a record pattern on a union of kinds tests the record's kind
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+record Point { x: s32, y: s32, }
+describe: func(value: Point | string) -> string {
+    match value {
+        { x: 0, y: let y } => "on the axis at {y}",
+        let p: Point => "point {p.x}",
+        let s: string => "text",
+    }
+}
+main: func() {
+    expect.equal(describe({ x: 0, y: 4, }), "on the axis at 4");
+    expect.equal(describe({ x: 2, y: 4, }), "point 2");
+    expect.equal(describe("a"), "text");
+}

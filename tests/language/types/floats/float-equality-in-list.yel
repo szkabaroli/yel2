@@ -1,0 +1,11 @@
+// ---
+// description: == on lists of floats is by identity, items by value
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let values: list<f64> = [1.5, 2.5,];
+    expect.equal(values[0] + values[1], 4.0);
+    expect.holds(values[0] < values[1]);
+}

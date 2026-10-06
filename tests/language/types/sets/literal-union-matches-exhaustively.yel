@@ -1,0 +1,20 @@
+// ---
+// description: a match over a union of string literals needs each value
+// features: [types, sets, match]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post" | "put";
+
+describe: func(which: method) -> string {
+    match which {
+        "get" => "read",
+        "post" | "put" => "write",
+    }
+}
+
+main: func() {
+    expect.equal(describe("get"), "read");
+    expect.equal(describe("post"), "write");
+    expect.equal(describe("put"), "write");
+}

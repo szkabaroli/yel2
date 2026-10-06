@@ -1,0 +1,11 @@
+// ---
+// description: a char in an interpolation shows as itself
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let letter = 'q';
+    expect.equal("{letter}", "q");
+    expect.equal("{'\u{e9}'}", "é");
+}

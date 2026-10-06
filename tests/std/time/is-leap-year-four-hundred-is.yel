@@ -1,0 +1,11 @@
+// ---
+// description: a year divisible by 400 is a leap year
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.holds(time.is-leap-year(2000));
+    expect.holds(time.is-leap-year(1600));
+}

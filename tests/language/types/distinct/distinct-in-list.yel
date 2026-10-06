@@ -1,0 +1,14 @@
+// ---
+// description: a list of a distinct type
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+main: func() {
+    let ids: list<binding> = [1 as binding, 2 as binding,];
+    expect.equal(ids.len(), 2);
+    expect.equal(ids[1] as u32, 2);
+    expect.equal("{ids}", "[1, 2]");
+}

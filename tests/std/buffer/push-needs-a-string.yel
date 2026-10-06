@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: buffer.push takes a string, not a number
+// features: [buffer]
+// negative: compile
+// error: 9:19: argument 2 of yel:std/buffer.push: expected string, found an integer
+// ---
+main: func() {
+    let gathered = buffer(0);
+    gathered.push(5);
+}

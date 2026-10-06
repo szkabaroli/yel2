@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: @(container) and @(base) go on a widget (widget Name { … })
+// features: [views]
+// negative: compile
+// error: 9:5: @(container) and @(base) go on a widget (widget Name { … })
+// ---
+module ui {
+    @(container)
+    record Card { title: string, }
+}

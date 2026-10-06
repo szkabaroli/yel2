@@ -1,0 +1,10 @@
+// ---
+// description: time.parse of "nope" is refused
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.err(time.parse("nope"));
+}

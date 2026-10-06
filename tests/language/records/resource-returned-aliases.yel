@@ -1,0 +1,17 @@
+// ---
+// description: a resource returned from a func is the same object
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+same: func(counter: Counter) -> Counter { counter }
+
+main: func() {
+    let a: Counter = { value: 1, };
+    let back = same(a);
+    back.value = 7;
+    expect.equal(a.value, 7);
+    expect.holds(back == a);
+}

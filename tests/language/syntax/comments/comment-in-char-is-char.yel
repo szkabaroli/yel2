@@ -1,0 +1,10 @@
+// ---
+// description: a slash in a char literal starts no comment
+// features: [syntax,comments]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let slash = '/';
+    expect.equal(slash as u32, 47);
+}

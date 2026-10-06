@@ -1,0 +1,14 @@
+// ---
+// description: a readonly value is matched like any value
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Team { name: string, members: list<string>, }
+main: func() {
+    let team: Team & readonly = { name: "core", members: ["ada", "grace",], };
+    let text = match team {
+        let { name: "core", members } => "core has {members.len()}",
+        _ => "other",
+    };
+    expect.equal(text, "core has 2");
+}

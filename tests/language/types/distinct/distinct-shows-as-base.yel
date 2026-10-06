@@ -1,0 +1,13 @@
+// ---
+// description: a distinct value shows as its base does
+// features: [types, distinct, display]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+
+main: func() {
+    let id = 3 as binding;
+    expect.equal("{id}", "3");
+    expect.equal("{id:?}", "3");
+}

@@ -1,0 +1,15 @@
+// ---
+// description: does not compile: out is used after it is moved
+// features: [readonly]
+// negative: compile
+// error: 13:5: out is used after it is moved
+// ---
+from "wasi:cli" include stdout;
+
+main: async func() {
+    let (out, w) = stream-pair(4);
+    w.close();
+    let written = stdout.write-via-stream(out);
+    out;
+    wait written;
+}

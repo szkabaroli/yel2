@@ -1,0 +1,11 @@
+// ---
+// description: unary minus before an integer literal gives a negative number
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(-5, 0 - 5);
+    expect.equal(-0x10, -16);
+    expect.equal(- 7, -7);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: true is 1 and false is 0
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(true as s32, 1);
+    expect.equal(false as s32, 0);
+    expect.equal(true as u8, 1);
+    expect.equal(false as u64, 0);
+    expect.equal(true as s8, 1);
+}

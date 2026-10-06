@@ -1,0 +1,14 @@
+// ---
+// description: push adds an item to a list and a string to a buffer
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs: list<s32> = [];
+    xs.push(1);
+    let b = buffer(2);
+    b.push("a");
+    expect.equal(xs, [1,]);
+    expect.equal(b.to-string(), "a");
+}

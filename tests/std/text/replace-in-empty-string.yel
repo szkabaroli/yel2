@@ -1,0 +1,9 @@
+// ---
+// description: replace in an empty string gives an empty string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("".replace("a", "b"), "");
+}

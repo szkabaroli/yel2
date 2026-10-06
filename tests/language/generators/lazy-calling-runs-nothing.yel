@@ -1,0 +1,20 @@
+// ---
+// description: calling a generator runs nothing until it is read
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+noisy: func() -> seq<s32> {
+    log.push("start");
+    yield 1;
+    log.push("end");
+}
+
+main: func() {
+    let lazy = noisy();
+    expect.equal(log.len(), 0);
+    for value in lazy { log.push("got {value}"); }
+    expect.equal(log, ["start", "got 1", "end",]);
+}

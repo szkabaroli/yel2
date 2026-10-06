@@ -1,0 +1,10 @@
+// ---
+// description: time.parse refuses a word
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(expect.err(time.parse("nope")), "a year is four digits, at 0");
+}

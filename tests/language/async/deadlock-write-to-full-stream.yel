@@ -1,0 +1,12 @@
+// ---
+// description: a writer of a full stream whose reader is held but never reads: a deadlock
+// features: [async, streams]
+// exit: 1
+// ---
+main: async func() {
+    let (items, out) = stream-pair(1);
+    let held = [items,];
+    wait out.write(1);
+    wait out.write(2);
+    print("{held.len()}\n");
+}

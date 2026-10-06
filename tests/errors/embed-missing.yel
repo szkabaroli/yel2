@@ -1,9 +1,0 @@
-// error: 6:16: #embed: cannot read tests/errors/no-such-file.txt
-// error: 7:16: #embed takes the file's path, a string written out: #embed("motd.txt")
-
-main: func() {
-    let name = "a.txt";
-    let text = #embed("no-such-file.txt");
-    let more = #embed(name);
-    print("{text}{more}\n");
-}

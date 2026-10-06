@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: the right of ==: expected Point, found Counter
+// features: [records, resources]
+// negative: compile
+// error: 12:18: the right of ==: expected Point, found Counter
+// ---
+record Point { x: s32, y: s32, }
+resource Counter { value: s32, }
+main: func() {
+    let p: Point = { x: 1, y: 2, };
+    let c: Counter = { value: 1, };
+    print("{p == c}\n");
+}

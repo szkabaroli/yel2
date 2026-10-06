@@ -1,0 +1,10 @@
+// ---
+// description: time.parse refuses an expanded year of five digits
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(expect.err(time.parse("+12345-01-01")), "an expanded year is a sign and six digits, at 0");
+}

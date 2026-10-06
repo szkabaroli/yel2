@@ -1,0 +1,9 @@
+// ---
+// description: replace changes every occurrence
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a-b-c".replace("-", " + "), "a + b + c");
+}

@@ -1,0 +1,13 @@
+// ---
+// description: loop runs until break
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 0;
+    loop {
+        n += 1;
+        if n == 5 { break; }
+    }
+    expect.equal(n, 5);
+}

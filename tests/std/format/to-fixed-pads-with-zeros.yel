@@ -1,0 +1,9 @@
+// ---
+// description: to-fixed writes zeros to fill the digits
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.to-fixed(1.5, 4), "1.5000");
+}

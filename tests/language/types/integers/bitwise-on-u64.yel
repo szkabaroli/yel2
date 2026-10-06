@@ -1,0 +1,13 @@
+// ---
+// description: & | ^ work across all 64 bits
+// features: [types, integers, bitwise]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let ones: u64 = 18446744073709551615;
+    let high: u64 = 9223372036854775808;
+    expect.equal(ones & high, high);
+    expect.equal(ones ^ high, 9223372036854775807);
+    expect.equal(high | 1, 9223372036854775809);
+}

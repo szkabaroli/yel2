@@ -1,0 +1,16 @@
+// ---
+// description: a write in a closure is seen outside, and the other way round
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let total = 0;
+    let add = { n: s32 -> total += n; };
+    add(5);
+    add(7);
+    expect.equal(total, 12);
+    total += 100;
+    add(1);
+    expect.equal(total, 113);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: a duration under an hour shows minutes and seconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.seconds(90)}", "1m30s");
+}

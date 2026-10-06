@@ -1,0 +1,11 @@
+// ---
+// description: an s32 | string union holds a negated expression
+// features: [types, one-value, unions]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count: s32 = 5;
+    let held: s32 | string = -(count * 2);
+    expect.equal("{held}", "-10");
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a list can hold lists and read them back
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let rows: list<list<s32>> = [[1, 2,], [3,],];
+    rows[1].push(4);
+    expect.equal(rows, [[1, 2,], [3, 4,],]);
+    expect.equal(rows.map({ row -> row.len() }), [2, 2,]);
+}

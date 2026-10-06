@@ -1,0 +1,11 @@
+// ---
+// description: a global may start true
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let ready: bool = true;
+
+main: func() {
+    expect.holds(ready);
+}

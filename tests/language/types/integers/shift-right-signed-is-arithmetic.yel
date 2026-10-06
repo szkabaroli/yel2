@@ -1,0 +1,16 @@
+// ---
+// description: a signed >> keeps the sign
+// features: [types, integers, shifts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let negative: s32 = -8;
+    expect.equal(negative >> 1, -4);
+    expect.equal(negative >> 3, -1);
+    expect.equal(negative >> 30, -1);
+    let narrow: s8 = -128;
+    expect.equal(narrow >> 7, -1);
+    let wide: s64 = -1;
+    expect.equal(wide >> 63, -1);
+}

@@ -1,0 +1,27 @@
+// ---
+// description: an option of a union
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+maybe-id: func(n: s32) -> option<id> {
+    if n < 0 { return none; }
+    if n == 0 { return some("zero"); }
+    some(n)
+}
+
+text: func(found: option<id>) -> string {
+    match found {
+        some(let who) => "{who}",
+        none => "nothing",
+    }
+}
+
+main: func() {
+    expect.equal(text(maybe-id(-1)), "nothing");
+    expect.equal(text(maybe-id(0)), "zero");
+    expect.equal(text(maybe-id(7)), "7");
+    expect.equal("{maybe-id(7)}", "some(7)");
+}

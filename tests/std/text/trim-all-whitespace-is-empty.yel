@@ -1,0 +1,11 @@
+// ---
+// description: trim of only whitespace is empty
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("   ".trim(), "");
+    expect.equal(" \t\n".trim-start(), "");
+    expect.equal(" \t\n".trim-end(), "");
+}

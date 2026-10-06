@@ -1,0 +1,16 @@
+// ---
+// description: an arm's block has statements and ends in a value
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 3;
+    let result = match n {
+        3 => {
+            let doubled = n * 2;
+            doubled + 1
+        }
+        _ => 0,
+    };
+    expect.equal(result, 7);
+}

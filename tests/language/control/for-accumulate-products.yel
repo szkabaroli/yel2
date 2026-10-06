@@ -1,0 +1,12 @@
+// ---
+// description: nested for with an inclusive range bound by the outer variable
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let total = 0;
+    for i in 1..4 {
+        for j in 1..=i { total += i * j; }
+    }
+    expect.equal(total, 25);
+}

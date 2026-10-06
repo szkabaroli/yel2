@@ -1,0 +1,10 @@
+// ---
+// description: some(0) is some, not none
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(some(0).is-some());
+    expect.equal(some(0).unwrap-or(9), 0);
+}

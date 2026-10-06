@@ -1,0 +1,10 @@
+// ---
+// description: weekday of 1 January 1970 is 4, Thursday
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.weekday(time.to-date-time(time.from-unix-millis(0))), 4);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: substring from 0 to len is the whole string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".substring(0, 5), "hello");
+}

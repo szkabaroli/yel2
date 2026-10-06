@@ -1,0 +1,14 @@
+// ---
+// description: a call that never returns inside a list literal's if
+// features: [types, never]
+// ---
+from "std:testing" include expect;
+
+twice: func(text: string) -> string { text + text }
+
+main: func() {
+    let value = 5;
+    let words = ["a", if value > 100 { twice(panic("never taken")) } else { "b" },];
+    expect.equal(words.len(), 2);
+    expect.equal(words[1], "b");
+}

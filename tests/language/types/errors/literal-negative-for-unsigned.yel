@@ -1,0 +1,9 @@
+// ---
+// description: a negative literal does not fit an unsigned type (it compiles and wraps instead)
+// features: [types, integers]
+// negative: compile
+// error: 8:22: -1 is out of range for u8
+// ---
+main: func() {
+    let value: u8 = -1;
+}

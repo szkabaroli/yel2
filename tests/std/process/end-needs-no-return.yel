@@ -1,0 +1,27 @@
+// ---
+// description: end can stand where a value is wanted
+// features: [process]
+// ---
+from "std:testing" include expect;
+from "std:process" include process;
+
+// how a child ended: its code, or minus its signal
+status: func(ended: result<process.ended, string>) -> s64 {
+    match ended {
+        ok(code(number)) => number,
+        ok(signal(number)) => -number,
+        err(_) => -1000,
+    }
+}
+
+main: func() {
+    let value: s32 = match process.fork() {
+        ok(none) => process.end(0),
+        ok(some(child)) => {
+            process.wait(child);
+            5
+        }
+        err(problem) => expect.fail(problem),
+    };
+    expect.equal(value, 5);
+}

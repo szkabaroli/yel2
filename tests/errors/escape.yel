@@ -1,5 +1,0 @@
-// error: 3:14: unknown escape \q
-main: func() -> s32 {
-    print("a \q");
-    0
-}

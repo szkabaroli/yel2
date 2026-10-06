@@ -1,0 +1,10 @@
+// ---
+// description: from-utf8 refuses code points past U+10FFFF
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([244, 144, 128, 128,]), err(0));
+    expect.equal(from-utf8([244, 143, 191, 191,]), ok("\u{10ffff}"));
+}

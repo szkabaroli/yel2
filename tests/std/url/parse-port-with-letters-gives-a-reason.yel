@@ -1,0 +1,10 @@
+// ---
+// description: parse tells why a port is refused
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(expect.err(url.parse("https://h:80x/")), "a port is digits: 80x");
+}

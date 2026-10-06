@@ -1,0 +1,14 @@
+// ---
+// description: a func value from a list or a call is called with ()
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+make: func() -> func() -> s32 { { 5 } }
+
+main: func() {
+    let greets: list<func() -> string> = [{ "a" }, { "b" },];
+    let i = 1;
+    expect.equal(greets[i](), "b");
+    expect.equal(make()(), 5);
+}

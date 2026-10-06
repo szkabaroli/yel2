@@ -1,0 +1,10 @@
+// ---
+// description: a and z, A and Z are in the case change's range
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("az".to-upper(), "AZ");
+    expect.equal("AZ".to-lower(), "az");
+}

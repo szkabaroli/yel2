@@ -1,0 +1,19 @@
+// ---
+// description: a generator's locals keep their values across yields
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+running-total: func(values: list<s32>) -> seq<s32> {
+    let total = 0;
+    for value in values {
+        total += value;
+        yield total;
+    }
+}
+
+main: func() {
+    let seen: list<s32> = [];
+    for value in running-total([1, 2, 3, 4,]) { seen.push(value); }
+    expect.equal(seen, [1, 3, 6, 10,]);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a tuple pattern of 3 on a tuple<an integer, an integer>
+// features: [patterns]
+// negative: compile
+// error: 8:5: a tuple pattern of 3 on a tuple<an integer, an integer>
+// ---
+main: func() -> s32 {
+    let (a, b, c) = (1, 2);
+    a
+}

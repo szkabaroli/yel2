@@ -1,0 +1,10 @@
+// ---
+// description: decode reads hex digits in either case
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("%c3%a9"), ok("é"));
+}

@@ -1,0 +1,11 @@
+// ---
+// description: expect.not-equal passes for values that differ
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.not-equal(1, 2);
+    expect.not-equal("a", "b");
+    expect.not-equal([1,], [2,]);
+}

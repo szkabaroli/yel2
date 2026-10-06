@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: @(ignored) is for a field of an @(observable) resource
+// features: [observable]
+// negative: compile
+// error: 7:29: @(ignored) is for a field of an @(observable) resource: Plain is not one
+// ---
+resource Plain { @(ignored) n: s32, }
+main: func() {}

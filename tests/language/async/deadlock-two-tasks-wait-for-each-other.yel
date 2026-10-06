@@ -1,0 +1,22 @@
+// ---
+// description: two tasks each waiting for a stream the other would write: a deadlock
+// features: [async, streams]
+// exit: 1
+// ---
+resource Link { items: stream<s32>, out: writer<s32>, }
+
+relay: async func(inbound: Link, outbound: Link) {
+    let item = wait inbound.items.read();
+    wait outbound.out.write(1);
+}
+
+main: async func() {
+    let (first-items, first-out) = stream-pair(1);
+    let (second-items, second-out) = stream-pair(1);
+    let first: Link = { items: first-items, out: first-out, };
+    let second: Link = { items: second-items, out: second-out, };
+    let one = start relay(first, second);
+    let two = start relay(second, first);
+    wait one;
+    wait two;
+}

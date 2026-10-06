@@ -1,0 +1,10 @@
+// ---
+// description: to-digit gives a decimal digit's value
+// features: [char]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(to-digit(48, 10), some(0));
+    expect.equal(to-digit(57, 10), some(9));
+}

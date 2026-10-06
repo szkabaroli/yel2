@@ -1,0 +1,11 @@
+// ---
+// description: parse reads what to-iso writes
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let text = "2026-10-05T12:34:56.789Z";
+    expect.equal(time.to-iso(expect.ok(time.parse(text))), text);
+}

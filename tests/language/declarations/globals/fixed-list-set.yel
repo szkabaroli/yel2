@@ -1,0 +1,13 @@
+// ---
+// description: an item of a fixed-length list global is set in place
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let slots: list<s64, 3>;
+
+main: func() {
+    slots.set(2, 9);
+    expect.equal(slots[2], 9);
+    expect.equal(slots[1], 0);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix reads s64's least in hex
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("-8000000000000000", 16), some(s64.MIN));
+}

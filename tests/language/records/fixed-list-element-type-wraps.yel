@@ -1,0 +1,11 @@
+// ---
+// description: a fixed-length list's items take the annotated number type
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let bytes: list<u8, 2> = [255, 0];
+    expect.equal(bytes[0] + 1, 0);
+    expect.equal(bytes[1] - 1, 255);
+}

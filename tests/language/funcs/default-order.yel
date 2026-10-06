@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: parameter count needs a default: every one after a parameter with a default has one
+// features: [funcs]
+// negative: compile
+// error: 9:33: parameter count needs a default: every one after a parameter with a default has one
+// ---
+
+// a default, then a parameter with none
+first: func(word: string = "a", count: s32) -> string { word }
+
+main: func() -> s32 { 0 }

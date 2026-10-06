@@ -1,0 +1,15 @@
+// ---
+// description: each duration constructor counts nanoseconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.nanoseconds(5).nanoseconds, 5);
+    expect.equal(time.milliseconds(2).nanoseconds, 2000000);
+    expect.equal(time.seconds(3).nanoseconds, 3000000000);
+    expect.equal(time.minutes(2).nanoseconds, 120000000000);
+    expect.equal(time.hours(1).nanoseconds, 3600000000000);
+    expect.equal(time.days(1).nanoseconds, 86400000000000);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: find gives none where the text is not there
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none("banana".find("x"));
+}

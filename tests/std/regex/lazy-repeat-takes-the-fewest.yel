@@ -1,0 +1,9 @@
+// ---
+// description: a lazy repeat takes as few characters as it can
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(/a.*?b/.find("a1b2b3")).text, "a1b");
+}

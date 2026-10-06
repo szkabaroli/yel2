@@ -1,0 +1,25 @@
+// ---
+// description: true and false are boolean values
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    match expect.ok(json.parse("true")) {
+        boolean(truth) => expect.holds(truth),
+        _ => expect.fail("not a boolean"),
+    }
+    match expect.ok(json.parse("false")) {
+        boolean(truth) => expect.holds(!truth),
+        _ => expect.fail("not a boolean"),
+    }
+}

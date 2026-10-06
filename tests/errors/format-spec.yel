@@ -1,5 +1,0 @@
-// error: 4:18: unknown format spec '>8q': [[fill]align][0][width][.precision][? x X b o]
-main: func() {
-    let name = "yel";
-    print("{name:>8q}");
-}

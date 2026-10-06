@@ -1,0 +1,10 @@
+// ---
+// description: from-utf8 tells where a character is cut short
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([97, 226, 130,]), err(1));
+    expect.equal(from-utf8([240, 159, 152,]), err(0));
+}

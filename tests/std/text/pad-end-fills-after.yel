@@ -1,0 +1,9 @@
+// ---
+// description: pad-end puts the fill after the text up to the width
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("7".pad-end(3, "."), "7..");
+}

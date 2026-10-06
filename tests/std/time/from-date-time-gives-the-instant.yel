@@ -1,0 +1,11 @@
+// ---
+// description: from-date-time gives the instant of a date and time
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when: time.date-time = { year: 2025, month: 10, day: 5, hour: 10, minute: 34, second: 56, nanosecond: 789000000, offset: 0, };
+    expect.equal(time.unix-millis(time.from-date-time(when)), 1759660496789);
+}

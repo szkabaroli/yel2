@@ -1,0 +1,17 @@
+// ---
+// description: a record returned from a func is its own value
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+keep: func(p: Point) -> Point { p }
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let b = keep(a);
+    b.x = 5;
+    expect.equal(a.x, 1);
+    expect.equal(b.x, 5);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: unwrap-or gives the value or the default
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let present: option<s32> = some(4);
+    let absent: option<s32> = none;
+    expect.equal(present.unwrap-or(0), 4);
+    expect.equal(absent.unwrap-or(9), 9);
+}

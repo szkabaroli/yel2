@@ -1,0 +1,11 @@
+// ---
+// description: a map global starts empty
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let ages: map<string, s64>;
+
+main: func() {
+    expect.equal(ages.len(), 0);
+}

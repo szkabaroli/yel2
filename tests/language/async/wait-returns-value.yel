@@ -1,0 +1,11 @@
+// ---
+// description: wait on an async call gives its result
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+twice: async func(x: s32) -> s32 { x * 2 }
+
+main: async func() {
+    expect.equal(wait twice(21), 42);
+}

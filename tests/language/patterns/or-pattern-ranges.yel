@@ -1,0 +1,17 @@
+// ---
+// description: an or-pattern of ranges
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+edge: func(n: u8) -> bool {
+    match n {
+        0..=9 | 250..=255 => true,
+        _ => false,
+    }
+}
+main: func() {
+    expect.holds(edge(9));
+    expect.holds(edge(250));
+    expect.holds(!edge(10));
+    expect.holds(!edge(249));
+}

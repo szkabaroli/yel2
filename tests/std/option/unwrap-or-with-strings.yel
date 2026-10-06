@@ -1,0 +1,11 @@
+// ---
+// description: unwrap-or works on strings
+// features: [option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found: option<string> = none;
+    expect.equal(found.unwrap-or("default"), "default");
+    expect.equal(some("x").unwrap-or("default"), "x");
+}

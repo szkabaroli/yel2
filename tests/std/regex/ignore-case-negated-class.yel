@@ -1,0 +1,26 @@
+// ---
+// description: regex /[^a-z]+/i on "ABC 123": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /[^a-z]+/i;
+    let text = "ABC 123";
+    expect.equal(shown(regex-under-test.find(text)), "\" 123\"@3-7[]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\" 123\"@3-7[]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "ABC< 123>");
+}

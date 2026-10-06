@@ -1,0 +1,14 @@
+// ---
+// description: a break in an inner loop leaves the inner loop only
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let rows = 0;
+    loop {
+        loop { break; }
+        rows += 1;
+        if rows == 2 { break; }
+    }
+    expect.equal(rows, 2);
+}

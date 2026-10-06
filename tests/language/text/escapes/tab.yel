@@ -1,0 +1,10 @@
+// ---
+// description: \t in a string is a tab
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a\tb";
+    expect.equal(text.byte-at(1), 9);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a spec after a call's expression
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+double: func(value: s32) -> s32 { value * 2 }
+
+main: func() {
+    expect.equal("[{double(4):4}]", "[   8]");
+    expect.equal("[{double(4) + 1:<3}]", "[9  ]");
+}

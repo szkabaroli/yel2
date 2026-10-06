@@ -1,0 +1,14 @@
+// ---
+// description: a compound assignment reads the variable and the right side once each
+// features: [control]
+// ---
+from "std:testing" include expect;
+let calls: s32;
+bump: func() -> s32 { calls += 1; 5 }
+main: func() {
+    let total = 1;
+    total += bump();
+    total *= bump();
+    expect.equal(total, 30);
+    expect.equal(calls, 2);
+}

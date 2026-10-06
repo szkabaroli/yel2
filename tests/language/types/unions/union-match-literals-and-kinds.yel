@@ -1,0 +1,23 @@
+// ---
+// description: a match over a union mixing literal arms and typed arms
+// features: [types, unions, match]
+// ---
+from "std:testing" include expect;
+
+type value = s32 | string | bool;
+
+show: func(item: value) -> string {
+    match item {
+        let n: s32 => "an s32: {n + 1}",
+        let s: string => "a string of {s.len()}",
+        true => "yes",
+        false => "no",
+    }
+}
+
+main: func() {
+    expect.equal(show(41), "an s32: 42");
+    expect.equal(show("two"), "a string of 3");
+    expect.equal(show(true), "yes");
+    expect.equal(show(false), "no");
+}

@@ -1,5 +1,0 @@
-// error: 3:5: module outer holds a module: modules are one layer
-module outer {
-    module inner { }
-}
-main: func() -> s32 { 0 }

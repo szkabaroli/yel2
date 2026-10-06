@@ -1,0 +1,12 @@
+// ---
+// description: a char literal is its code point
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('a' as u32, 97);
+    expect.equal('A' as u32, 65);
+    expect.equal('0' as u32, 48);
+    expect.equal(' ' as u32, 32);
+}

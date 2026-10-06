@@ -1,0 +1,24 @@
+// ---
+// description: a func finding the first even number gives an option
+// features: [types, option, match]
+// ---
+from "std:testing" include expect;
+
+first-even: func(items: list<s32>) -> option<s32> {
+    for item in items {
+        if item % 2 == 0 { return some(item); }
+    }
+    none
+}
+
+describe: func(found: option<s32>) -> string {
+    match found {
+        some(value) => "some {value}",
+        none => "nothing",
+    }
+}
+
+main: func() {
+    expect.equal(describe(first-even([1, 3, 8, 5,])), "some 8");
+    expect.equal(describe(first-even([1, 3,])), "nothing");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: expect.equal takes two values of one type
+// features: [testing]
+// negative: compile
+// error: 10:21: argument 2 of std:testing/expect.equal: expected an integer, found string
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(1, "a");
+}

@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: the value of a: expected binding, found an integer
+// features: [types]
+// negative: compile
+// error: 8:33: the value of a: expected binding, found an integer
+// ---
+type binding = distinct u32;
+main: func() { let a: binding = 3; }

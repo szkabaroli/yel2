@@ -1,0 +1,14 @@
+// ---
+// description: flags combine with | and are read as bools
+// features: [types, flags]
+// ---
+from "std:testing" include expect;
+
+flags Access { read, write, execute, }
+
+main: func() {
+    let granted = Access.read | Access.write;
+    expect.holds(granted.read);
+    expect.holds(granted.write);
+    expect.holds(!granted.execute);
+}

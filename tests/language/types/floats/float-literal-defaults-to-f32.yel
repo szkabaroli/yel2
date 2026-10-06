@@ -1,0 +1,11 @@
+// ---
+// description: a float literal with nothing to say otherwise is an f32
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = 0.1;
+    let sum = value + 0.2;
+    expect.equal("{sum}", "0.3");
+}

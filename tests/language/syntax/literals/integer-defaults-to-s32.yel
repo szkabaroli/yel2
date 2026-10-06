@@ -1,0 +1,11 @@
+// ---
+// description: an unconstrained integer literal is an s32, wrapping like one
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top = 2147483647;
+    let wrapped = top + 1;
+    expect.equal(wrapped, -2147483647 - 1);
+}

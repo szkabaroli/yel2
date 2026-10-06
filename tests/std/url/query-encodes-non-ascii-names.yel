@@ -1,0 +1,10 @@
+// ---
+// description: query percent-encodes non-ASCII names
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.query([("é", "1"),]), "%C3%A9=1");
+}

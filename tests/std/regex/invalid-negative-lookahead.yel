@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /(?!a)/ uses a negative lookahead, which is not compiled
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /(?!a)/: (?!: no such group (lookaround is not compiled: (?: … ) and (?<name> … ) are)
+// ---
+main: func() {
+    let found = /(?!a)/;
+}

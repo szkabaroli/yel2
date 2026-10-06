@@ -1,0 +1,12 @@
+// ---
+// description: a call that never returns fits an if's branch
+// features: [types, never]
+// ---
+from "std:testing" include expect;
+
+sign: func(n: s32) -> s32 { if n >= 0 { 1 } else { panic("negative") } }
+
+main: func() {
+    expect.equal(sign(2), 1);
+    expect.equal(sign(0), 1);
+}

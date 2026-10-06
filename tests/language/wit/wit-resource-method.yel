@@ -1,0 +1,15 @@
+// ---
+// description: does not compile: resource tcp-socket has no method lisen
+// features: [wit]
+// negative: compile
+// error: 11:20: resource tcp-socket has no method lisen
+// help: did you mean listen?
+// ---
+from "wasi:sockets" include types;
+main: func() -> s32 {
+    match types.tcp-socket.create(types.ip-address-family.ipv4) {
+        ok(s) => { s.lisen(); }
+        err(e) => {}
+    }
+    0
+}

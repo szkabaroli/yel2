@@ -1,0 +1,11 @@
+// ---
+// description: parse-date-time reads .5 as half a second
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = expect.ok(time.parse-date-time("2026-10-05T12:00:00.5Z"));
+    expect.equal(when.nanosecond, 500000000);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: reverse gives the bytes last first
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("stressed".reverse(), "desserts");
+}

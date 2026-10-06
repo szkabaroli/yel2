@@ -1,0 +1,19 @@
+// ---
+// description: json.parse and json.write handle arrays nested a hundred deep
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let text = "[".repeat(100) + "]".repeat(100);
+    expect.equal(again(text), text);
+}

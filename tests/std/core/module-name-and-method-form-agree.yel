@@ -1,0 +1,11 @@
+// ---
+// description: text.trim(s) and s.trim() are the same call
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(text.trim("  a "), "  a ".trim());
+    expect.equal(list.reverse([1, 2,]), [1, 2,].reverse());
+    expect.equal(number.parse-int("5"), "5".parse-int());
+}

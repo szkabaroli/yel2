@@ -1,0 +1,18 @@
+// ---
+// description: the size of a multiline string, with its interpolation, counts bytes
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    let text = """
+        Hello, {name}!
+          indented two
+        a "quote", "" two, ""\" three
+        escaped \\ and \t tab
+
+        after an empty line
+        """;
+    expect.equal(text.len(), 96);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: reverse of one byte is itself
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a".reverse(), "a");
+}

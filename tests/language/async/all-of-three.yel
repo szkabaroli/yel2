@@ -1,0 +1,15 @@
+// ---
+// description: wait for all of three tasks
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+value: async func(x: s32) -> s32 {
+    wait yield-turn();
+    x
+}
+
+main: async func() {
+    let all = wait { a: value(1), b: value(2), c: value(3), };
+    expect.equal(all.a + all.b + all.c, 6);
+}

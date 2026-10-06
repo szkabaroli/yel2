@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: map.set takes a key of the map's type
+// features: [map]
+// negative: compile
+// error: 9:14: argument 2 of yel:std/map.set: expected string, found an integer
+// ---
+main: func() {
+    let ages: map<string, s32> = map.new();
+    ages.set(1, 2);
+}

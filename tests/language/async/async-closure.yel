@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: wait is not in a closure yet (a closure is not async): wait in the async func around it
+// features: [async]
+// negative: compile
+// error: 9:30: wait is not in a closure yet (a closure is not async): wait in the async func around it
+// ---
+work: async func() -> s32 { 1 }
+main: async func() {
+    let f: func() -> s32 = { wait work() };
+}

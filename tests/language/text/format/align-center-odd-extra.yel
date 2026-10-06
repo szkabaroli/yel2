@@ -1,0 +1,10 @@
+// ---
+// description: ^ with an odd amount of padding puts the extra on the right
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let name = "yel";
+    expect.equal("[{name:^6}]", "[ yel  ]");
+}

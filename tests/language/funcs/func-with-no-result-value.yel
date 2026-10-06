@@ -1,0 +1,16 @@
+// ---
+// description: a func with no result is a value
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+let calls: s32;
+
+note: func() { calls += 1; }
+
+run-twice: func(f: func()) { f(); f(); }
+
+main: func() {
+    run-twice(note);
+    expect.equal(calls, 2);
+}

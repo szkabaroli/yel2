@@ -1,0 +1,14 @@
+// ---
+// description: two distinct types over one base hold the same bits yet are two types
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+type local = distinct u32;
+
+main: func() {
+    let first = 3 as binding;
+    let second = 3 as local;
+    expect.equal(first as u32, second as u32);
+}

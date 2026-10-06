@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: unterminated string
+// features: [syntax,literals]
+// negative: compile
+// error: 8:16: unterminated string
+// ---
+main: func() {
+    let text = "abc;
+}

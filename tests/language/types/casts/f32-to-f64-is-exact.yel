@@ -1,0 +1,12 @@
+// ---
+// description: f32 cast to f64 keeps its value exactly
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f32 = 2.5;
+    expect.equal(value as f64, 2.5);
+    let tenth: f32 = 0.1;
+    expect.holds(tenth as f64 != 0.1);
+}

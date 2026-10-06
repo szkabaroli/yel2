@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: the value of q: expected 0..=100, found s32
+// features: [patterns]
+// negative: compile
+// error: 10:22: the value of q: expected 0..=100, found s32
+// ---
+type percent = 0..=100;
+main: func() {
+    let p: percent = 50;
+    let q: percent = p + 1;
+}

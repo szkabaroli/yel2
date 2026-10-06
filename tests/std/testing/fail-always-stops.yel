@@ -1,0 +1,10 @@
+// ---
+// description: expect.fail stops the program with the reason given
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.fail("not reached");
+}

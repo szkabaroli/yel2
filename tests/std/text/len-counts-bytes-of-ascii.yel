@@ -1,0 +1,9 @@
+// ---
+// description: len counts the bytes of ASCII text
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".len(), 3);
+}

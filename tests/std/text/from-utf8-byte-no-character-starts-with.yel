@@ -1,0 +1,11 @@
+// ---
+// description: from-utf8 refuses bytes 0xFF and 0xC0
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(from-utf8([104, 255,]), err(1));
+    expect.equal(from-utf8([192, 128,]), err(0));
+    expect.equal(from-utf8([193, 191,]), err(0));
+}

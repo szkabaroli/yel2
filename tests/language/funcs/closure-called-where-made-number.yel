@@ -1,0 +1,10 @@
+// ---
+// description: a closure called where it is made gives a number the wanted type
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b: u8 = ({ -> 200 })();
+    expect.equal(b + 100, 44);
+}

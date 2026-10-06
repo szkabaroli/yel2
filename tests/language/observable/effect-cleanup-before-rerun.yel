@@ -1,0 +1,37 @@
+// ---
+// description: what an effect gives back runs before it runs again
+// features: [observable, reactive]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+@(observable) resource Profile {
+    id: u32,
+    name: string,
+    at: Point,
+    items: list<string>,
+    @(ignored) log: list<string>,
+}
+
+fresh: func() -> Profile {
+    { id: 1, name: "ada", at: { x: 0, y: 0, }, items: [], log: [], }
+}
+
+main: func() {
+    let profile = fresh();
+    let log: list<string> = [];
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ ->
+            let shown = profile.id;
+            log.push("run {shown}");
+            { -> log.push("cleanup {shown}"); }
+        });
+    });
+    profile.id = 2;
+    reactive.flush();
+    expect.equal(log, ["run 1", "cleanup 1", "run 2",]);
+    reactive.dispose(owner);
+    expect.equal(log, ["run 1", "cleanup 1", "run 2", "cleanup 2",]);
+}

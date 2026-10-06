@@ -1,0 +1,11 @@
+// ---
+// description: concat with an empty string gives the other
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(concat("", "x"), "x");
+    expect.equal(concat("x", ""), "x");
+    expect.equal(concat("", ""), "");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: reverse turns the bytes of a multibyte character around too
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("é".reverse().bytes(), [169, 195,]);
+    expect.equal("é".reverse().len(), 2);
+}

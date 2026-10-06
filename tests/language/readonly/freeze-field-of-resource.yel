@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: the value of frozen: expected list<s32> & readonly, found list<s32>
+// features: [readonly]
+// negative: compile
+// error: 10:40: the value of frozen: expected list<s32> & readonly, found list<s32>
+// ---
+resource Box { items: list<s32>, }
+main: func() {
+    let box: Box = { items: [1,], };
+    let frozen: list<s32> & readonly = box.items;
+}

@@ -1,0 +1,10 @@
+// ---
+// description: expect.equal shows strings quoted when they differ
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a", "b");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: replace keeps a $n for a group the regex has not
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/(a)/.replace("a", "$2"), "$2");
+}

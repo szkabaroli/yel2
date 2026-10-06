@@ -1,0 +1,12 @@
+// ---
+// description: a string global is assigned a longer string
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let label: string = "start";
+
+main: func() {
+    label = label + "ed";
+    expect.equal(label, "started");
+}

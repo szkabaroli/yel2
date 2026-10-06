@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: numbers yields: it gives back a seq<T> (its values T)
+// features: [generators]
+// negative: compile
+// error: 7:1: numbers yields: it gives back a seq<T> (its values T)
+// ---
+numbers: func() -> list<s32> { yield 1; [] }
+main: func() {}

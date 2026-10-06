@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned refuses letters in a decimal number
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned("12a"));
+}

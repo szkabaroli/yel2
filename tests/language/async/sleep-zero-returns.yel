@@ -1,0 +1,9 @@
+// ---
+// description: sleep of zero milliseconds returns
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    wait sleep(0);
+}

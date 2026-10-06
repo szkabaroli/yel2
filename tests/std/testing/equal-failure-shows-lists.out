@@ -1,0 +1,1 @@
+panic: tests/std/testing/equal-failure-shows-lists.yel:9:12: expect.equal: got [1, 2], want [1, 3]

@@ -1,0 +1,13 @@
+// ---
+// description: remove leaves the other values in their order
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<s32> = set.new();
+    for value in 0..5 { s.add(value); }
+    s.remove(1);
+    s.remove(3);
+    expect.equal(s.values(), [0, 2, 4,]);
+}

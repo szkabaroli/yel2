@@ -1,0 +1,13 @@
+// ---
+// description: weekday is 0 for Sunday and 6 for Saturday
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let sunday = expect.ok(time.parse-date-time("2026-10-04"));
+    let saturday = expect.ok(time.parse-date-time("2026-10-10"));
+    expect.equal(time.weekday(sunday), 0);
+    expect.equal(time.weekday(saturday), 6);
+}

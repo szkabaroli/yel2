@@ -1,0 +1,13 @@
+// ---
+// description: narrowing does not reach into a closure, a typed match inside does
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let who: id = 4;
+    let read = { -> match who { let n: s32 => n, let s: string => 0, } };
+    expect.equal(read(), 4);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: an integer type of one value
+// features: [types, one-value]
+// ---
+from "std:testing" include expect;
+
+type unit-step = 1;
+
+main: func() {
+    let step: unit-step = 1;
+    expect.equal(step + 1, 2);
+}

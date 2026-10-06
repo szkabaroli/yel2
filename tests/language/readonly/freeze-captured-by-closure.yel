@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: readonly is wanted here: xs is kept where it may be written (stored, or captured by a closure)
+// features: [readonly]
+// negative: compile
+// error: 10:40: readonly is wanted here: xs is kept where it may be written (stored, or captured by a closure)
+// ---
+main: func() {
+    let xs: list<s32> = [1,];
+    let touch: func() = { xs.push(2); };
+    let frozen: list<s32> & readonly = xs;
+}

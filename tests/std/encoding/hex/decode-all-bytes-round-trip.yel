@@ -1,0 +1,17 @@
+// ---
+// description: hex.decode gives back every byte value hex.encode was given
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    let all: list<u8> = [];
+    for value in 0..256 {
+        let wide: s64 = value;
+        all.push(wide as u8);
+    }
+    let text = hex.encode(all);
+    expect.equal(text.len(), 512);
+    expect.equal(expect.ok(hex.decode(text)), all);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: find-last counts overlapping matches
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("aaa".find-last("aa"), some(1));
+}

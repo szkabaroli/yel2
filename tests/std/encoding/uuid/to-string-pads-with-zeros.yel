@@ -1,0 +1,11 @@
+// ---
+// description: uuid.to-string writes every digit, with leading zeros
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id: uuid.id = { high: 1, low: 2, };
+    expect.equal(uuid.to-string(id), "00000000-0000-0001-0000-000000000002");
+}

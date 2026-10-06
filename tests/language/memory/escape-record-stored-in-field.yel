@@ -1,0 +1,19 @@
+// ---
+// description: a record stored in another's field escapes its loop turn
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Inner { n: s32, }
+resource Outer { inner: Inner, }
+
+main: func() {
+    let outer: Outer = { inner: { n: 0, }, };
+    for i in 1..=5 {
+        let inner: Inner = { n: i * 10, };
+        outer.inner = inner;
+    }
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    expect.equal(outer.inner.n, 50);
+}

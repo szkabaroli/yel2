@@ -1,0 +1,14 @@
+// ---
+// description: an alias of an integer type does its arithmetic
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+type count = u8;
+
+main: func() {
+    let total: count = 250;
+    expect.equal(total + 10, 4);
+    let plain: u8 = total;
+    expect.equal(plain, 250);
+}

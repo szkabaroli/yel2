@@ -1,0 +1,10 @@
+// ---
+// description: expect.contains stops the program where the item is not there
+// features: [testing]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.contains([1, 2, 3,], 9);
+}

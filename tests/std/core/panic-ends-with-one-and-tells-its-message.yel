@@ -1,0 +1,8 @@
+// ---
+// description: panic writes its message and ends the program with 1
+// features: [core]
+// exit: 1
+// ---
+main: func() {
+    panic("something is wrong");
+}

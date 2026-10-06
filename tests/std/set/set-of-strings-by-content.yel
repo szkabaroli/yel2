@@ -1,0 +1,12 @@
+// ---
+// description: strings in a set are the same where their bytes are
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<string> = set.new();
+    s.add("ab" + "c");
+    s.add("a" + "bc");
+    expect.equal(s.len(), 1);
+}

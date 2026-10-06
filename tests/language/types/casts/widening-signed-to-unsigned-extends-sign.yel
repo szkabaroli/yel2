@@ -1,0 +1,11 @@
+// ---
+// description: a negative s8 cast to u32 is its sign-extended bits
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let negative: s8 = -1;
+    expect.equal(negative as u32, 4294967295);
+    expect.equal(negative as u16, 65535);
+}

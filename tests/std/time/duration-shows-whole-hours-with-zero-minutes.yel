@@ -1,0 +1,10 @@
+// ---
+// description: a duration of whole hours shows its zero minutes and seconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.hours(26)}", "26h0m0s");
+}

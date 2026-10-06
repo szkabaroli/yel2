@@ -1,0 +1,11 @@
+// ---
+// description: pop gives the last item and takes it off
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2, 3,];
+    expect.equal(xs.pop(), 3);
+    expect.equal(xs, [1, 2,]);
+}

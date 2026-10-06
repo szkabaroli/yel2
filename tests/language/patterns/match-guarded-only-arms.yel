@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: the match has no arm for _: add one, or a _ arm
+// features: [patterns]
+// negative: compile
+// error: 9:13: the match has no arm for _: add one, or a _ arm
+// ---
+main: func() {
+    let n = 5;
+    let r = match n { let k if k > 0 => 1, let k if k <= 0 => 2, };
+}

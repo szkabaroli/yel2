@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the value of x: expected s32, found ()
+// features: [control]
+// negative: compile
+// error: 8:18: the value of x: expected s32, found ()
+// ---
+main: func() {
+    let x: s32 = if true { 1 };
+}

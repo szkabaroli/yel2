@@ -1,0 +1,11 @@
+// ---
+// description: a closure's result found from a match on b is a bool, not one value
+// features: [types, one-value]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let pick = { flag: bool -> match flag { true => { if true { return flag; } }, false => {}, } flag };
+    expect.equal(pick(true), true);
+    expect.equal(pick(false), false);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: continue goes to the next turn
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let seen: list<s32> = [];
+    for i in 0..6 {
+        if i % 2 == 0 { continue; }
+        seen.push(i);
+    }
+    expect.equal(seen, [1, 3, 5,]);
+}

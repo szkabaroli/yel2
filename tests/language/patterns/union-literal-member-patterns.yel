@@ -1,0 +1,18 @@
+// ---
+// description: literal patterns match the members of a union of literals
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post" | "put";
+verb: func(m: method) -> s32 {
+    match m {
+        "get" => 1,
+        "post" => 2,
+        "put" => 3,
+    }
+}
+main: func() {
+    expect.equal(verb("get"), 1);
+    expect.equal(verb("post"), 2);
+    expect.equal(verb("put"), 3);
+}

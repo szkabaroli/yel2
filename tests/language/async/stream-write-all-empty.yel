@@ -1,0 +1,13 @@
+// ---
+// description: write-all of an empty list writes nothing
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+main: async func() {
+    let (items, out) = stream-pair(2);
+    let nothing: list<s32> = [];
+    wait out.write-all(nothing);
+    out.close();
+    expect.none(wait items.read());
+}

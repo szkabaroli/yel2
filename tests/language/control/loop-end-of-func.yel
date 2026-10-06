@@ -1,0 +1,17 @@
+// ---
+// description: a func may end with a loop no break leaves
+// features: [control]
+// ---
+from "std:testing" include expect;
+power-past: func(n: s32) -> s32 {
+    let p = 1;
+    loop {
+        if p >= n { return p; }
+        p *= 2;
+    }
+}
+main: func() {
+    expect.equal(power-past(5), 8);
+    expect.equal(power-past(64), 64);
+    expect.equal(power-past(1000), 1024);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: substring takes an end past the length as the length
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".substring(3, 99), "lo");
+}

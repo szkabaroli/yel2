@@ -1,0 +1,12 @@
+// ---
+// description: an inclusive range of u8 ending at 255 ends
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let low: u8 = 253;
+    let high: u8 = 255;
+    let turns = 0;
+    for i in low..=high { turns += 1; }
+    expect.equal(turns, 3);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: slice from 0 to len gives every item
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2, 3,].slice(0, 3), [1, 2, 3,]);
+}

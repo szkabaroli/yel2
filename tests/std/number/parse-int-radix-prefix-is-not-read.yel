@@ -1,0 +1,10 @@
+// ---
+// description: parse-int-radix does not read a 0x prefix, x is no digit of 16
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int-radix("0xff", 16));
+    expect.none(number.parse-int-radix("0b101", 2));
+}

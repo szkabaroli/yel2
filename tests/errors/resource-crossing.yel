@@ -1,8 +1,0 @@
-// error: 7:5: resource Session crosses WIT only as one this component exports: declared in the module whose funcs it crosses, a visible module of a program without main
-module sessions {
-    resource Session { id: s32, }
-    new: func(id: s32) -> Session { { id: id, } }
-}
-module api {
-    open: func() -> sessions.Session { sessions.new(1) }
-}

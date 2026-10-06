@@ -1,0 +1,15 @@
+// ---
+// description: base32 gives back bytes of every length from 0 to 11
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    let bytes: list<u8> = [];
+    for length in 0..12 {
+        expect.equal(expect.ok(base32.decode(base32.encode(bytes))), bytes);
+        expect.equal(expect.ok(base32.decode(base32.encode-unpadded(bytes))), bytes);
+        bytes.push((length * 23 + 7) as u8);
+    }
+}

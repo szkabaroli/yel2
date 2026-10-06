@@ -1,0 +1,15 @@
+// ---
+// description: a generator that never yields gives an empty seq
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+nothing: func() -> seq<s32> {
+    if false { yield 1; }
+}
+
+main: func() {
+    let turns = 0;
+    for value in nothing() { turns += 1; }
+    expect.equal(turns, 0);
+}

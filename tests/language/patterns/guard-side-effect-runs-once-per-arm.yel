@@ -1,0 +1,18 @@
+// ---
+// description: a guard runs only for the arms tried, in order
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+let trace: list<string>;
+check: func(label: string, value: bool) -> bool { trace.push(label); value }
+main: func() {
+    let n = 5;
+    let result = match n {
+        let k if check("first", k > 10) => "a",
+        let k if check("second", k > 3) => "b",
+        let k if check("third", true) => "c",
+        _ => "d",
+    };
+    expect.equal(result, "b");
+    expect.equal(trace, ["first", "second",]);
+}

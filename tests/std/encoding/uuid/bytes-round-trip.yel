@@ -1,0 +1,13 @@
+// ---
+// description: uuid.from-bytes gives back what uuid.bytes gave
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let id = uuid.random();
+    let again = expect.ok(uuid.from-bytes(uuid.bytes(id)));
+    expect.equal(again.high, id.high);
+    expect.equal(again.low, id.low);
+}

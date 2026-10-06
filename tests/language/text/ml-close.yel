@@ -1,0 +1,12 @@
+// ---
+// description: does not compile: a multiline string's closing """ goes on a line of its own (in its text, break up """ by escaping a quote after the first)
+// features: [text]
+// negative: compile
+// error: 10:12: a multiline string's closing """ goes on a line of its own (in its text, break up """ by escaping a quote after the first)
+// ---
+main: func() -> s32 {
+    let s = """
+        text
+        end""";
+    0
+}

@@ -1,0 +1,11 @@
+// ---
+// description: an inclusive range whose end is below its start is empty
+// features: [memory, ranges]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let empty = 0;
+    for i in 5..=4 { empty += 1; }
+    expect.equal(empty, 0);
+}

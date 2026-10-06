@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned of an empty text is none
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-unsigned(""));
+}

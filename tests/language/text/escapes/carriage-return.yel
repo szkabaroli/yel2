@@ -1,0 +1,10 @@
+// ---
+// description: \r in a string is a carriage return
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a\rb";
+    expect.equal(text.byte-at(1), 13);
+}

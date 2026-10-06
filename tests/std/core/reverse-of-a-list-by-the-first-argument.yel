@@ -1,0 +1,9 @@
+// ---
+// description: reverse takes the list meaning where its first argument is a list
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(["a", "b", "c",].reverse(), ["c", "b", "a",]);
+}

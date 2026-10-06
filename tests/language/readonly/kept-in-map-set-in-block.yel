@@ -1,0 +1,9 @@
+// ---
+// description: a map set in a block, given readonly at once
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let c = ({ let w: map<string, char> = map.new(); w.set("a", 'x'); w }).get-or("a", '?');
+    expect.equal(c, 'x');
+}

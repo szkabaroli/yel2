@@ -1,0 +1,23 @@
+// ---
+// description: a writer given to a started task is closed by that task
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+total: async func(items: stream<s32>) -> s32 {
+    let sum = 0;
+    wait for x in items { sum += x; }
+    sum
+}
+
+feed: async func(out: writer<s32>, xs: list<s32>) {
+    for x in xs { wait out.write(x); }
+    out.close();
+}
+
+main: async func() {
+    let (items, out) = stream-pair(1);
+    let feeder = start feed(out, [5, 6, 7,]);
+    expect.equal(wait total(items), 18);
+    wait feeder;
+}

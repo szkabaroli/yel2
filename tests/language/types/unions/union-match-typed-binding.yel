@@ -1,0 +1,19 @@
+// ---
+// description: let n: T matches a union's kind and binds it
+// features: [types, unions, match]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+show: func(who: id) -> string {
+    match who {
+        let n: s32 => "an s32: {n + 1}",
+        let s: string => "a string of {s.len()}",
+    }
+}
+
+main: func() {
+    expect.equal(show(1), "an s32: 2");
+    expect.equal(show("abc"), "a string of 3");
+}

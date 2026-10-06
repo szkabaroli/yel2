@@ -1,0 +1,13 @@
+// ---
+// description: each line gives up as many spaces as come before the closing quotes
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+            deep
+            deeper
+        """;
+    expect.equal(text, "    deep\n    deeper");
+}

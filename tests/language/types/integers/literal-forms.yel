@@ -1,0 +1,14 @@
+// ---
+// description: integer literals in decimal, hex, octal, binary, with leading zeros
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(42, 0x2a);
+    expect.equal(42, 0o52);
+    expect.equal(42, 0b101010);
+    expect.equal(007, 7);
+    let upper: u32 = 0xFF;
+    expect.equal(upper, 255);
+}

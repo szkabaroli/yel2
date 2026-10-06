@@ -1,0 +1,13 @@
+// ---
+// description: string literals with a wildcard
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+greet: func(s: string) -> string {
+    match s { "hi" => "hello", "bye" => "goodbye", _ => "what", }
+}
+main: func() {
+    expect.equal(greet("hi"), "hello");
+    expect.equal(greet("bye"), "goodbye");
+    expect.equal(greet(""), "what");
+}

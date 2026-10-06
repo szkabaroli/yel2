@@ -1,0 +1,11 @@
+// ---
+// description: u32 addition wraps from its maximum to its minimum
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: u32 = u32.MAX;
+    expect.equal(top + 1, u32.MIN);
+    expect.equal(top + 2, u32.MIN + 1);
+}

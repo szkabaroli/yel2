@@ -1,0 +1,12 @@
+// ---
+// description: an option shows as some(x) or none
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let present: option<s32> = some(3);
+    let absent: option<s32> = none;
+    expect.equal("{present}", "some(3)");
+    expect.equal("{absent}", "none");
+}

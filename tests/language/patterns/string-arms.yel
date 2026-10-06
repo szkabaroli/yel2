@@ -1,0 +1,23 @@
+// ---
+// description: an arm of a string literal, or of a string constant, matches equal text
+// features: [patterns, match]
+// ---
+from "std:testing" include expect;
+
+const GREETING = "hello";
+
+word: func(s: string) -> s32 {
+    match s {
+        GREETING => 1,
+        "bye" => 2,
+        _ => 0,
+    }
+}
+
+main: func() {
+    expect.equal(word("hello"), 1);
+    expect.equal(word("bye"), 2);
+    expect.equal(word("hi"), 0);
+    // equal text, not the same string
+    expect.equal(word("hel" + "lo"), 1);
+}

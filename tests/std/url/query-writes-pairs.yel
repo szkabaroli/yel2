@@ -1,0 +1,10 @@
+// ---
+// description: query writes pairs as a form sends them
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.query([("a", "1"), ("b", "2"),]), "a=1&b=2");
+}

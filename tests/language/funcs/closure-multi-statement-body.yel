@@ -1,0 +1,16 @@
+// ---
+// description: a closure's body has several statements
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let log: list<string> = [];
+    let record = { name: string ->
+        log.push(name);
+        log.push(name);
+        log.len()
+    };
+    expect.equal(record("a"), 2);
+    expect.equal(record("b"), 4);
+}

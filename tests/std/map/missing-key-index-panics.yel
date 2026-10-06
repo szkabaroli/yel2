@@ -1,0 +1,10 @@
+// ---
+// description: m[key] for a key the map has not stops the program
+// features: [map]
+// exit: 1
+// ---
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    print("{m["b"]}\n");
+}

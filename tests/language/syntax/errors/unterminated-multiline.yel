@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: unterminated multiline string
+// features: [syntax,literals]
+// negative: compile
+// error: 8:16: unterminated multiline string
+// ---
+main: func() {
+    let text = """
+        never closed
+}

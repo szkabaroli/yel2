@@ -1,0 +1,11 @@
+// ---
+// description: a keyword is a func name written with a percent sign, in its call too
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+%match: func(%in: s32, %for: s32) -> s32 { %in * 10 + %for }
+
+main: func() {
+    expect.equal(%match(7, 3), 73);
+}

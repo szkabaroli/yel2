@@ -1,0 +1,10 @@
+// ---
+// description: a failed assert with a message tells the message given
+// features: [funcs, directives]
+// exit: 1
+// ---
+main: func() -> s32 {
+    let total = 3;
+    assert(total > 5, "total is above five");
+    0
+}

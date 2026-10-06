@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: the value: expected list<s32>, found list<s32> & readonly
+// features: [readonly]
+// negative: compile
+// error: 7:53: the value: expected list<s32>, found list<s32> & readonly
+// ---
+pass: func(xs: list<s32> & readonly) -> list<s32> { xs }
+main: func() {}

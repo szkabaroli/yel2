@@ -1,0 +1,12 @@
+// ---
+// description: two closures made apart are not equal
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let clicks = 0;
+    let on-click: func() = { clicks += 1; };
+    let other: func() = { clicks += 1; };
+    expect.holds(on-click != other);
+}

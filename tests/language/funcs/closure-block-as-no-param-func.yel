@@ -1,0 +1,13 @@
+// ---
+// description: a block where a func of no params is wanted is a closure
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let clicks = 0;
+    let on-click: func() = { clicks += 1; };
+    on-click();
+    on-click();
+    expect.equal(clicks, 2);
+}

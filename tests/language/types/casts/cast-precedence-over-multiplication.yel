@@ -1,0 +1,11 @@
+// ---
+// description: as binds tighter than *
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let count: s32 = 7;
+    let divisor: s32 = 2;
+    expect.equal(count as f64 / divisor as f64, 3.5);
+}

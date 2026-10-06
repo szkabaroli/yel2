@@ -1,0 +1,16 @@
+// ---
+// description: a distinct field in a record
+// features: [types, distinct]
+// ---
+from "std:testing" include expect;
+
+type binding = distinct u32;
+type name = distinct string;
+
+resource Use { at: binding, name: name, }
+
+main: func() {
+    let use: Use = { at: 3 as binding, name: "x" as name, };
+    expect.equal(use.at as u32, 3);
+    expect.equal(use.name as string, "x");
+}

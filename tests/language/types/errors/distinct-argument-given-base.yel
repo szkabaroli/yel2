@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: argument 1 of take: expected binding, found u32
+// features: [types, distinct]
+// negative: compile
+// error: 9:39: argument 1 of take: expected binding, found u32
+// ---
+type binding = distinct u32;
+take: func(id: binding) {}
+main: func() { let raw: u32 = 3; take(raw); }

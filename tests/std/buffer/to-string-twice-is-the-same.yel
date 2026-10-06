@@ -1,0 +1,11 @@
+// ---
+// description: to-string called twice gives equal strings
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(4);
+    b.push("abc");
+    expect.equal(b.to-string(), b.to-string());
+}

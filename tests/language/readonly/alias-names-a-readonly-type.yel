@@ -1,0 +1,13 @@
+// ---
+// description: a type alias may name a readonly type
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+type names = list<string> & readonly;
+count: func(xs: names) -> s64 { xs.len() }
+main: func() {
+    let fixed: names = ["ada", "grace",];
+    let open = ["linus",];
+    expect.equal(count(fixed), 2);
+    expect.equal(count(open), 1);
+}

@@ -1,2 +1,0 @@
-// error: 2:25: a tuple needs a type (no value's type is ())
-main: func() -> tuple<> {}

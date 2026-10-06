@@ -1,0 +1,12 @@
+// ---
+// description: an if in parens is an operand of an operator
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let flag = true;
+    let n = (if flag { 10 } else { 20 }) - 1;
+    expect.equal(n, 9);
+    let m = 1 + (if !flag { 10 } else { 20 });
+    expect.equal(m, 21);
+}

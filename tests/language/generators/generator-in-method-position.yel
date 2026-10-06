@@ -1,0 +1,16 @@
+// ---
+// description: a generator over numbers calls a func value for each
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+mapped: func(limit: s32, change: func(s32) -> s32) -> seq<s32> {
+    for value in 1..=limit { yield change(value); }
+}
+
+main: func() {
+    let offset = 100;
+    let seen: list<s32> = [];
+    for value in mapped(3, { x: s32 -> x + offset }) { seen.push(value); }
+    expect.equal(seen, [101, 102, 103,]);
+}

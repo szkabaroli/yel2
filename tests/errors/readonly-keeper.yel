@@ -1,7 +1,0 @@
-// error: 5:21: argument 1 of same is wanted readonly, and same keeps it or gives it back: open is used again after (once readonly, use the readonly name)
-same: func(xs: list<string> & readonly) -> list<string> & readonly { xs }
-main: func() {
-    let open = ["a",];
-    let view = same(open);
-    open.push("b");
-}

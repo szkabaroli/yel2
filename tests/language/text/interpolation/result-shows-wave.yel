@@ -1,0 +1,12 @@
+// ---
+// description: a result shows as ok(x) or err(x)
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let fine: result<s32, string> = ok(1);
+    let bad: result<s32, string> = err("no");
+    expect.equal("{fine}", "ok(1)");
+    expect.equal("{bad}", "err(\"no\")");
+}

@@ -1,0 +1,17 @@
+// ---
+// description: a stream carries records
+// features: [async, streams]
+// ---
+from "std:testing" include expect;
+
+resource Event { id: s32, label: string, }
+
+main: async func() {
+    let (events, out) = stream-pair(4);
+    wait out.write({ id: 1, label: "open", });
+    wait out.write({ id: 2, label: "close", });
+    out.close();
+    let labels: list<string> = [];
+    wait for event in events { labels.push("{event.id}:{event.label}"); }
+    expect.equal(labels, ["1:open", "2:close",]);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a surrogate cast to char is U+FFFD
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let surrogate: s32 = 55296;
+    expect.equal(surrogate as char, '\u{FFFD}');
+    let last: u32 = 57343;
+    expect.equal(last as char, '\u{FFFD}');
+}

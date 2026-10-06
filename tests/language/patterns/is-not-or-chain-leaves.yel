@@ -1,0 +1,17 @@
+// ---
+// description: after if !(a is T) || ... return, both are narrowed
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post" | "put";
+type write = "post" | "put";
+writes: func(m: write) -> string { "write {m}" }
+both: func(a: method, b: method) -> string {
+    if !(a is write) || b is "get" { return "other"; }
+    writes(a)
+}
+main: func() {
+    expect.equal(both("put", "post"), "write put");
+    expect.equal(both("get", "post"), "other");
+    expect.equal(both("post", "get"), "other");
+}

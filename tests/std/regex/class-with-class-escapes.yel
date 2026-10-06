@@ -1,0 +1,26 @@
+// ---
+// description: regex /[\d\s]+/ on "ab 12 3c": its first match, every match, and each made <$&>
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+show: func(m: regex-match) -> string {
+    let groups: list<string> = [];
+    for group in m.groups { groups.push(group.unwrap-or("-")); }
+    "{m.text:?}@{m.start}-{m.end}[{groups.join(",")}]"
+}
+
+shown: func(found: option<regex-match>) -> string {
+    match found {
+        some(m) => show(m),
+        none => "none",
+    }
+}
+
+main: func() {
+    let regex-under-test = /[\d\s]+/;
+    let text = "ab 12 3c";
+    expect.equal(shown(regex-under-test.find(text)), "\" 12 3\"@2-7[]");
+    expect.equal(regex-under-test.find-all(text).map(show).join(" "), "\" 12 3\"@2-7[]");
+    expect.equal(regex-under-test.replace-all(text, "<$&>"), "ab< 12 3>c");
+}

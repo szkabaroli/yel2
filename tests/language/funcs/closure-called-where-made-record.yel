@@ -1,0 +1,13 @@
+// ---
+// description: a closure called where it is made gives a record the wanted type
+// features: [funcs, closures, records]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+main: func() {
+    let p: Point = ({ -> { x: 1, y: 2, } })();
+    expect.equal(p.x, 1);
+    expect.equal(p.y, 2);
+}

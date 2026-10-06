@@ -1,0 +1,12 @@
+// ---
+// description: a multiline string keeps non-ASCII text
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        héllo
+        """;
+    expect.equal(text.len(), 6);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: to-date-time works for an instant before the epoch
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = time.to-date-time(time.from-unix-millis(-1));
+    expect.equal((when.year, when.month, when.day), (1969, 12, 31));
+    expect.equal((when.hour, when.minute, when.second), (23, 59, 59));
+    expect.equal(when.nanosecond, 999000000);
+}

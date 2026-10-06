@@ -1,0 +1,11 @@
+// ---
+// description: \n in a string is a line feed
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a\nb";
+    expect.equal(text.len(), 3);
+    expect.equal(text.byte-at(1), 10);
+}

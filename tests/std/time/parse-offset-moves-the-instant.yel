@@ -1,0 +1,11 @@
+// ---
+// description: parse takes the offset off the time
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal(time.to-iso(expect.ok(time.parse("2026-10-05T12:00:00+02:00"))), "2026-10-05T10:00:00.000Z");
+    expect.equal(time.to-iso(expect.ok(time.parse("2026-10-05T12:00:00-02:00"))), "2026-10-05T14:00:00.000Z");
+}

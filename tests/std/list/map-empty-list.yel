@@ -1,0 +1,10 @@
+// ---
+// description: map of an empty list is empty
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<s32> = [];
+    expect.equal(nothing.map({ n -> n + 1 }).len(), 0);
+}

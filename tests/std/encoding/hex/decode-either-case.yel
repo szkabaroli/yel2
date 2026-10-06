@@ -1,0 +1,10 @@
+// ---
+// description: hex.decode reads upper and lower case digits
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(expect.ok(hex.decode("DeadBeef")), [222, 173, 190, 239,]);
+}

@@ -1,0 +1,14 @@
+// ---
+// description: lookups still find keys that were set after a collision with removed ones
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    for key in 0..64 { m.set(key, key); }
+    for key in 0..64 { if key % 2 == 0 { m.remove(key); } }
+    for key in 0..64 {
+        if key % 2 == 0 { expect.holds(!m.has(key)); } else { expect.equal(m[key], key); }
+    }
+}

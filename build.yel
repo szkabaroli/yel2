@@ -119,9 +119,9 @@ tests: func(b: build.builder, flags: list<string>, c3: build.generated) {
     let all = b.step("test", "Every test", [b.installed,]);
     let t: Tests = { b: b, yelc: "build/yelc2", flags: flags, all: all, hosts: [], };
 
+    language(t);
     programs(t);
     packages(t);
-    errors(t);
     formats(t);
 
     if full {
@@ -149,41 +149,48 @@ tests: func(b: build.builder, flags: list<string>, c3: build.generated) {
     b.step("update-seed", "Every test, then yelc3.c the seed", [seeding,]);
 }
 
-// tests/*.yel and the packages there with an expected output (tests/<name>.out; a directory
-// without one is a package the tests include), each run, and again with a collection before every
-// allocation (a root the C does not keep shows there); the runner of tests/testing's tests (yelc
-// test: three that fail, a snapshot that differs among them); tests/build-system (yelc build from
-// a cold cache); tests/host natively (the host's interfaces)
+// tests/packages: each package there with an expected output (tests/packages/<name>.out; one
+// without is a package the tests include) run, and again with a collection before every
+// allocation (a root the C does not keep shows there); the runner of tests/packages/testing's
+// tests (yelc test: three that fail, a snapshot that differs among them); tests/packages/build-system
+// (yelc build from a cold cache); tests/packages/lint (yelc lint: what its rules find);
+// tests/packages/host natively (the host's interfaces)
 programs: func(t: Tests) {
     let b = t.b;
-    let names = b.entries("tests");
+    let names = b.entries("tests/packages");
     let steps: list<build.step> = [];
     for entry in names {
-        let name = if entry.ends-with("/") { entry.substring(0, entry.len() - 1) } else if entry.ends-with(".yel") { entry.substring(0, entry.len() - 4) } else { "" };
-        // (a component of exports only runs under a host: components)
-        if name == "" || name == "errors" || name == "component" || !names.contains("{name}.out") { continue; }
-        let program = artifact(t, b.executable(name, if entry.ends-with("/") { "tests/" + name } else { "tests/" + entry }));
+        if !entry.ends-with("/") { continue; }
+        let name = entry.substring(0, entry.len() - 1);
+        if !names.contains("{name}.out") { continue; }
+        let program = artifact(t, b.executable(name, "tests/packages/" + name));
         for stressed in [false, true,] {
             let running = b.run-artifact(program).named(if stressed { "test {name} (YEL_GC_STRESS=1)" } else { "test {name}" });
             if stressed { running.set-environment("YEL_GC_STRESS", "1"); }
-            running.expect-output("tests/{name}.out");
+            running.expect-output("tests/packages/{name}.out");
             steps.push(running);
         }
     }
-    let testing = b.run-artifact(artifact(t, b.test("testing", "tests/testing"))).named("testing (yelc test)");
-    testing.expect-output("tests/testing.runner.out");
+    let testing = b.run-artifact(artifact(t, b.test("testing", "tests/packages/testing"))).named("testing (yelc test)");
+    testing.expect-output("tests/packages/testing.runner.out");
     steps.push(testing);
     let building = after(t, b.command([
         "sh",
         "-c",
-        "cd tests/build-system && rm -rf .yel-cache yel-out && ../../$0 build run && ../../$0 build test && ../../$0 build check",
+        "cd tests/packages/build-system && rm -rf .yel-cache yel-out && ../../../$0 build run && ../../../$0 build test && ../../../$0 build check",
         t.yelc,
     ]).named("build system (yelc build)"));
-    building.expect-output("tests/build-system/expected.txt");
+    building.expect-output("tests/packages/build-system/expected.txt");
     building.expect-exit(0);
     steps.push(building);
-    steps.push(sharing(t, b.run-artifact(artifact(t, b.test("host", "tests/host"))).named("host")));
-    suite(t, "test-programs", "The test programs, the test runner, yelc build and the host", steps);
+    // yelc lint: std:lint's rules and the project's own (its lint.yel), interpreted, on src
+    let linting = after(t, b.command(["sh", "-c", "cd tests/packages/lint && ../../../$0 lint src", t.yelc,]).named("lint (yelc lint)"));
+    linting.expect-output("tests/packages/lint/expected.txt");
+    linting.expect-exit(1);
+    for one in ["tests/packages/lint", "runtime/std/lint", t.yelc,] { linting.input(one); }
+    steps.push(linting);
+    steps.push(sharing(t, b.run-artifact(artifact(t, b.test("host", "tests/packages/host"))).named("host")));
+    suite(t, "test-packages", "The test packages, the test runner, yelc build and the host", steps);
 }
 
 // std's own tests, beside it (a package's *.test.yel: core's in its folders) and the compiler's
@@ -205,27 +212,70 @@ packages: func(t: Tests) {
         }
     }
     steps.push(b.run-artifact(artifact(t, b.test("compiler", "compiler"))).named("compiler"));
-    suite(t, "test-packages", "std's tests and the compiler's", steps);
+    suite(t, "test-units", "std's tests and the compiler's", steps);
 }
 
-// tests/errors/*.yel must not compile: yelc reports each error their first lines name, and no
-// others (tools/errors checks one)
-errors: func(t: Tests) {
+// tests/language and tests/std, as test262 is laid out: a folder for each part of the language and
+// of std, a test a file, each starting with its header (tools/runner says what it may say: what
+// the test is for, the backends it is not for, how it must end, the errors of one that must not
+// compile). Each runs natively (tools/runner compiles it, cc links it, and it is run twice, the
+// second time under YEL_GC_STRESS=1) and interpreted (yelc run); a test with a <name>.out beside it
+// must write that
+language: func(t: Tests) {
     let b = t.b;
-    let checker = b.executable("errors", "tools/errors");
-    let steps: list<build.step> = [];
-    for entry in b.entries("tests/errors") {
-        if !entry.ends-with(".yel") { continue; }
-        let test = "tests/errors/" + entry;
-        let checking = after(t, b.run-artifact(checker).named("errors {entry}"));
-        checking.add-argument(t.yelc);
-        checking.add-argument(test);
-        let _ = checking.output-dir("out");
-        checking.input(test);
-        checking.input(t.yelc);
-        steps.push(checking);
+    let runner = b.executable("runner", "tools/runner");
+    let native: list<build.step> = [];
+    let interpreted: list<build.step> = [];
+    let cc: list<string> = [b.cc,];
+    for one in t.flags { cc.push(one); }
+    for one in ["-Iruntime", "-Iruntime/libuv/include", "--", "build/yel.o", "build/libuv.a",] { cc.push(one); }
+    for one in b.system-libraries() { cc.push(one); }
+    let tests = tests-in(b, "tests/language");
+    for one in tests-in(b, "tests/std") { tests.push(one); }
+    for test in tests {
+        let name = test.substring(6, test.len() - 4);
+        for backend in ["native", "interp",] {
+            let running = after(t, b.run-artifact(runner).named("{name} ({backend})"));
+            for one in [t.yelc, backend, test,] { running.add-argument(one); }
+            let _ = running.output-dir("out");
+            if backend == "native" { for one in cc { running.add-argument(one); } }
+            for one in [test, t.yelc, "runtime/prelude.yel", "runtime/std",] { running.input(one); }
+            // (the packages a test includes: only modules' tests include any)
+            if test.starts-with("tests/language/modules/") { running.input("tests/packages"); }
+            match expected(b, test) {
+                some(out) => running.input(out),
+                none => {}
+            }
+            if backend == "native" {
+                for one in ["build/yel.o", "build/libuv.a", "runtime/yel.h",] { running.input(one); }
+                native.push(running);
+            } else {
+                interpreted.push(running);
+            }
+        }
     }
-    suite(t, "test-errors", "Programs that must not compile, and what yelc tells", steps);
+    suite(t, "test-language", "tests/language and tests/std, compiled and run (natively, and under GC stress)", native);
+    suite(t, "test-run", "tests/language and tests/std, interpreted (yelc run)", interpreted);
+}
+
+// a test's expected output, where it has one (<name>.out beside it)
+expected: func(b: build.builder, test: string) -> option<string> {
+    let slash = test.find-last("/").unwrap-or(0);
+    let name = test.substring(slash + 1, test.len() - 4) + ".out";
+    if b.entries(test.substring(0, slash)).contains(name) { some(test.substring(0, test.len() - 4) + ".out") } else { none }
+}
+
+// the tests in dir and its folders, each a .yel file's path, sorted
+tests-in: func(b: build.builder, dir: string) -> list<string> {
+    let out: list<string> = [];
+    for entry in b.entries(dir) {
+        if entry.ends-with("/") {
+            for inner in tests-in(b, dir + "/" + entry.substring(0, entry.len() - 1)) { out.push(inner); }
+        } else if entry.ends-with(".yel") {
+            out.push(dir + "/" + entry);
+        }
+    }
+    out
 }
 
 // tests/fmt/*.yel: yelc --fmt lays each out as tests/fmt/<name>.out has it, and lays that out
@@ -270,13 +320,13 @@ components: func(t: Tests, sdk: string, stress: string, c3: build.generated) {
 
     // stdin to stdout as streams; a stream from the host read in part (its end let go after its
     // last use, else stdin's future never comes)
-    let cat = component(t, clang, runtime, "cat", "tests/cat.yel", [], false);
-    let echoing = shell(t, "stdin to stdout (component)", "perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y \"$0\" < tests/cat.in", [cat.0,]);
-    echoing.expect-output("tests/cat.component.out");
+    let cat = component(t, clang, runtime, "cat", "tests/components/cat.yel", [], false);
+    let echoing = shell(t, "stdin to stdout (component)", "perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y \"$0\" < tests/components/cat.in", [cat.0,]);
+    echoing.expect-output("tests/components/cat.component.out");
     steps.push(echoing);
-    let dropping = component(t, clang, runtime, "stdin-drop", "tests/stdin-drop.yel", [], false);
+    let dropping = component(t, clang, runtime, "stdin-drop", "tests/components/stdin-drop.yel", [], false);
     let draining = shell(t, "host ends let go (component)", "head -c 2000000 /dev/zero | perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y \"$0\"", [dropping.0,]);
-    draining.expect-output("tests/stdin-drop.component.out");
+    draining.expect-output("tests/components/stdin-drop.component.out");
     steps.push(draining);
 
     match b.find-program("wac") {
@@ -284,23 +334,23 @@ components: func(t: Tests, sdk: string, stress: string, c3: build.generated) {
             // (each a caller's imports plugged into an api's exports)
             for pair in [("fixed-lists", "fixed-api", "fixed-caller"), ("resources-exported", "res-api", "res-caller"), ("streams", "stream-api", "stream-caller"),] {
                 let (name, api, caller) = pair;
-                let exporting = component(t, clang, runtime, api, "tests/" + api, [], true);
-                let calling = component(t, clang, runtime, caller, "tests/" + caller, [exporting.1,], false);
+                let exporting = component(t, clang, runtime, api, "tests/components/" + api, [], true);
+                let calling = component(t, clang, runtime, caller, "tests/components/" + caller, [exporting.1,], false);
                 let plugged = plug(t, name, calling.0, exporting.0);
                 let wasmtime = if name == "fixed-lists" { "-W component-model-fixed-length-lists=y " } else { "" };
                 let running = shell(t, "{name} (components)", "perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y {wasmtime}\"$0\"", [plugged,]);
-                running.expect-output("tests/{name}.component.out");
+                running.expect-output("tests/components/{name}.component.out");
                 steps.push(running);
             }
             // a UI component lowered by hand as templates will be, its yel:ui/dom given by a
             // stand-in host (each call printed) and driven as the shell would: the wire, call by call
-            let dom = component(t, clang, runtime, "ui-dom", "tests/ui-dom", [], true);
-            let counter = component(t, clang, runtime, "ui-counter", "tests/ui-counter", ["tests/ui-wit",], true);
-            let driver = component(t, clang, runtime, "ui-driver", "tests/ui-driver", [counter.1, "tests/ui-wit",], false);
+            let dom = component(t, clang, runtime, "ui-dom", "tests/components/ui-dom", [], true);
+            let counter = component(t, clang, runtime, "ui-counter", "tests/components/ui-counter", ["tests/components/ui-wit",], true);
+            let driver = component(t, clang, runtime, "ui-driver", "tests/components/ui-driver", [counter.1, "tests/components/ui-wit",], false);
             let hosted = plug(t, "ui-counter-hosted", counter.0, dom.0);
             let ui = plug(t, "ui", driver.0, hosted);
             let running = shell(t, "ui component (components)", "perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y \"$0\" 2>&1", [ui,]);
-            running.expect-output("tests/ui.component.out");
+            running.expect-output("tests/components/ui.component.out");
             steps.push(running);
         }
         none => {}
@@ -308,20 +358,20 @@ components: func(t: Tests, sdk: string, stress: string, c3: build.generated) {
 
     // exports called by the host, each call's result as tests/component.calls.out has it; a
     // private func (@(private)) the component's own, not in its WIT
-    let exporting = component(t, clang, runtime, "component", "tests/component", [], true);
-    let calling = shell(t, "component (exports)", "while read -r call; do perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y --invoke \"$call\" \"$0\"; done < tests/component.calls", [exporting.0,]);
-    calling.expect-output("tests/component.calls.out");
+    let exporting = component(t, clang, runtime, "component", "tests/components/component", [], true);
+    let calling = shell(t, "component (exports)", "while read -r call; do perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y --invoke \"$call\" \"$0\"; done < tests/components/component.calls", [exporting.0,]);
+    calling.expect-output("tests/components/component.calls.out");
     steps.push(calling);
     steps.push(shell(t, "component (a private func not exported)", "! grep -rq tally-step \"$0\"", [exporting.1,]));
 
     // tests/host as a component (the network and name lookups granted; after the native run: they
     // share their files), and yelc test's runner of tests/testing as one; both collecting at every
     // turn's end (YEL_GC_STRESS=1: a reactor keeps no frames, its turns' ends its only collections)
-    let host = sharing(t, after(t, b.command(["tools/test-component.sh", "tests/host",]).named("host (component)")));
+    let host = sharing(t, after(t, b.command(["tools/test-component.sh", "tests/packages/host",]).named("host (component)")));
     host.set-environment("WASMTIME_FLAGS", "--env YEL_GC_STRESS=1 -S inherit-network=y -S allow-ip-name-lookup=y");
-    let testing = after(t, b.command(["tools/test-component.sh", "tests/testing",]).named("testing (yelc test, component)"));
+    let testing = after(t, b.command(["tools/test-component.sh", "tests/packages/testing",]).named("testing (yelc test, component)"));
     testing.set-environment("WASMTIME_FLAGS", "--env YEL_GC_STRESS=1");
-    testing.expect-output("tests/testing.runner.out");
+    testing.expect-output("tests/packages/testing.runner.out");
     for running in [host, testing,] {
         running.set-environment("YELC", t.yelc);
         running.set-environment("WASI_SDK", sdk);

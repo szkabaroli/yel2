@@ -1,0 +1,13 @@
+// ---
+// description: a map made in a block is lent as a named one is
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let total = 0;
+    for row in ({ let m: map<string, list<list<s32>>> = map.new(); m.set("g", [[1,],]); m }).get-or("g", []) {
+        row.push(9);
+        total += row.len() as s32;
+    }
+    expect.equal(total, 2);
+}

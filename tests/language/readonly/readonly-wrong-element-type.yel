@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a list's item: expected s32, found string
+// features: [readonly]
+// negative: compile
+// error: 8:40: a list's item: expected s32, found string
+// ---
+main: func() {
+    let fixed: list<s32> & readonly = ["a",];
+}

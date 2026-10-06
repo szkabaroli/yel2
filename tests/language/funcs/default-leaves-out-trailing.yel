@@ -1,0 +1,15 @@
+// ---
+// description: a default fills the parameters left out
+// features: [funcs, defaults]
+// ---
+from "std:testing" include expect;
+
+greeting: func(name: string, word: string = "hello", times: s32 = 1) -> string {
+    let words: list<string> = [];
+    for step in 0..times { words.push(word); }
+    "{words.join(" ")}, {name}"
+}
+
+main: func() {
+    expect.equal(greeting("yel"), "hello, yel");
+}

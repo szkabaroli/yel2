@@ -1,0 +1,9 @@
+// ---
+// description: an escaped backslash matches a backslash
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(/a\\b/.test("a\\b"));
+}

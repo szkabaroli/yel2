@@ -1,0 +1,11 @@
+// ---
+// description: param gives none for a name that is not there
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://h/?a=1"));
+    expect.none(url.param(u, "z"));
+}

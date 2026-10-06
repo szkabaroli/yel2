@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: func f is declared twice
+// features: [funcs]
+// negative: compile
+// error: 8:1: func f is declared twice
+// ---
+f: func() -> s32 { 1 }
+f: func() -> s32 { 2 }
+main: func() {}

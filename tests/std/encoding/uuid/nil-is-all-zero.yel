@@ -1,0 +1,10 @@
+// ---
+// description: uuid.nil is the all-zero UUID
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(uuid.to-string(uuid.nil()), "00000000-0000-0000-0000-000000000000");
+}

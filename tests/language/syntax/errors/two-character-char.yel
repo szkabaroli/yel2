@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a char is one character
+// features: [syntax,literals]
+// negative: compile
+// error: 8:19: a char is one character
+// ---
+main: func() {
+    let letter = 'ab';
+}

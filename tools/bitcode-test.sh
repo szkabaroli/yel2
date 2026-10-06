@@ -188,7 +188,7 @@ for test in $tests; do
 done
 # with WASI_SDK, no tests named (or --components): the component tests (as bootstrap.sh runs the C build's) built as
 # bitcode: imports, async ones, streams and futures, resources, the filesystem, exports (the calls
-# tests/component.calls makes), and (wac) components plugged into each other
+# tests/components/component.calls makes), and (wac) components plugged into each other
 if [ -n "${WASI_SDK:-}" ] && { [ $mode = all ] || [ $mode = components ]; }; then
 	crun() { perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y "$@"; }
 	component() { # name source [reactor] [-I wit]
@@ -203,36 +203,36 @@ if [ -n "${WASI_SDK:-}" ] && { [ $mode = all ] || [ $mode = components ]; }; the
 		if [ "$3" = "$(cat "$2")" ]; then echo "ok   $1 (component)"; else echo "FAIL $1 (component): $(echo "$3" | head -3)"; failed=1; fi
 	}
 	built() { component "$@" || { echo "FAIL $1 (component): $(grep -v '^ *#\|Stack\|PLEASE' "$out/c-$1.log" | head -3)"; failed=1; return 1; }; }
-	# the host's interfaces (tests/host: imports, the clock's waits, resources, the filesystem,
+	# the host's interfaces (tests/packages/host: imports, the clock's waits, resources, the filesystem,
 	# TCP, name lookups), its tests run as a bitcode component, a call each, collecting at every
 	# turn's end
-	if BACKEND=bitcode WASMTIME_FLAGS="--env YEL_GC_STRESS=1 -S inherit-network=y -S allow-ip-name-lookup=y" tools/test-component.sh tests/host > "$out/c-host.out" 2>&1; then
+	if BACKEND=bitcode WASMTIME_FLAGS="--env YEL_GC_STRESS=1 -S inherit-network=y -S allow-ip-name-lookup=y" tools/test-component.sh tests/packages/host > "$out/c-host.out" 2>&1; then
 		echo "ok   host ($(tail -n 1 "$out/c-host.out"), component)"
 	else
 		echo "FAIL host (component): $(grep '^FAIL' "$out/c-host.out" | head -3)"
 		failed=1
 	fi
-	built cat tests/cat.yel && expect cat tests/cat.component.out "$(crun "$out/c-cat.wasm" < tests/cat.in 2>&1)"
-	built stdin-drop tests/stdin-drop.yel && expect stdin-drop tests/stdin-drop.component.out "$(head -c 2000000 /dev/zero | crun "$out/c-stdin-drop.wasm" 2>&1)"
-	if built component tests/component reactor; then
-		while read -r call; do crun --invoke "$call" "$out/c-component.wasm"; done < tests/component.calls > "$out/c-component.calls.out" 2>&1
-		expect component tests/component.calls.out "$(cat "$out/c-component.calls.out")"
+	built cat tests/components/cat.yel && expect cat tests/components/cat.component.out "$(crun "$out/c-cat.wasm" < tests/components/cat.in 2>&1)"
+	built stdin-drop tests/components/stdin-drop.yel && expect stdin-drop tests/components/stdin-drop.component.out "$(head -c 2000000 /dev/zero | crun "$out/c-stdin-drop.wasm" 2>&1)"
+	if built component tests/components/component reactor; then
+		while read -r call; do crun --invoke "$call" "$out/c-component.wasm"; done < tests/components/component.calls > "$out/c-component.calls.out" 2>&1
+		expect component tests/components/component.calls.out "$(cat "$out/c-component.calls.out")"
 	fi
 	if command -v wac > /dev/null; then
-		built fixed-api tests/fixed-api reactor && built fixed-caller tests/fixed-caller -I "$out/c-fixed-api-wit" \
+		built fixed-api tests/components/fixed-api reactor && built fixed-caller tests/components/fixed-caller -I "$out/c-fixed-api-wit" \
 			&& wac plug "$out/c-fixed-caller.wasm" --plug "$out/c-fixed-api.wasm" -o "$out/c-fixed-lists.wasm" \
-			&& expect fixed-lists tests/fixed-lists.component.out "$(crun -W component-model-fixed-length-lists=y "$out/c-fixed-lists.wasm" 2>&1)"
-		built res-api tests/res-api reactor && built res-caller tests/res-caller -I "$out/c-res-api-wit" \
+			&& expect fixed-lists tests/components/fixed-lists.component.out "$(crun -W component-model-fixed-length-lists=y "$out/c-fixed-lists.wasm" 2>&1)"
+		built res-api tests/components/res-api reactor && built res-caller tests/components/res-caller -I "$out/c-res-api-wit" \
 			&& wac plug "$out/c-res-caller.wasm" --plug "$out/c-res-api.wasm" -o "$out/c-resources-exported.wasm" \
-			&& expect resources-exported tests/resources-exported.component.out "$(crun "$out/c-resources-exported.wasm" 2>&1)"
-		built ui-dom tests/ui-dom reactor && built ui-counter tests/ui-counter reactor -I tests/ui-wit \
-			&& built ui-driver tests/ui-driver -I "$out/c-ui-counter-wit" -I tests/ui-wit \
+			&& expect resources-exported tests/components/resources-exported.component.out "$(crun "$out/c-resources-exported.wasm" 2>&1)"
+		built ui-dom tests/components/ui-dom reactor && built ui-counter tests/components/ui-counter reactor -I tests/components/ui-wit \
+			&& built ui-driver tests/components/ui-driver -I "$out/c-ui-counter-wit" -I tests/components/ui-wit \
 			&& wac plug "$out/c-ui-counter.wasm" --plug "$out/c-ui-dom.wasm" -o "$out/c-ui-counter-hosted.wasm" \
 			&& wac plug "$out/c-ui-driver.wasm" --plug "$out/c-ui-counter-hosted.wasm" -o "$out/c-ui.wasm" \
-			&& expect ui tests/ui.component.out "$(crun "$out/c-ui.wasm" 2>&1)"
-		built stream-api tests/stream-api reactor && built stream-caller tests/stream-caller -I "$out/c-stream-api-wit" \
+			&& expect ui tests/components/ui.component.out "$(crun "$out/c-ui.wasm" 2>&1)"
+		built stream-api tests/components/stream-api reactor && built stream-caller tests/components/stream-caller -I "$out/c-stream-api-wit" \
 			&& wac plug "$out/c-stream-caller.wasm" --plug "$out/c-stream-api.wasm" -o "$out/c-streams.wasm" \
-			&& expect streams tests/streams.component.out "$(crun "$out/c-streams.wasm" 2>&1)"
+			&& expect streams tests/components/streams.component.out "$(crun "$out/c-streams.wasm" 2>&1)"
 	fi
 fi
 exit $failed

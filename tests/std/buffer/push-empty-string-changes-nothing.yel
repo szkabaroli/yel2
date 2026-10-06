@@ -1,0 +1,13 @@
+// ---
+// description: pushing an empty string changes nothing
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(8);
+    b.push("");
+    b.push("a");
+    b.push("");
+    expect.equal(b.to-string(), "a");
+}

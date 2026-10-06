@@ -1,0 +1,9 @@
+// ---
+// description: parse-unsigned-radix reads u64's greatest in hex
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-unsigned-radix("ffffffffffffffff", 16), some(u64.MAX));
+}

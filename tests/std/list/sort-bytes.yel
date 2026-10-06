@@ -1,0 +1,11 @@
+// ---
+// description: sort works on a list of bytes
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs: list<u8> = [200, 3, 255, 0,];
+    xs.sort({ a, b -> a < b });
+    expect.equal(xs, [0, 3, 200, 255,]);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: byte-at reads the bytes of a multibyte character one by one
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("é".byte-at(0), 195);
+    expect.equal("é".byte-at(1), 169);
+}

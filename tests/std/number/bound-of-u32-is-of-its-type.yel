@@ -1,0 +1,11 @@
+// ---
+// description: u32.MAX fits where a u32 is wanted
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: u32 = u32.MAX;
+    let bottom: u32 = u32.MIN;
+    expect.holds(bottom <= top);
+}

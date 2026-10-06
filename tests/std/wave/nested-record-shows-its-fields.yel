@@ -1,0 +1,13 @@
+// ---
+// description: a record inside a record shows its fields in order
+// features: [wave]
+// ---
+resource Inner { a: s32, b: string, }
+
+resource Outer { name: string, inner: Inner, }
+
+main: func() {
+    let inner: Inner = { a: 1, b: "x", };
+    let outer: Outer = { name: "o", inner: inner, };
+    print("{outer}\n");
+}

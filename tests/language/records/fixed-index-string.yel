@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: an index: expected s64, found string
+// features: [records, fixed-lists]
+// negative: compile
+// error: 9:15: an index: expected s64, found string
+// ---
+main: func() {
+    let v: list<s32, 2> = [1, 2];
+    print("{v["a"]}\n");
+}

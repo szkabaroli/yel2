@@ -1,0 +1,12 @@
+// ---
+// description: after freezing, the readonly name is used
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let words: list<string> = ["a",];
+    words.push("b");
+    let frozen: list<string> & readonly = words;
+    let again: list<string> & readonly = frozen;
+    expect.equal(again, ["a", "b",]);
+}

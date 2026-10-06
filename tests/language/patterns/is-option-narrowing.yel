@@ -1,0 +1,23 @@
+// ---
+// description: is option<T> narrows an option of a union
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type method = "get" | "post" | "put" | "delete";
+type write = "post" | "put";
+writes: func(m: write) -> string { "write {m}" }
+maybe: func(o: option<method>) -> string {
+    if o is option<write> {
+        match o {
+            some(w) => writes(w),
+            none => "nothing",
+        }
+    } else {
+        "not a write"
+    }
+}
+main: func() {
+    expect.equal(maybe(some("put")), "write put");
+    expect.equal(maybe(none), "nothing");
+    expect.equal(maybe(some("get")), "not a write");
+}

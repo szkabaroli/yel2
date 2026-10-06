@@ -1,0 +1,9 @@
+// ---
+// description: an enum shows the name of its case
+// features: [wave]
+// ---
+enum Dir { north, south, }
+
+main: func() {
+    print("{Dir.north} {Dir.south}\n");
+}

@@ -1,9 +1,0 @@
-first over 5: 9
-first over 50: -1
-[a][c] short
-inner 42
-outer 1
-grades abcf
-total 25, 17 / 5 = 3, 17 % 5 = 2, -(3 - 10) = 7
-tab:	| quote: " | brace: {ok} | backslash: \
-big true false

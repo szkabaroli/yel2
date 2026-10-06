@@ -1,0 +1,13 @@
+// ---
+// description: the s64 bounds compare as extremes
+// features: [types, integers, comparison]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(s64.MIN < s64.MAX);
+    expect.holds(s64.MIN < 0);
+    expect.holds(s64.MAX > 0);
+    expect.holds(s64.MIN <= s64.MIN);
+    expect.holds(s64.MAX >= s64.MAX);
+}

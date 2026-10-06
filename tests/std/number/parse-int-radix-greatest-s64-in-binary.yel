@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix reads 63 ones in binary as s64's greatest
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("111111111111111111111111111111111111111111111111111111111111111", 2), some(s64.MAX));
+}

@@ -1,0 +1,13 @@
+// ---
+// description: now is a recent instant
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let now = time.now();
+    expect.holds(now.seconds > 1700000000);
+    expect.holds(now.nanoseconds >= 0);
+    expect.holds(now.nanoseconds < 1000000000);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: the char literal '-' is a char
+// features: [types, chars]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let dash: char = '-';
+    expect.equal(dash as u32, 45);
+}

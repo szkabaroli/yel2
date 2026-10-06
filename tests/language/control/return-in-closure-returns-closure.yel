@@ -1,0 +1,10 @@
+// ---
+// description: return inside a closure leaves the closure only
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let check = { n: s32 -> if n > 0 { return "positive"; } "other" };
+    expect.equal(check(3), "positive");
+    expect.equal(check(-3), "other");
+}

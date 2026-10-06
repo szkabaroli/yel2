@@ -1,0 +1,13 @@
+// ---
+// description: the last key can be removed
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    m.set(1, 1);
+    m.set(2, 2);
+    m.remove(2);
+    expect.equal(m.keys(), [1,]);
+}

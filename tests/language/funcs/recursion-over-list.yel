@@ -1,0 +1,14 @@
+// ---
+// description: a func recurses over a list by index
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+sum-from: func(items: list<s32>, index: s64) -> s32 {
+    if index >= items.len() { 0 } else { items[index] + sum-from(items, index + 1) }
+}
+
+main: func() {
+    expect.equal(sum-from([1, 2, 3, 4,], 0), 10);
+    expect.equal(sum-from([], 0), 0);
+}

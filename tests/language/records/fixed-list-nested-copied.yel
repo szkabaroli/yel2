@@ -1,0 +1,13 @@
+// ---
+// description: an inner fixed-length list read out is a copy
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let grid: list<list<u8, 2>, ?> = [[1, 2], [3, 4]];
+    let row = grid[1];
+    row[0] = 70;
+    expect.equal(grid[1][0], 3);
+    expect.equal(row[0], 70);
+}

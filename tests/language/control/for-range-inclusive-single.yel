@@ -1,0 +1,10 @@
+// ---
+// description: a..=a runs one turn
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let seen: list<s32> = [];
+    for i in 3..=3 { seen.push(i); }
+    expect.equal(seen, [3,]);
+}

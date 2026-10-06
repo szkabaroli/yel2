@@ -1,0 +1,13 @@
+// ---
+// description: u32.MIN and u32.MAX are the type's bounds, of that type
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{u32.MIN}", "0");
+    expect.equal("{u32.MAX}", "4294967295");
+    let low: u32 = u32.MIN;
+    let high: u32 = u32.MAX;
+    expect.holds(low < high);
+}

@@ -1,0 +1,10 @@
+// ---
+// description: contains takes the text meaning where its first argument is a string
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("abc".contains("b"));
+    expect.holds(!contains("abc", "z"));
+}

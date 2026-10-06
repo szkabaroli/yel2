@@ -1,0 +1,16 @@
+// ---
+// description: does not compile: unexpected character '$'
+// features: [syntax]
+// negative: compile
+// error: 12:15: unexpected character '$'
+// error: 13:15: unexpected character '§'
+// error: 14:13: unterminated string
+// ---
+// characters the lexer cannot read, each told, and a string with no end (taken to the end of the
+// file); the parser tells nothing in a file whose tokens may be wrong
+main: func() -> s32 {
+    let a = 1 $ 2;
+    let b = 3 § 4;
+    let c = "no end;
+    0
+}

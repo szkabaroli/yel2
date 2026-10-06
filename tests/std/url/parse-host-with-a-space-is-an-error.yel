@@ -1,0 +1,10 @@
+// ---
+// description: parse refuses a space in a host
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.err(url.parse("https://bad host/"));
+}

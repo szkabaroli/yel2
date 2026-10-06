@@ -1,0 +1,12 @@
+// ---
+// description: a const may be a string
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+const GREETING = "hello";
+
+main: func() {
+    expect.equal(GREETING, "hello");
+    expect.equal(GREETING.len(), 5);
+}

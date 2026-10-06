@@ -1,0 +1,14 @@
+// ---
+// description: an option of an option shows both layers
+// features: [types, option, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nested: option<option<s32>> = some(none);
+    expect.equal("{nested}", "some(none)");
+    let deep: option<option<s32>> = some(some(1));
+    expect.equal("{deep}", "some(some(1))");
+    let empty: option<option<s32>> = none;
+    expect.equal("{empty}", "none");
+}

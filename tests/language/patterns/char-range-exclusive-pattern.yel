@@ -1,0 +1,15 @@
+// ---
+// description: an exclusive char range leaves out its end
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+before-m: func(c: char) -> bool {
+    match c {
+        'a'..'m' => true,
+        _ => false,
+    }
+}
+main: func() {
+    expect.holds(before-m('l'));
+    expect.holds(!before-m('m'));
+}

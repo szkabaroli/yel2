@@ -1,0 +1,10 @@
+// ---
+// description: params reads a + as a space
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.params("q=two+words"), [("q", "two words"),]);
+}

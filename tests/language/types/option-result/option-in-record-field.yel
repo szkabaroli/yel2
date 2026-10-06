@@ -1,0 +1,14 @@
+// ---
+// description: an option as a record's field
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+resource Node { next: option<s32>, }
+
+main: func() {
+    let node: Node = { next: none, };
+    expect.none(node.next);
+    node.next = some(2);
+    expect.equal(expect.some(node.next), 2);
+}

@@ -1,0 +1,17 @@
+// ---
+// description: resources compare by identity, strings by their bytes
+// features: [types, equality]
+// ---
+from "std:testing" include expect;
+
+resource Pair { name: string, scores: list<s32>, }
+
+main: func() {
+    let first: Pair = { name: "a", scores: [1, 2,], };
+    let second: Pair = { name: "a", scores: [1, 2,], };
+    let same = first;
+    expect.holds(same == first);
+    expect.holds(first != second);
+    expect.holds(first.name == second.name);
+    expect.holds("ab" == "a" + "b");
+}

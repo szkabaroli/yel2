@@ -1,0 +1,9 @@
+// ---
+// description: compare puts upper case ASCII before lower case
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(compare("Z", "a") < 0);
+}

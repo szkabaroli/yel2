@@ -1,0 +1,19 @@
+// ---
+// description: each call of a func that makes a closure gets its own environment
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+make-counter: func() -> func() -> s32 {
+    let count = 0;
+    { count += 1; count }
+}
+
+main: func() {
+    let a = make-counter();
+    let b = make-counter();
+    expect.equal(a(), 1);
+    expect.equal(a(), 2);
+    expect.equal(b(), 1);
+    expect.equal(a(), 3);
+}

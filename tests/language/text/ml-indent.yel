@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: this line of a multiline string is indented less than its closing """ (8 spaces)
+// features: [text]
+// negative: compile
+// error: 10:1: this line of a multiline string is indented less than its closing """ (8 spaces)
+// ---
+main: func() -> s32 {
+    let s = """
+        fine
+      short
+        """;
+    0
+}

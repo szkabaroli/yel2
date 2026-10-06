@@ -1,0 +1,15 @@
+// ---
+// description: each version 7 UUID sorts after the one before it
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    let previous = uuid.to-string(uuid.time-ordered());
+    for index in 0..500 {
+        let next = uuid.to-string(uuid.time-ordered());
+        expect.holds(next.compare(previous) > 0);
+        previous = next;
+    }
+}

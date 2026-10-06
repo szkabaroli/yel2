@@ -1,0 +1,18 @@
+// ---
+// description: a list of a union, each item told apart
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+main: func() {
+    let ids: list<id> = [1, "b", 3,];
+    let numbers = 0;
+    let texts = 0;
+    for who in ids {
+        if who is s32 { numbers += 1; } else { texts += 1; }
+    }
+    expect.equal(numbers, 2);
+    expect.equal(texts, 1);
+}

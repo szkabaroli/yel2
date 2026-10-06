@@ -1,0 +1,18 @@
+// ---
+// description: wait for all takes futures too
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+delayed: async func(turns: s32) -> s32 {
+    for turn in 0..turns { wait yield-turn(); }
+    turns
+}
+
+main: async func() {
+    let first = start delayed(4);
+    let second = start delayed(1);
+    let both = wait { slow: first, fast: second, };
+    expect.equal(both.slow, 4);
+    expect.equal(both.fast, 1);
+}

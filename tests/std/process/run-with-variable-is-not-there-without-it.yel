@@ -1,0 +1,20 @@
+// ---
+// description: a command run without the variable does not see it
+// features: [process]
+// ---
+from "std:testing" include expect;
+from "std:process" include process;
+
+// how a child ended: its code, or minus its signal
+status: func(ended: result<process.ended, string>) -> s64 {
+    match ended {
+        ok(code(number)) => number,
+        ok(signal(number)) => -number,
+        err(_) => -1000,
+    }
+}
+
+main: func() {
+    let found = process.run-with("sh", ["-c", "test -z \"$YEL_TEST_VALUE\"",], "", [], "");
+    expect.equal(status(found), 0);
+}

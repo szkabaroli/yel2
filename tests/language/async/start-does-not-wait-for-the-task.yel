@@ -1,0 +1,18 @@
+// ---
+// description: start gives control back before the task has run
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+work: async func() {
+    log.push("work");
+}
+
+main: async func() {
+    let future = start work();
+    log.push("started");
+    wait future;
+    expect.equal(log, ["started", "work",]);
+}

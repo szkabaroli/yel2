@@ -1,0 +1,11 @@
+// ---
+// description: a recursion a few thousand calls deep ends
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+sum-to: func(n: s64) -> s64 { if n == 0 { 0 } else { n + sum-to(n - 1) } }
+
+main: func() {
+    expect.equal(sum-to(5000), 12502500);
+}

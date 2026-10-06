@@ -1,0 +1,14 @@
+// ---
+// description: a match on a bool is an expression
+// features: [types, match]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let flag = true;
+    let word = match flag {
+        true => "yes",
+        false => "no",
+    };
+    expect.equal(word, "yes");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: field owner of Account: expected s32 | string, found bool
+// features: [types, unions]
+// negative: compile
+// error: 9:42: field owner of Account: expected s32 | string, found bool
+// ---
+type id = s32 | string;
+resource Account { owner: id, }
+main: func() { let a: Account = { owner: true, }; }

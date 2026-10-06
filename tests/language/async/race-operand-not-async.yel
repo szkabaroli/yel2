@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: each operand of a race is an async call or a future
+// features: [async]
+// negative: compile
+// error: 9:17: wait takes an async func's call or a future, found an integer
+// ---
+work: async func() -> s32 { 1 }
+main: async func() {
+    let first = wait work() | 3;
+}

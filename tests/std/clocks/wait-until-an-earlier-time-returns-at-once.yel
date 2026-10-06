@@ -1,0 +1,11 @@
+// ---
+// description: wait-until a time that has passed returns
+// features: [clocks, async]
+// ---
+from "std:testing" include expect;
+from "std:clocks" include monotonic-clock;
+
+main: async func() {
+    wait monotonic-clock.wait-until(0);
+    expect.holds(monotonic-clock.now() > 0);
+}

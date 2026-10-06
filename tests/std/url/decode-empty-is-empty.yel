@@ -1,0 +1,10 @@
+// ---
+// description: decode of an empty text is empty
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode(""), ok(""));
+}

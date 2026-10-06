@@ -1,0 +1,11 @@
+// ---
+// description: a char cast to an integer is its code point
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal('A' as s32, 65);
+    expect.equal('→' as u32, 8594);
+    expect.equal('\u{1F600}' as u32, 128512);
+}

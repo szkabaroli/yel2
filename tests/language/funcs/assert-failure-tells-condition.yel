@@ -1,0 +1,12 @@
+// ---
+// description: a failed assert stops the program and tells where and the condition as written
+// features: [funcs, directives]
+// exit: 1
+// ---
+main: func() -> s32 {
+    let total = 3;
+    assert(total == 3);
+    assert(total > 0, "total is positive");
+    assert(total * 2 == 7);
+    0
+}

@@ -1,0 +1,17 @@
+// ---
+// description: a value of a narrower union where a wider one is wanted
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+type value = s32 | string | bool;
+
+wider: func(who: id) -> value { who }
+
+main: func() {
+    let widened = wider(5);
+    expect.holds(widened is s32);
+    let text = wider("abc");
+    expect.holds(text is string);
+}

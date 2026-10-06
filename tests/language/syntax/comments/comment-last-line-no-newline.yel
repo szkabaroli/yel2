@@ -1,0 +1,11 @@
+// ---
+// description: a comment on the last line needs no line break after it
+// features: [syntax,comments]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(1, 1);
+}
+// no newline follows
+// no newline follows

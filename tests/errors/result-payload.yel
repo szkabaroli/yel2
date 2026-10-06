@@ -1,5 +1,0 @@
-// error: 3:32: ok carries no payload in a result<_, string>
-main: func() -> s32 {
-    let r: result<_, string> = ok(1);
-    0
-}

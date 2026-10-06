@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: i is not declared
+// features: [control]
+// negative: compile
+// error: 10:13: i is not declared
+// help: did you mean io?
+// ---
+main: func() {
+    for i in 0..3 { }
+    let x = i;
+}

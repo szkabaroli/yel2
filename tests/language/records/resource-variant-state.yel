@@ -1,0 +1,34 @@
+// ---
+// description: a resource's variant field is assigned in place and seen through every name
+// features: [resources, variants]
+// ---
+from "std:testing" include expect;
+
+resource Socket { port: s32, }
+
+variant ConnectionState { connecting, open(Socket), closed(string), }
+
+resource Connection {
+    name: string,
+    state: ConnectionState,
+}
+
+open: func(self: Connection, port: s32) { self.state = ConnectionState.open({ port: port, }); }
+
+close: func(self: Connection, why: string) {
+    match self.state {
+        open(socket) => { self.state = ConnectionState.closed("{why} (port {socket.port})"); }
+        _ => {}
+    }
+}
+
+main: func() {
+    let a: Connection = { name: "a", state: ConnectionState.connecting, };
+    let same = a;
+    let b: Connection = { name: "a", state: ConnectionState.connecting, };
+    a.open(8080);
+    expect.equal("{same.state}", "open(\{port: 8080\})");
+    expect.equal("{b.state}", "connecting");
+    same.close("done");
+    expect.equal("{a.state}", "closed(\"done (port 8080)\")");
+}

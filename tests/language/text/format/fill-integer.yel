@@ -1,0 +1,11 @@
+// ---
+// description: a fill character works on an integer
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 255;
+    expect.equal("[{value:*>8}]", "[*****255]");
+    expect.equal("[{value:#^9}]", "[###255###]");
+}

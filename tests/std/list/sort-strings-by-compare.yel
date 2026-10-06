@@ -1,0 +1,11 @@
+// ---
+// description: sort orders strings with compare
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let words = ["pear", "apple", "fig", "banana",];
+    words.sort({ a, b -> compare(a, b) < 0 });
+    expect.equal(words, ["apple", "banana", "fig", "pear",]);
+}

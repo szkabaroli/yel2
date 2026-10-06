@@ -1,0 +1,10 @@
+// ---
+// description: base32.decode refuses padding that is not to a whole group
+// features: [encoding, base32]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base32" include base32;
+
+main: func() {
+    expect.equal(expect.err(base32.decode("MZ======x")), "a length no base32 has (9)");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: replace does not look inside what it put in
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("a".replace("a", "aa"), "aa");
+}

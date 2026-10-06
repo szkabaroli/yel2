@@ -1,0 +1,9 @@
+// ---
+// description: a char shows as itself
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{'a'}{'é'}", "aé");
+}

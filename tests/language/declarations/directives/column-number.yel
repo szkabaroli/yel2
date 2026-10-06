@@ -1,0 +1,11 @@
+// ---
+// description: #column is the column where the directive starts
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(#column, 18);
+    let spaced =   #column;
+    expect.equal(spaced, 20);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: does not compile: unknown escape \q
+// features: [text]
+// negative: compile
+// error: 10:15: unknown escape \q
+// ---
+main: func() -> s32 {
+    let s = """
+        fine
+          bad \q here
+        """;
+    0
+}

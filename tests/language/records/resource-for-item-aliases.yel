@@ -1,0 +1,14 @@
+// ---
+// description: a for loop's item of resources is the list's object
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+main: func() {
+    let all: list<Counter> = [{ value: 1, }, { value: 2, },];
+    for counter in all { counter.value *= 10; }
+    expect.equal(all[0].value, 10);
+    expect.equal(all[1].value, 20);
+}

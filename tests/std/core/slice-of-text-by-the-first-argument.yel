@@ -1,0 +1,9 @@
+// ---
+// description: slice takes the text meaning where its first argument is a string
+// features: [core]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".slice(1, 3), "el");
+}

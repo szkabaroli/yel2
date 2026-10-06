@@ -1,0 +1,23 @@
+// ---
+// description: a task's @(context) value is kept while another task runs and allocates
+// features: [memory, async, context, gc]
+// ---
+from "std:testing" include expect;
+
+@(context) let request: string = "none";
+
+handle: async func(name: string) -> string {
+    request = "request {name}";
+    for turn in 0..3 {
+        wait yield-turn();
+        let junk = "junk {turn} {name}";
+    }
+    request
+}
+
+main: async func() {
+    let first = start handle("one");
+    let second = start handle("two");
+    expect.equal(wait first, "request one");
+    expect.equal(wait second, "request two");
+}

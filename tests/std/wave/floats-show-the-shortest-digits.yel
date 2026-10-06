@@ -1,0 +1,9 @@
+// ---
+// description: floats show the shortest digits that read back, with inf and nan
+// features: [wave]
+// ---
+main: func() {
+    let third: f64 = 1.0 / 3.0;
+    let tenth: f32 = 0.1;
+    print("{0.1 + 0.2} {third} {tenth} {1e10} {2.5e-3} {inf} {-inf} {nan} {7.5 % 2.0}\n");
+}

@@ -1,0 +1,17 @@
+// ---
+// description: return leaves both loops and the func
+// features: [control]
+// ---
+from "std:testing" include expect;
+find-pair: func(target: s32) -> option<tuple<s32, s32>> {
+    for a in 1..10 {
+        for b in 1..10 {
+            if a * b == target { return some((a, b)); }
+        }
+    }
+    none
+}
+main: func() {
+    expect.equal(find-pair(12), some((2, 6)));
+    expect.equal(find-pair(97), none);
+}

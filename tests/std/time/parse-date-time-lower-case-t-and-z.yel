@@ -1,0 +1,12 @@
+// ---
+// description: parse-date-time reads t and z in lower case
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = expect.ok(time.parse-date-time("2026-10-05t12:00:00z"));
+    expect.equal(when.hour, 12);
+    expect.equal(when.offset, 0);
+}

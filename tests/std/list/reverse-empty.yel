@@ -1,0 +1,10 @@
+// ---
+// description: reverse of an empty list is empty
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let nothing: list<s32> = [];
+    expect.equal(nothing.reverse().len(), 0);
+}

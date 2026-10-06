@@ -1,0 +1,12 @@
+// ---
+// description: a remainder by zero stops the program
+// features: [types, integers]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: u32 = 0;
+    let n: u32 = 5;
+    print("{n % zero}");
+}

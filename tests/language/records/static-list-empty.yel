@@ -1,0 +1,14 @@
+// ---
+// description: an empty list literal is a fresh list each time
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+empty: func() -> list<s32> { [] }
+
+main: func() {
+    let first = empty();
+    first.push(1);
+    expect.equal(empty().len(), 0);
+    expect.equal(first.len(), 1);
+}

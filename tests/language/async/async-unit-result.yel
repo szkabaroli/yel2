@@ -1,0 +1,17 @@
+// ---
+// description: an async func with no result type is waited for as ()
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let touched: bool = false;
+
+touch: async func() {
+    wait yield-turn();
+    touched = true;
+}
+
+main: async func() {
+    wait touch();
+    expect.holds(touched);
+}

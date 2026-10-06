@@ -1,0 +1,9 @@
+// ---
+// description: concat joins multibyte text without loss
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(concat("é", "😀").len(), 6);
+}

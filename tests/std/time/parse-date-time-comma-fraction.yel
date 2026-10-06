@@ -1,0 +1,11 @@
+// ---
+// description: parse-date-time reads a comma before the fraction
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = expect.ok(time.parse-date-time("2026-10-05T12:00:00,25Z"));
+    expect.equal(when.nanosecond, 250000000);
+}

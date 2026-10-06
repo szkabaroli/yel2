@@ -1,0 +1,14 @@
+// ---
+// description: a func is kept in a local and called through it
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+inc: func(x: s32) -> s32 { x + 1 }
+
+main: func() {
+    let f = inc;
+    expect.equal(f(1), 2);
+    let g: func(s32) -> s32 = inc;
+    expect.equal(g(10), 11);
+}

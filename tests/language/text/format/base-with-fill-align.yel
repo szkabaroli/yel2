@@ -1,0 +1,10 @@
+// ---
+// description: a base with a fill, an alignment and a width
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{255:#>6x}", "####ff");
+    expect.equal("{5:.<6b}", "101...");
+}

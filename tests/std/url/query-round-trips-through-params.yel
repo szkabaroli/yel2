@@ -1,0 +1,11 @@
+// ---
+// description: params undoes query
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let pairs = [("a b", "c&d"), ("é", "+="),];
+    expect.equal(url.params(url.query(pairs)), pairs);
+}

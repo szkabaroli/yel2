@@ -1,0 +1,12 @@
+// ---
+// description: an alias may name a generic type
+// features: [declarations,types]
+// ---
+from "std:testing" include expect;
+
+type names = list<string>;
+
+main: func() {
+    let all: names = ["a", "b"];
+    expect.equal(all.len(), 2);
+}

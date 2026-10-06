@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: a s32 | string is never a bool
+// features: [patterns]
+// negative: compile
+// error: 9:23: a s32 | string is never a bool
+// ---
+main: func() {
+    let v: s32 | string = 1;
+    let r = match v { let b: bool => 1, _ => 0, };
+}

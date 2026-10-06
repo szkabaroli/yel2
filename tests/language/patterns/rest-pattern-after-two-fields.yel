@@ -1,0 +1,11 @@
+// ---
+// description: ...rest after several named fields keeps only the remaining one
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let value = { a: 1, b: 2, c: 3, };
+    let { a, b, ...tail } = value;
+    expect.equal(a + b, 3);
+    expect.equal(tail.c, 3);
+}

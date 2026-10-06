@@ -1,0 +1,10 @@
+// ---
+// description: two random UUIDs differ
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.not-equal(uuid.to-string(uuid.random()), uuid.to-string(uuid.random()));
+}

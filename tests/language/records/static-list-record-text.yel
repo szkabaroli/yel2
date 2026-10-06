@@ -1,0 +1,27 @@
+// ---
+// description: a constant list of records keeps bools, chars and strings as written
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+record row { name: string, on: bool, mark: char, tags: list<string>, }
+
+rows: func() -> list<row> {
+    [
+        { name: "ada", on: true, mark: 'é', tags: ["a", "b",], },
+        { name: "", on: false, mark: 'z', tags: ["quote \" and\nline", "字",], },
+    ]
+}
+
+main: func() {
+    let all = rows();
+    expect.equal(all[0].name, "ada");
+    expect.holds(all[0].on);
+    expect.equal(all[0].mark, 'é');
+    expect.equal(all[0].tags.join(","), "a,b");
+    expect.equal(all[1].name, "");
+    expect.holds(!all[1].on);
+    expect.equal(all[1].mark, 'z');
+    expect.equal(all[1].tags[0], "quote \" and\nline");
+    expect.equal(all[1].tags[1], "字");
+}

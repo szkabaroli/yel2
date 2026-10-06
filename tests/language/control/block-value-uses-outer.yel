@@ -1,0 +1,11 @@
+// ---
+// description: a block as a value reads and writes the outer variables
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let total = 10;
+    let result = { total += 5; total * 2 };
+    expect.equal(result, 30);
+    expect.equal(total, 15);
+}

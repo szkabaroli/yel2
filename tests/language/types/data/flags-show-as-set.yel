@@ -1,0 +1,12 @@
+// ---
+// description: flags show as the set of the flags that are on
+// features: [types, flags, display]
+// ---
+from "std:testing" include expect;
+
+flags Access { read, write, execute, }
+
+main: func() {
+    let granted = Access.read | Access.write;
+    expect.equal("{granted}", "\{read, write\}");
+}

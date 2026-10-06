@@ -1,0 +1,14 @@
+// ---
+// description: a func returning a value only made in it is new, however nested
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+make: func(flag: bool) -> list<s32> {
+    if flag { [1,] } else { [2, 3,] }
+}
+main: func() {
+    let a: list<s32> & readonly = make(true);
+    let b: list<s32> & readonly = make(false);
+    expect.equal(a, [1,]);
+    expect.equal(b, [2, 3,]);
+}

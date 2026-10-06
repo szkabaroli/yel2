@@ -1,0 +1,13 @@
+// ---
+// description: an empty string's default
+// features: [funcs, defaults]
+// ---
+from "std:testing" include expect;
+
+wrap: func(body: string, prefix: string = "", suffix: string = "") -> string { prefix + body + suffix }
+
+main: func() {
+    expect.equal(wrap("x"), "x");
+    expect.equal(wrap("x", "<"), "<x");
+    expect.equal(wrap("x", "<", ">"), "<x>");
+}

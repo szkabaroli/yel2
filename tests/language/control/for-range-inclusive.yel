@@ -1,0 +1,10 @@
+// ---
+// description: a..=b includes b
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let seen: list<s32> = [];
+    for i in 1..=4 { seen.push(i); }
+    expect.equal(seen, [1, 2, 3, 4,]);
+}

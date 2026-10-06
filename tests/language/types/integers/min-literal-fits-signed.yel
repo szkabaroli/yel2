@@ -1,0 +1,12 @@
+// ---
+// description: -128 is an s8 and -9223372036854775808 an s64
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let small: s8 = -128;
+    expect.equal(small, s8.MIN);
+    let wide: s64 = -9223372036854775808;
+    expect.equal(wide, s64.MIN);
+}

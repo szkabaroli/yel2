@@ -1,0 +1,12 @@
+// ---
+// description: the matched value is evaluated once for all the arms
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+let calls: s32;
+next: func() -> s32 { calls += 1; 3 }
+main: func() {
+    let word = match next() { 1 => "one", 2 => "two", 3 => "three", _ => "many", };
+    expect.equal(word, "three");
+    expect.equal(calls, 1);
+}

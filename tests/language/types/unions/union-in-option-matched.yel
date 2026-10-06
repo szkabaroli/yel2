@@ -1,0 +1,29 @@
+// ---
+// description: matching an option of a union through some(let x)
+// features: [types, unions, match]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+describe: func(who: id) -> string {
+    if who is s32 { return "#{who * 2}"; }
+    "name {who}"
+}
+
+maybe-id: func(n: s32) -> option<id> {
+    if n < 0 { return none; }
+    if n == 0 { return some("zero"); }
+    some(n)
+}
+
+main: func() {
+    let seen = "";
+    for n in [-1, 0, 7,] {
+        match maybe-id(n) {
+            some(let who) => { seen = seen + "{describe(who)} "; }
+            none => { seen = seen + "none "; }
+        }
+    }
+    expect.equal(seen, "none name zero #14 ");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: pad with < puts the fill after the text
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.pad("ab", 5, ".", "<"), "ab...");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a later let of the same name hides the earlier one, with its own type
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value = 1;
+    let value = "text";
+    expect.equal(value, "text");
+}

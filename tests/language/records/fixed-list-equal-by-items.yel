@@ -1,0 +1,13 @@
+// ---
+// description: fixed-length lists are compared by their items
+// features: [records, fixed-lists]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let a: list<s32, 3> = [1, 2, 3];
+    let b: list<s32, 3> = [1, 2, 3];
+    let c: list<s32, 3> = [10, 20, 30];
+    expect.holds(a == b);
+    expect.holds(a != c);
+}

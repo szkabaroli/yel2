@@ -1,0 +1,14 @@
+// ---
+// description: a let in a block hides the outer name only inside the block
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let x = 1;
+    {
+        let x = 2;
+        x += 40;
+        expect.equal(x, 42);
+    }
+    expect.equal(x, 1);
+}

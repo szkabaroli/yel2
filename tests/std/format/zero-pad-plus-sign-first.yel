@@ -1,0 +1,9 @@
+// ---
+// description: zero-pad puts the zeros after a plus sign
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(format.zero-pad("+7", 4), "+007");
+}

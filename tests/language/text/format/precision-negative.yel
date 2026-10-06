@@ -1,0 +1,10 @@
+// ---
+// description: a precision keeps the sign
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 2.5;
+    expect.equal("{-value:.2}", "-2.50");
+}

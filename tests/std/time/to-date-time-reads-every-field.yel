@@ -1,0 +1,13 @@
+// ---
+// description: to-date-time gives each field of an instant
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = time.to-date-time(time.from-unix-millis(1759660496789));
+    expect.equal((when.year, when.month, when.day), (2025, 10, 5));
+    expect.equal((when.hour, when.minute, when.second), (10, 34, 56));
+    expect.equal(when.nanosecond, 789000000);
+}

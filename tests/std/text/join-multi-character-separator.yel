@@ -1,0 +1,9 @@
+// ---
+// description: join takes a separator of several bytes
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(["x", "y",].join(" and "), "x and y");
+}

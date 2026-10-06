@@ -1,0 +1,11 @@
+// ---
+// description: list.get past the end gives none
+// features: [types, option]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let items = [1, 2,];
+    expect.equal(expect.some(items.get(1)), 2);
+    expect.none(items.get(2));
+}

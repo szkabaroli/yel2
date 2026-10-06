@@ -1,0 +1,38 @@
+// ---
+// description: disposing the owner runs the cleanup that invalidates a load in flight
+// features: [observable, async]
+// ---
+from "std:testing" include expect;
+
+@(observable) resource Page {
+    id: u32,
+    user: string,
+    @(ignored) run: u64,
+}
+
+fetch-user: async func(id: u32) -> string {
+    for turn in 0..id { wait yield-turn(); }
+    "user {id}"
+}
+
+settle: async func(page: Page, run: u64, id: u32) {
+    let user = wait fetch-user(id);
+    if page.run != run { return; }
+    page.user = user;
+}
+
+main: async func() {
+    let page: Page = { id: 3, user: "", run: 0, };
+    let owner = reactive.new-owner();
+    reactive.within(owner, { ->
+        let _ = reactive.effect({ ->
+            let id = page.id;
+            page.run += 1;
+            let _ = start settle(page, page.run, id);
+            { -> page.run += 1; }
+        });
+    });
+    reactive.dispose(owner);
+    for turn in 0..8 { wait yield-turn(); }
+    expect.equal(page.user, "");
+}

@@ -1,0 +1,10 @@
+// ---
+// description: find gives the byte of the first occurrence
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("banana".find("an"), some(1));
+    expect.equal("banana".find("a"), some(1));
+}

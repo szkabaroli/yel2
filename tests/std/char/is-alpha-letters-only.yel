@@ -1,0 +1,12 @@
+// ---
+// description: is-alpha holds for letters of either case and nothing else
+// features: [char]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(is-alpha(65));
+    expect.holds(is-alpha(122));
+    expect.holds(!is-alpha(48));
+    expect.holds(!is-alpha(95));
+}

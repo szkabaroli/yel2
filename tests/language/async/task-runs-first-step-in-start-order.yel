@@ -1,0 +1,19 @@
+// ---
+// description: tasks started in order take their first step in that order
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+mark: async func(name: string) { log.push(name); }
+
+main: async func() {
+    let first = start mark("one");
+    let second = start mark("two");
+    let third = start mark("three");
+    wait first;
+    wait second;
+    wait third;
+    expect.equal(log, ["one", "two", "three",]);
+}

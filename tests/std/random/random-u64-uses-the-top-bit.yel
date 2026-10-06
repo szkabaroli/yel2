@@ -1,0 +1,16 @@
+// ---
+// description: get-random-u64 gives numbers with and without the top bit over many calls
+// features: [random]
+// ---
+from "std:testing" include expect;
+from "std:random" include random;
+
+main: func() {
+    let high = false;
+    let low = false;
+    for round in 0..64 {
+        if random.get-random-u64() >= 9223372036854775808 { high = true; } else { low = true; }
+    }
+    expect.holds(high);
+    expect.holds(low);
+}

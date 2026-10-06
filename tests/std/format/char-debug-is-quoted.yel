@@ -1,0 +1,9 @@
+// ---
+// description: a char shows in single quotes with {x:?}
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{'a':?}", "'a'");
+}

@@ -1,0 +1,13 @@
+// ---
+// description: pushing to a slice leaves the list alone
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2, 3,];
+    let part = xs.slice(0, 2);
+    part.push(4);
+    expect.equal(xs.len(), 3);
+    expect.equal(part, [1, 2, 4,]);
+}

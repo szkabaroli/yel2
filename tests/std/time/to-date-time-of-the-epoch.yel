@@ -1,0 +1,13 @@
+// ---
+// description: to-date-time of the epoch is 1970-01-01 at midnight
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when = time.to-date-time(time.from-unix-millis(0));
+    expect.equal((when.year, when.month, when.day), (1970, 1, 1));
+    expect.equal((when.hour, when.minute, when.second, when.nanosecond), (0, 0, 0, 0));
+    expect.equal(when.offset, 0);
+}

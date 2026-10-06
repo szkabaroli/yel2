@@ -1,0 +1,15 @@
+// ---
+// description: a func without -> ignores its body's value
+// features: [types, unit]
+// ---
+from "std:testing" include expect;
+
+let total: s32 = 0;
+
+add: func(amount: s32) { total += amount; total }
+
+main: func() {
+    add(3);
+    add(4);
+    expect.equal(total, 7);
+}

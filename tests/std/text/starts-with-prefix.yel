@@ -1,0 +1,10 @@
+// ---
+// description: starts-with is true for a prefix
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds("hello".starts-with("he"));
+    expect.holds(!"hello".starts-with("lo"));
+}

@@ -1,0 +1,10 @@
+// ---
+// description: parse-int-radix refuses a hex number past s64
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int-radix("8000000000000000", 16));
+    expect.none(number.parse-int-radix("-8000000000000001", 16));
+}

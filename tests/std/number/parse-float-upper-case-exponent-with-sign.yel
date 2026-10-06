@@ -1,0 +1,9 @@
+// ---
+// description: parse-float reads E and a negative exponent
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("25E-2"), some(0.25));
+}

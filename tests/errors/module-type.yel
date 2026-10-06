@@ -1,6 +1,0 @@
-// error: 4:5: the type of p: no type test:shapes/geometry.Nope
-from "../shapes" include geometry;
-main: func() -> s32 {
-    let p: geometry.Nope = geometry.origin();
-    0
-}

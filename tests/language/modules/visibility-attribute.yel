@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: @(private="module"): private is the package's (@(private)) or the file's (@(private="file"))
+// features: [modules]
+// negative: compile
+// error: 7:19: @(private="module"): private is the package's (@(private)) or the file's (@(private="file"))
+// ---
+@(private="module") helper: func() -> s32 { 1 }
+main: func() -> s32 { helper() }

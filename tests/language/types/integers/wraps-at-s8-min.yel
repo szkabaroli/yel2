@@ -1,0 +1,11 @@
+// ---
+// description: s8 subtraction wraps from its minimum to its maximum, and negation of the minimum is itself
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let bottom: s8 = s8.MIN;
+    expect.equal(bottom - 1, s8.MAX);
+    expect.equal(-bottom, s8.MIN);
+}

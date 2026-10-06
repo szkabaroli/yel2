@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: 256 is out of range for u8
+// features: [syntax,literals]
+// negative: compile
+// error: 8:21: 256 is out of range for u8
+// ---
+main: func() {
+    let small: u8 = 256;
+}

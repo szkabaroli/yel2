@@ -1,0 +1,9 @@
+// ---
+// description: a record declared twice should be an error; accepted silently
+// features: [declarations]
+// negative: compile
+// error: record p is declared twice
+// ---
+record p { x: s32, }
+record p { y: s32, }
+main: func() {}

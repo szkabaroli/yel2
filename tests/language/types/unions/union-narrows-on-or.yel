@@ -1,0 +1,15 @@
+// ---
+// description: the right side of || sees the opposite narrowing
+// features: [types, unions, is]
+// ---
+from "std:testing" include expect;
+
+type id = s32 | string;
+
+plain: func(who: id) -> bool { who is s32 || who.len() == 0 }
+
+main: func() {
+    expect.holds(plain(5));
+    expect.holds(plain(""));
+    expect.holds(!plain("x"));
+}

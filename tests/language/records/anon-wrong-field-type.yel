@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: field y: expected s32, found bool
+// features: [records, types]
+// negative: compile
+// error: 9:31: field y: expected s32, found bool
+// ---
+type point = { x: s32, y: s32 };
+main: func() {
+    let p: point = { x: 1, y: true, };
+}

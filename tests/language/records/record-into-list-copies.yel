@@ -1,0 +1,16 @@
+// ---
+// description: a record pushed into a list is copied
+// features: [records]
+// ---
+from "std:testing" include expect;
+
+record Point { x: s32, y: s32, }
+
+main: func() {
+    let a: Point = { x: 1, y: 2, };
+    let points: list<Point> = [];
+    points.push(a);
+    a.x = 100;
+    expect.equal(points[0].x, 1);
+    expect.equal(a.x, 100);
+}

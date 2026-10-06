@@ -1,0 +1,10 @@
+// ---
+// description: uuid.from-bytes refuses fewer than 16 bytes
+// features: [encoding, uuid]
+// ---
+from "std:testing" include expect;
+from "std:encoding/uuid" include uuid;
+
+main: func() {
+    expect.equal(expect.err(uuid.from-bytes([1, 2,])), "a UUID is 16 bytes, not 2");
+}

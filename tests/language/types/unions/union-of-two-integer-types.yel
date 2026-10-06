@@ -1,0 +1,14 @@
+// ---
+// description: a union of two integer types
+// features: [types, unions]
+// ---
+from "std:testing" include expect;
+
+type number = s32 | u8;
+
+main: func() {
+    let wide: number = 300;
+    let narrow: number = 200 as u8;
+    expect.holds(wide is s32);
+    expect.holds(narrow is u8);
+}

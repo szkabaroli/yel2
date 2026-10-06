@@ -1,0 +1,10 @@
+// ---
+// description: a tuple shows as WAVE: its items in parentheses
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{(3, 'z')}", "(3, 'z')");
+    expect.equal("{(1, "a", true)}", "(1, \"a\", true)");
+}

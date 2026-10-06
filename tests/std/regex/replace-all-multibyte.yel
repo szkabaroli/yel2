@@ -1,0 +1,9 @@
+// ---
+// description: replace-all works on multibyte text
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/é/.replace-all("café é", "e"), "cafe e");
+}

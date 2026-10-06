@@ -1,0 +1,16 @@
+// ---
+// description: a guarded arm is left out of exhaustiveness, so an arm after it covers the rest
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+pick: func(flag: bool) -> s32 {
+    match flag {
+        true if false => 0,
+        true => 1,
+        false => 2,
+    }
+}
+main: func() {
+    expect.equal(pick(true), 1);
+    expect.equal(pick(false), 2);
+}

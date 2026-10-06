@@ -1,0 +1,11 @@
+// ---
+// description: len counts keys, not the times set was called
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<s32, s32> = map.new();
+    for index in 0..10 { m.set(index % 3, index); }
+    expect.equal(m.len(), 3);
+}

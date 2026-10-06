@@ -1,0 +1,7 @@
+// ---
+// description: does not compile: the value given a: expected s32, found a float
+// features: [types, floats]
+// negative: compile
+// error: 7:36: the value given a: expected s32, found a float
+// ---
+main: func() { let a: s32 = 1; a = 2.5; }

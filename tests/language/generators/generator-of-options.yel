@@ -1,0 +1,24 @@
+// ---
+// description: a generator yields options
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+maybe: func() -> seq<option<s32>> {
+    yield some(1);
+    yield none;
+    yield some(3);
+}
+
+main: func() {
+    let present = 0;
+    let missing = 0;
+    for item in maybe() {
+        match item {
+            some(value) => { present += value; }
+            none => { missing += 1; }
+        }
+    }
+    expect.equal(present, 4);
+    expect.equal(missing, 1);
+}

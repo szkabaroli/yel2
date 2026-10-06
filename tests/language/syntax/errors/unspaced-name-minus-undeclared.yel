@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: n-1 is not declared
+// features: [syntax,names]
+// negative: compile
+// error: 9:17: n-1 is not declared
+// ---
+main: func() {
+    let n = 3;
+    let total = n-1;
+}

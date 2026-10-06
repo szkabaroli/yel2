@@ -1,0 +1,11 @@
+// ---
+// description: sort keeps every item in place when all compare equal
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [3, 1, 2,];
+    xs.sort({ a, b -> false });
+    expect.equal(xs, [3, 1, 2,]);
+}

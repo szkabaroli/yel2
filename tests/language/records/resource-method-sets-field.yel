@@ -1,0 +1,16 @@
+// ---
+// description: a method sets a resource's field in place
+// features: [resources]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+reset: func(self: Counter) { self.value = 0; }
+
+main: func() {
+    let a: Counter = { value: 3, };
+    let same = a;
+    a.reset();
+    expect.equal(same.value, 0);
+}

@@ -1,0 +1,12 @@
+// ---
+// description: a range of u64 near its maximum ends
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let high: u64 = 18446744073709551615;
+    let low: u64 = high - 2;
+    let turns = 0;
+    for i in low..=high { turns += 1; }
+    expect.equal(turns, 3);
+}

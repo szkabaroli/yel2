@@ -1,0 +1,10 @@
+// ---
+// description: indexing a fixed-length list past its end stops the program
+// features: [records, fixed-lists]
+// exit: 1
+// ---
+main: func() {
+    let v: list<s32, 3> = [1, 2, 3];
+    let i = 5;
+    print("{v[i]}\n");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: a new set has no values
+// features: [set]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let s: set<s32> = set.new();
+    expect.equal(s.len(), 0);
+    expect.equal(s.values().len(), 0);
+}

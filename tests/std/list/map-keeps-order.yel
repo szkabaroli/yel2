@@ -1,0 +1,9 @@
+// ---
+// description: map keeps the order of the items
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(["b", "a",].map({ s -> s + "!" }), ["b!", "a!",]);
+}

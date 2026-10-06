@@ -1,0 +1,9 @@
+// ---
+// description: to-upper leaves letters beyond ASCII alone
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("é".to-upper(), "é");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: ...rest of an anonymous record
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let point = { x: 1, y: 2, z: 3, };
+    let { x, ...others } = point;
+    expect.equal(x, 1);
+    expect.equal(others.y + others.z, 5);
+}

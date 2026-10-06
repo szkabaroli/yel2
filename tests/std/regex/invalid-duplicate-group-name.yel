@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: the regex /(?<n>a)(?<n>b)/ names two groups alike
+// features: [regex]
+// negative: compile
+// error: 8:17: the regex /(?<n>a)(?<n>b)/: two groups named n
+// ---
+main: func() {
+    let found = /(?<n>a)(?<n>b)/;
+}

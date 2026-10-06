@@ -1,0 +1,9 @@
+// ---
+// description: trim of a string with no outer whitespace is the string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".trim(), "abc");
+}

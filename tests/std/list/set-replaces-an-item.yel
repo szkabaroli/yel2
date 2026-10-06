@@ -1,0 +1,11 @@
+// ---
+// description: set replaces the item at an index
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [1, 2, 3,];
+    xs.set(1, 20);
+    expect.equal(xs, [1, 20, 3,]);
+}

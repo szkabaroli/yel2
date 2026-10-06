@@ -1,0 +1,13 @@
+// ---
+// description: a duration shows the unit it reaches at 1000, 1000000 and 1000000000 nanoseconds
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.nanoseconds(999)}", "999ns");
+    expect.equal("{time.nanoseconds(1000)}", "1µs");
+    expect.equal("{time.nanoseconds(1000000)}", "1ms");
+    expect.equal("{time.nanoseconds(1000000000)}", "1s");
+}

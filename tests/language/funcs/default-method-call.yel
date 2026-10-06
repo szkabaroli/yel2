@@ -1,0 +1,16 @@
+// ---
+// description: a default after the first parameter lets the call be a method
+// features: [funcs, defaults, methods]
+// ---
+from "std:testing" include expect;
+
+record counter { value: s32, }
+
+bumped: func(count: counter, by: s32 = 1) -> counter { { value: count.value + by, } }
+
+main: func() {
+    let start: counter = { value: 1, };
+    expect.equal(start.bumped().value, 2);
+    expect.equal(start.bumped(5).value, 6);
+    expect.equal(bumped(start).value, 2);
+}

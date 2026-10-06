@@ -1,8 +1,0 @@
-// error: 5:20: the right of +: expected an integer, found string
-main: func() -> s32 {
-    let s = """
-        fine
-          sum {1 + "x"}
-        """;
-    0
-}

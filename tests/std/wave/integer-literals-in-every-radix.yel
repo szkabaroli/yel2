@@ -1,0 +1,7 @@
+// ---
+// description: integer literals in hex, octal, binary and with leading zeros, and division and remainder of negatives
+// features: [wave]
+// ---
+main: func() {
+    print("{0xff} {0o17} {0b1010} {007} {7 / 2} {-7 / 2} {-7 % 3}\n");
+}

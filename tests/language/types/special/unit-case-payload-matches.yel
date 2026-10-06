@@ -1,0 +1,19 @@
+// ---
+// description: dot(()) as a pattern matches a payload-less case
+// features: [types, unit, match]
+// ---
+from "std:testing" include expect;
+
+variant Shape { dot, circle(s32), }
+
+size: func(shape: Shape) -> s32 {
+    match shape {
+        dot(()) => 1,
+        circle(radius) => radius,
+    }
+}
+
+main: func() {
+    expect.equal(size(Shape.dot), 1);
+    expect.equal(size(Shape.circle(5)), 5);
+}

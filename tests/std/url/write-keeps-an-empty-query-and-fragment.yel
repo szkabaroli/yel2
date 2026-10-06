@@ -1,0 +1,20 @@
+// ---
+// description: write keeps a ? and # that have nothing after them
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let made: url.parts = {
+        scheme: "https",
+        username: "",
+        password: "",
+        host: some("h"),
+        port: none,
+        path: "/",
+        query: some(""),
+        fragment: some(""),
+    };
+    expect.equal(url.write(made), "https://h/?#");
+}

@@ -1,0 +1,13 @@
+// ---
+// description: a value can be a list that is changed through the map
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let groups: map<string, list<s32>> = map.new();
+    groups.set("odd", []);
+    groups["odd"].push(1);
+    groups["odd"].push(3);
+    expect.equal(groups["odd"], [1, 3,]);
+}

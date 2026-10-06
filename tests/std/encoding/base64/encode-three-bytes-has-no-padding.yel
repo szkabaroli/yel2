@@ -1,0 +1,10 @@
+// ---
+// description: base64.encode of three bytes is four characters
+// features: [encoding, base64]
+// ---
+from "std:testing" include expect;
+from "std:encoding/base64" include base64;
+
+main: func() {
+    expect.equal(base64.encode([1, 2, 3,]), "AQID");
+}

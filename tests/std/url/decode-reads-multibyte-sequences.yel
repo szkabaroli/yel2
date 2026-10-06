@@ -1,0 +1,10 @@
+// ---
+// description: decode joins escaped bytes into a character
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.equal(url.decode("%C3%A9%E2%82%AC"), ok("é€"));
+}

@@ -1,0 +1,11 @@
+// ---
+// description: for over a readonly list
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let fixed: list<s32> & readonly = [1, 2, 3,];
+    let sum = 0;
+    for item in fixed { sum += item; }
+    expect.equal(sum, 6);
+}

@@ -1,0 +1,23 @@
+// ---
+// description: let with a pattern binds a record's fields, a tuple's items, nested ones, and _ keeps nothing
+// features: [patterns, let]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+main: func() {
+    let p: Point = { x: 3, y: 4, };
+    let { x, y: down } = p;
+    expect.equal(x, 3);
+    expect.equal(down, 4);
+    let (count, label) = (2, "pairs");
+    expect.equal(count, 2);
+    expect.equal(label, "pairs");
+    let (first, { x: fx, y: _ }) = (true, p);
+    expect.holds(first);
+    expect.equal(fx, 3);
+    // a tuple's annotation types its items: u8s, wrapping at 256
+    let (a, b): tuple<u8, u8> = (250, 5);
+    expect.equal(a + b, 255);
+}

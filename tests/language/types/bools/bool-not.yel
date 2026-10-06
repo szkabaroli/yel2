@@ -1,0 +1,11 @@
+// ---
+// description: ! flips a bool
+// features: [types, bools]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(!true, false);
+    expect.equal(!false, true);
+    expect.equal(!!true, true);
+}

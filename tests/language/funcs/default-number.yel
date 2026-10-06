@@ -1,0 +1,12 @@
+// ---
+// description: a number's default
+// features: [funcs, defaults]
+// ---
+from "std:testing" include expect;
+
+scale: func(value: s32, factor: s32 = 10) -> s32 { value * factor }
+
+main: func() {
+    expect.equal(scale(3), 30);
+    expect.equal(scale(3, 2), 6);
+}

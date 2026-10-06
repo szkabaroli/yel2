@@ -1,0 +1,13 @@
+// ---
+// description: u8.MIN and u8.MAX are the type's bounds, of that type
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{u8.MIN}", "0");
+    expect.equal("{u8.MAX}", "255");
+    let low: u8 = u8.MIN;
+    let high: u8 = u8.MAX;
+    expect.holds(low < high);
+}

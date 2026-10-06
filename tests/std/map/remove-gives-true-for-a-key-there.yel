@@ -1,0 +1,13 @@
+// ---
+// description: remove gives true and takes the key out
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    expect.holds(m.remove("a"));
+    expect.holds(!m.has("a"));
+    expect.equal(m.len(), 0);
+}

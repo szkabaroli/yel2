@@ -1,0 +1,14 @@
+// ---
+// description: a variant case shows with its payload
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+variant shape { circle(s32), empty, }
+
+main: func() {
+    let round: shape = circle(5);
+    let nothing: shape = empty;
+    expect.equal("{round}", "circle(5)");
+    expect.equal("{nothing}", "empty");
+}

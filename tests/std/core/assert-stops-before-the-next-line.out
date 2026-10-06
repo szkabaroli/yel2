@@ -1,0 +1,2 @@
+before
+panic: tests/std/core/assert-stops-before-the-next-line.yel:8:5: assertion failed: false

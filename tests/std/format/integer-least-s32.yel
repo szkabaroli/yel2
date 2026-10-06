@@ -1,0 +1,9 @@
+// ---
+// description: an interpolated s32 least
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{s32.MIN} {s32.MAX}", "-2147483648 2147483647");
+}

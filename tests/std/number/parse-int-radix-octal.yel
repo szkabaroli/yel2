@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix reads octal digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("17", 8), some(15));
+}

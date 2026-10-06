@@ -1,0 +1,12 @@
+// ---
+// description: -x as T is (-x) as T
+// features: [types, casts]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = 7;
+    expect.equal(-value as s64, -7);
+    let byte: u8 = 1;
+    expect.equal(-byte as u8, 255);
+}

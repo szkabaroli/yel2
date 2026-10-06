@@ -1,0 +1,9 @@
+// ---
+// description: expect.some gives the value inside a some
+// features: [testing]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(some(4)), 4);
+}

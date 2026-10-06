@@ -1,0 +1,12 @@
+// ---
+// description: monotonic gives numbers that do not go down
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let first = time.monotonic();
+    let second = time.monotonic();
+    expect.holds(second >= first);
+}

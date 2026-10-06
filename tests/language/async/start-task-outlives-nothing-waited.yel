@@ -1,0 +1,15 @@
+// ---
+// description: a started task nobody waits for still runs while main waits for other work
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let touched: bool = false;
+
+side: async func() { touched = true; }
+
+main: async func() {
+    let ignored = start side();
+    for turn in 0..2 { wait yield-turn(); }
+    expect.holds(touched);
+}

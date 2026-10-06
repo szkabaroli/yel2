@@ -1,0 +1,13 @@
+// ---
+// description: three quotes inside are written with an escape after the first two
+// features: [text,multiline]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = """
+        ""\" three
+        """;
+    expect.equal(text, "\"\"\" three");
+    expect.equal(text.len(), 9);
+}

@@ -1,0 +1,13 @@
+// ---
+// description: a func returns a tuple
+// features: [funcs, tuples]
+// ---
+from "std:testing" include expect;
+
+divide: func(a: s32, b: s32) -> tuple<s32, s32> { (a / b, a % b) }
+
+main: func() {
+    let (quotient, remainder) = divide(17, 5);
+    expect.equal(quotient, 3);
+    expect.equal(remainder, 2);
+}

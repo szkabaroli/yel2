@@ -1,0 +1,18 @@
+// ---
+// description: a generator that makes garbage for each value, read by a loop that does too
+// features: [generators]
+// ---
+from "std:testing" include expect;
+
+labels: func(limit: s32) -> seq<string> {
+    for x in 0..limit { yield "label {x}"; }
+}
+
+main: func() {
+    let longest = 0;
+    for label in labels(20000) {
+        let copy = "{label}/{label}";
+        if copy.len() > longest { longest = copy.len(); }
+    }
+    expect.equal(longest, 23);
+}

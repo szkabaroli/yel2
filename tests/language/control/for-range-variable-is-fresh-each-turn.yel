@@ -1,0 +1,14 @@
+// ---
+// description: assigning the loop variable in the body does not skip turns
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let turns = 0;
+    for i in 0..4 {
+        let copy = i;
+        copy += 100;
+        turns += 1;
+    }
+    expect.equal(turns, 4);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: substring gives the bytes from start up to end
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".substring(1, 3), "el");
+}

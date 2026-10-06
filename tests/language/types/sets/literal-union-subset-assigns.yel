@@ -1,0 +1,14 @@
+// ---
+// description: a literal type is assignable where a union holding it is wanted
+// features: [types, sets]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post" | "put";
+type safe = "get";
+
+main: func() {
+    let narrow: safe = "get";
+    let wider: method = narrow;
+    expect.equal(wider, "get");
+}

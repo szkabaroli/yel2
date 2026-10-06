@@ -1,4 +1,0 @@
-// error: a buffer cannot cross a component's boundary: give b.to-string() (WIT's string) or b.to-bytes() (WIT's list<u8>)
-module api {
-    render: func(b: buffer) -> s32 { 0 }
-}

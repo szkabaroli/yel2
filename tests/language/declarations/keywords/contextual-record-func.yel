@@ -1,0 +1,11 @@
+// ---
+// description: record is a func name where a colon follows it
+// features: [declarations,names]
+// ---
+from "std:testing" include expect;
+
+record: func(value: s32) -> s32 { value + 1 }
+
+main: func() {
+    expect.equal(record(1), 2);
+}

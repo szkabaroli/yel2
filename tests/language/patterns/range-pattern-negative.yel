@@ -1,0 +1,18 @@
+// ---
+// description: a range pattern may span negative numbers
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+sign: func(n: s32) -> s32 {
+    match n {
+        -100..=-1 => -1,
+        0 => 0,
+        _ => 1,
+    }
+}
+main: func() {
+    expect.equal(sign(-100), -1);
+    expect.equal(sign(-1), -1);
+    expect.equal(sign(0), 0);
+    expect.equal(sign(-101), 1);
+}

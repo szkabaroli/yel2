@@ -1,0 +1,10 @@
+// ---
+// description: a bool takes a width
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("[{true:6}]", "[true  ]");
+    expect.equal("[{false:>6}]", "[ false]");
+}

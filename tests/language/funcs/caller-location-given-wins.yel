@@ -1,0 +1,13 @@
+// ---
+// description: an argument given for #caller-location is used
+// features: [funcs, directives]
+// ---
+from "std:testing" include expect;
+
+where: func(at: source-location = #caller-location) -> s32 { at.line }
+
+forward: func(at: source-location = #caller-location) -> s32 { where(at) }
+
+main: func() {
+    expect.equal(forward(), 12);
+}

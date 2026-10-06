@@ -1,0 +1,12 @@
+// ---
+// description: a stream's end given to a WIT func is moved once
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+from "wasi:cli" include stdout;
+main: async func() {
+    let (out, w) = stream-pair(4);
+    w.close();
+    let written = stdout.write-via-stream(out);
+    wait written;
+}

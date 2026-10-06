@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: unexpected '*'
+// features: [syntax,comments]
+// negative: compile
+// error: 8:20: unexpected '*'
+// ---
+main: func() {
+    let value = 1 /* no block comments */;
+}

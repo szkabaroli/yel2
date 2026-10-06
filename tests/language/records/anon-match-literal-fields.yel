@@ -1,0 +1,23 @@
+// ---
+// description: a match on an anonymous record's literal fields
+// features: [records, patterns]
+// ---
+from "std:testing" include expect;
+
+type point = { x: s32, y: s32 };
+
+where: func(p: point) -> string {
+    match p {
+        { x: 0, y: 0 } => "origin",
+        { x: 0 } => "on the y axis",
+        let { x, y } if x == y => "on the diagonal",
+        _ => "somewhere",
+    }
+}
+
+main: func() {
+    expect.equal(where({ x: 0, y: 0, }), "origin");
+    expect.equal(where({ x: 0, y: 5, }), "on the y axis");
+    expect.equal(where({ x: 3, y: 3, }), "on the diagonal");
+    expect.equal(where({ x: 4, y: 1, }), "somewhere");
+}

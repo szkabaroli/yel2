@@ -1,0 +1,12 @@
+// ---
+// description: removing a key twice is true, then false
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    expect.holds(m.remove("a"));
+    expect.holds(!m.remove("a"));
+}

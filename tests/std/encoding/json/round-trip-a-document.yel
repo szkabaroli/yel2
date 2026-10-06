@@ -1,0 +1,19 @@
+// ---
+// description: json.write gives back text json.parse read, when it has no spaces
+// features: [encoding, json]
+// ---
+from "std:testing" include expect;
+from "std:encoding/json" include json;
+
+// text read, then written again (or where reading it stopped)
+again: func(text: string) -> string {
+    match json.parse(text) {
+        ok(item) => json.write(item),
+        err(error) => "error: {error}",
+    }
+}
+
+main: func() {
+    let text = "\{\"b\":[1,-2.5e3,true,false,null],\"a\":\{\},\"c\":[],\"d\":\"x\\ny\"\}";
+    expect.equal(again(text), text);
+}

@@ -1,0 +1,15 @@
+// ---
+// description: a func returns an err early and an ok at the end
+// features: [types, result]
+// ---
+from "std:testing" include expect;
+
+checked-sum: func(left: u8, right: u8) -> result<u8, string> {
+    if left > 255 - right { return err("overflow"); }
+    ok(left + right)
+}
+
+main: func() {
+    expect.equal(expect.ok(checked-sum(100, 100)), 200);
+    expect.equal(expect.err(checked-sum(200, 100)), "overflow");
+}

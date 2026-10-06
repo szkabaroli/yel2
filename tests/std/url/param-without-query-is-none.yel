@@ -1,0 +1,11 @@
+// ---
+// description: param of a URL with no query is none
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://h/"));
+    expect.none(url.param(u, "a"));
+}

@@ -1,0 +1,10 @@
+// ---
+// description: time.parse of "2026-13-01" is refused
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.err(time.parse("2026-13-01"));
+}

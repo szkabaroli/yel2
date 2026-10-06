@@ -1,0 +1,11 @@
+// ---
+// description: \\ in a string is one backslash
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "a\\b";
+    expect.equal(text.len(), 3);
+    expect.equal(text.byte-at(1), 92);
+}

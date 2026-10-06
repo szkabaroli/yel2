@@ -1,0 +1,12 @@
+// ---
+// description: an alias may be used above where it is declared
+// features: [types, aliases]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: later = 5;
+    expect.equal(value + 1, 6);
+}
+
+type later = s32;

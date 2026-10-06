@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: the value: expected s32, found ()
+// features: [funcs]
+// negative: compile
+// error: 7:1: the value: expected s32, found ()
+// ---
+f: func() -> s32 { }
+main: func() {}

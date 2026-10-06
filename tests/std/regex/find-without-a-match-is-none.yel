@@ -1,0 +1,9 @@
+// ---
+// description: find gives none where the regex matches nowhere
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(/x/.find("abc"));
+}

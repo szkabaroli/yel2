@@ -1,0 +1,10 @@
+// ---
+// description: a single quote needs no escape in a string
+// features: [text,escapes]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let text = "it's";
+    expect.equal(text.len(), 4);
+}

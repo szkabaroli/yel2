@@ -1,0 +1,9 @@
+// ---
+// description: a const declared twice should be an error; the compiler accepts it (the second wins)
+// features: [declarations]
+// negative: compile
+// error: const A is declared twice
+// ---
+const A = 1;
+const A = 2;
+main: func() { print("{A}\n"); }

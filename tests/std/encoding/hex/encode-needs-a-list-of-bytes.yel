@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: hex.encode takes a list of bytes, not a string
+// features: [encoding, hex]
+// negative: compile
+// error: 10:27: argument 1 of std:encoding/hex.encode: expected list<u8> & readonly, found string
+// ---
+from "std:encoding/hex" include hex;
+
+main: func() {
+    let text = hex.encode("abc");
+}

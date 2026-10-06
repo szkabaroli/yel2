@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: \u{...} needs a Unicode scalar value
+// features: [syntax,literals]
+// negative: compile
+// error: 8:17: \u{...} needs a Unicode scalar value
+// ---
+main: func() {
+    let text = "\u{D800}";
+}

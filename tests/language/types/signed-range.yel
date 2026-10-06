@@ -1,0 +1,11 @@
+// ---
+// description: does not compile: 128 is out of range for s8
+// features: [types]
+// negative: compile
+// error: 8:17: 128 is out of range for s8
+// ---
+main: func() -> s32 {
+    let b: s8 = 128;
+    let least: s8 = -128;
+    0
+}

@@ -1,0 +1,11 @@
+// ---
+// description: ? on an integer is its digits
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: s32 = -3;
+    expect.equal("{value:?}", "-3");
+    expect.equal("{255:?}", "255");
+}

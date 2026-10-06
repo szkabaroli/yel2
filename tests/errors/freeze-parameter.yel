@@ -1,6 +1,0 @@
-// error: 3:35: readonly is wanted here: xs is a parameter: its caller may have it too
-keep: func(xs: list<s32>) -> s64 {
-    let r: list<s32> & readonly = xs;
-    r.len()
-}
-main: func() { print("{keep([1,])}"); }

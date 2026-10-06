@@ -1,0 +1,8 @@
+// ---
+// description: does not compile: a global starts as a literal or as its type's zero value
+// features: [declarations]
+// negative: compile
+// error: 7:1: a global starts as a literal or as its type's zero value
+// ---
+let made: list<s64> = [1, 2,];
+main: func() {}

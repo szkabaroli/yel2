@@ -1,0 +1,10 @@
+// ---
+// description: a precision of 0 shows no point
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let value: f64 = 7.25;
+    expect.equal("{value:.0}", "7");
+}

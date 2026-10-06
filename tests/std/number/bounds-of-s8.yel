@@ -1,0 +1,10 @@
+// ---
+// description: s8.MIN and s8.MAX are the least and greatest s8
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(s8.MIN, -128);
+    expect.equal(s8.MAX, 127);
+}

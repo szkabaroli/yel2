@@ -1,0 +1,10 @@
+// ---
+// description: ? shows a char with single quotes
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{'x':?}", "'x'");
+    expect.equal("{'\n':?}", "'\\n'");
+}

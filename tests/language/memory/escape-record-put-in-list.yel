@@ -1,0 +1,16 @@
+// ---
+// description: records put in a list stay on the heap, each its own
+// features: [memory, escape]
+// ---
+from "std:testing" include expect;
+
+resource Vec { x: s32, y: s32, }
+
+main: func() {
+    let kept: list<Vec> = [];
+    for i in 0..3 { kept.push({ x: i, y: 0 - i, }); }
+    expect.equal(kept.len(), 3);
+    expect.equal(kept[0].y, 0);
+    expect.equal(kept[1].y, -1);
+    expect.equal(kept[2].y, -2);
+}

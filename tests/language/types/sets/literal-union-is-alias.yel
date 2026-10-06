@@ -1,0 +1,15 @@
+// ---
+// description: x is <alias> tests membership in a union
+// features: [types, sets, is]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post";
+
+known: func(text: string) -> bool { text is method }
+
+main: func() {
+    expect.holds(known("get"));
+    expect.holds(known("post"));
+    expect.holds(!known("delete"));
+}

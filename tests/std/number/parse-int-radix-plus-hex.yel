@@ -1,0 +1,9 @@
+// ---
+// description: parse-int-radix reads a plus sign before hex digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-int-radix("+ff", 16), some(255));
+}

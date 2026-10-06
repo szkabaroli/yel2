@@ -1,0 +1,10 @@
+// ---
+// description: parse refuses a host that is not ASCII
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    expect.err(url.parse("https://müller.de/"));
+}

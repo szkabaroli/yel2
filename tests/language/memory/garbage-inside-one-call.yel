@@ -1,0 +1,22 @@
+// ---
+// description: one long call that makes far more garbage than it keeps: the collector runs inside it
+// features: [memory]
+// ---
+from "std:testing" include expect;
+
+resource Item { id: s32, label: string, parts: list<s32>, }
+
+main: func() {
+    let kept: list<Item> = [];
+    let total = 0;
+    for i in 0..300000 {
+        let item: Item = { id: i, label: "item {i}", parts: [i, i + 1, i + 2,], };
+        total += item.parts.len() as s32;
+        if i % 50000 == 0 { kept.push(item); }
+    }
+    let labels: list<string> = [];
+    for k in kept { labels.push(k.label); }
+    expect.equal(total, 900000);
+    expect.equal(kept.len(), 6);
+    expect.equal(labels.join(", "), "item 0, item 50000, item 100000, item 150000, item 200000, item 250000");
+}

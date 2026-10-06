@@ -1,0 +1,12 @@
+// ---
+// description: param gives the first value of a name
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://h/?a=1&a=2&b=3"));
+    expect.equal(url.param(u, "a"), some("1"));
+    expect.equal(url.param(u, "b"), some("3"));
+}

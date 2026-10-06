@@ -1,0 +1,9 @@
+// ---
+// description: a global declared twice should be an error; accepted silently
+// features: [declarations]
+// negative: compile
+// error: global g is declared twice
+// ---
+let g: s32;
+let g: s32;
+main: func() {}

@@ -1,0 +1,10 @@
+// ---
+// description: find-byte gives the first place of a byte
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abcabc".find-byte(99), some(2));
+    expect.equal("abc".find-byte(97), some(0));
+}

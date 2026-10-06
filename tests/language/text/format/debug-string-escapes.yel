@@ -1,0 +1,12 @@
+// ---
+// description: ? escapes a quote, a backslash and control characters in a string
+// features: [text,format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{"a\"b":?}", "\"a\\\"b\"");
+    expect.equal("{"a\\b":?}", "\"a\\\\b\"");
+    expect.equal("{"a\tb":?}", "\"a\\tb\"");
+    expect.equal("{"a\nb":?}", "\"a\\nb\"");
+}

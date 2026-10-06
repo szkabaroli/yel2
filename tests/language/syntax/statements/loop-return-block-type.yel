@@ -1,0 +1,19 @@
+// ---
+// description: a loop with no break ends a block without a value: its func result is any type
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+power-past: func(n: s32) -> s32 {
+    let power = 1;
+    loop {
+        if power >= n { return power; }
+        power *= 2;
+    }
+}
+
+main: func() {
+    expect.equal(power-past(5), 8);
+    expect.equal(power-past(8), 8);
+    expect.equal(power-past(0), 1);
+}

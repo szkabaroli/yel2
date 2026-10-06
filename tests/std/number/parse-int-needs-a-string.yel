@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: number.parse-int takes a string, not a number
+// features: [number]
+// negative: compile
+// error: 8:35: argument 1 of yel:std/number.parse-int: expected string, found an integer
+// ---
+main: func() {
+    let parsed = number.parse-int(5);
+}

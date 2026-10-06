@@ -1,0 +1,8 @@
+// ---
+// description: a parameter's name is its func's once
+// features: [errors]
+// negative: compile
+// error: 7:1: func f has the parameter x twice
+// ---
+f: func(x: s32, x: s32) -> s32 { x }
+main: func() {}

@@ -1,0 +1,14 @@
+// ---
+// description: a buffer takes more than its first sixteen bytes
+// features: [buffer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let b = buffer(0);
+    b.push("0123456789");
+    b.push("0123456789");
+    b.push("0123456789");
+    expect.equal(b.len(), 30);
+    expect.equal(b.to-string(), "012345678901234567890123456789");
+}

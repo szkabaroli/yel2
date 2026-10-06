@@ -1,0 +1,12 @@
+// ---
+// description: a closure with no parameters and no result
+// features: [funcs, closures]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let hits = 0;
+    let hit: func() = { -> hits += 1; };
+    hit();
+    expect.equal(hits, 1);
+}

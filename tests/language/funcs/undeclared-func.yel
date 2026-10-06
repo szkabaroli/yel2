@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: no func nothing
+// features: [funcs]
+// negative: compile
+// error: 8:5: no func nothing
+// ---
+main: func() {
+    nothing(1);
+}

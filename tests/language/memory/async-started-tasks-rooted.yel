@@ -1,0 +1,23 @@
+// ---
+// description: started tasks nobody holds a future for are kept alive until done
+// features: [memory, async, gc]
+// ---
+from "std:testing" include expect;
+
+resource Tally { total: s32, }
+
+add: async func(tally: Tally, label: string) {
+    wait yield-turn();
+    let junk = "junk {label}";
+    wait yield-turn();
+    tally.total += label.len() as s32;
+}
+
+main: async func() {
+    let tally: Tally = { total: 0, };
+    for i in 0..50 { let ignored = start add(tally, "task {i}"); }
+    for turn in 0..5 { wait yield-turn(); }
+    for i in 0..30000 { let junk = "junk {i}"; }
+    wait yield-turn();
+    expect.equal(tally.total, 340);
+}

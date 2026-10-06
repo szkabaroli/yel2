@@ -1,0 +1,10 @@
+// ---
+// description: hex.decode of '666f6f626172'
+// features: [encoding, hex]
+// ---
+from "std:testing" include expect;
+from "std:encoding/hex" include hex;
+
+main: func() {
+    expect.equal(expect.ok(hex.decode("666f6f626172")), "foobar".bytes());
+}

@@ -1,0 +1,10 @@
+// ---
+// description: parse-int of a sign alone is none
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-int("-"));
+    expect.none(number.parse-int("+"));
+}

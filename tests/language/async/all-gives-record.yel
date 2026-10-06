@@ -1,0 +1,21 @@
+// ---
+// description: wait { a: x, b: y } gives a record of the results
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+number: async func() -> s32 {
+    wait yield-turn();
+    3
+}
+
+text: async func() -> string {
+    wait yield-turn();
+    "three"
+}
+
+main: async func() {
+    let both = wait { count: number(), name: text(), };
+    expect.equal(both.count, 3);
+    expect.equal(both.name, "three");
+}

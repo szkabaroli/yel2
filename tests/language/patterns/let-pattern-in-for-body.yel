@@ -1,0 +1,14 @@
+// ---
+// description: let destructuring inside a loop body each turn
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let pairs = [(1, 2), (3, 4),];
+    let sum = 0;
+    for pair in pairs {
+        let (a, b) = pair;
+        sum += a * b;
+    }
+    expect.equal(sum, 14);
+}

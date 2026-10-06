@@ -1,0 +1,13 @@
+// ---
+// description: a function body may hold only a final value or only statements
+// features: [syntax,statements]
+// ---
+from "std:testing" include expect;
+
+only-value: func() -> s32 { 3 }
+only-statement: func() { let ignored = 1; }
+
+main: func() {
+    only-statement();
+    expect.equal(only-value(), 3);
+}

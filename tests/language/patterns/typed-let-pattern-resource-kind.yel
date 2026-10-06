@@ -1,0 +1,16 @@
+// ---
+// description: a typed binding of a declared type in a union
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+resource Item { name: string, }
+describe: func(value: Item | string) -> string {
+    match value {
+        let item: Item => "item {item.name}",
+        let text: string => "text {text}",
+    }
+}
+main: func() {
+    expect.equal(describe({ name: "pen", }), "item pen");
+    expect.equal(describe("pen"), "text pen");
+}

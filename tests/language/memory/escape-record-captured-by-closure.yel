@@ -1,0 +1,20 @@
+// ---
+// description: a record captured by a closure that outlives the turn is kept
+// features: [memory, escape, closures]
+// ---
+from "std:testing" include expect;
+
+resource Cell { n: s32, }
+
+main: func() {
+    let readers: list<func() -> s32> = [];
+    for i in 0..4 {
+        let cell: Cell = { n: i, };
+        readers.push({ -> cell.n });
+    }
+    let junk: list<string> = [];
+    for i in 0..100 { junk.push("junk {i}"); }
+    let total = 0;
+    for reader in readers { total += reader(); }
+    expect.equal(total, 6);
+}

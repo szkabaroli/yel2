@@ -1,0 +1,13 @@
+// ---
+// description: the list of a for is evaluated once
+// features: [control]
+// ---
+from "std:testing" include expect;
+let evaluations: s32;
+items: func() -> list<s32> { evaluations += 1; [1, 2, 3,] }
+main: func() {
+    let sum = 0;
+    for x in items() { sum += x; }
+    expect.equal(sum, 6);
+    expect.equal(evaluations, 1);
+}

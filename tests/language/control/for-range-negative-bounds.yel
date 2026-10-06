@@ -1,0 +1,10 @@
+// ---
+// description: a range may start below zero
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let seen: list<s32> = [];
+    for i in -2..2 { seen.push(i); }
+    expect.equal(seen, [-2, -1, 0, 1,]);
+}

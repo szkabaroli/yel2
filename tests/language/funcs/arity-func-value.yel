@@ -1,0 +1,10 @@
+// ---
+// description: does not compile: f takes 1 arguments, given 2
+// features: [funcs]
+// negative: compile
+// error: 9:5: f takes 1 arguments, given 2
+// ---
+main: func() -> s32 {
+    let f: func(s32) -> s32 = { x -> x };
+    f(1, 2)
+}

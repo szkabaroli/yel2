@@ -1,0 +1,10 @@
+// ---
+// description: indexing a list past its end stops the program
+// features: [records, lists]
+// exit: 1
+// ---
+main: func() {
+    let v = [1, 2, 3];
+    let i = 3;
+    print("{v[i]}\n");
+}

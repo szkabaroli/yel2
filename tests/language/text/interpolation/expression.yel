@@ -1,0 +1,12 @@
+// ---
+// description: an interpolation holds any expression
+// features: [text,interpolation]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let left = 3;
+    expect.equal("{left + 4}", "7");
+    expect.equal("{left * left - 1}", "8");
+    expect.equal("{left > 2 && left < 5}", "true");
+}

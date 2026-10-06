@@ -1,0 +1,9 @@
+// ---
+// description: trim leaves a no-break space, which is not ASCII
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("\u{a0}x".trim().len(), 3);
+}

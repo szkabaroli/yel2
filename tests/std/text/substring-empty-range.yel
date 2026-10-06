@@ -1,0 +1,9 @@
+// ---
+// description: substring with start equal to end is empty
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("hello".substring(2, 2), "");
+}

@@ -1,0 +1,15 @@
+// ---
+// description: attributes combine on an observable resource
+// features: [observable]
+// ---
+from "std:testing" include expect;
+
+@(private, observable) resource Counter { n: s32, }
+
+main: func() {
+    let counter: Counter = { n: 0, };
+    let told = 0;
+    let watch = observe.track({ -> let _ = counter.n; }, { -> told += 1; });
+    counter.n = 1;
+    expect.equal(told, 1);
+}

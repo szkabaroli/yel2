@@ -1,0 +1,9 @@
+// ---
+// description: contains tells upper from lower case
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.holds(!"Hello".contains("hello"));
+}

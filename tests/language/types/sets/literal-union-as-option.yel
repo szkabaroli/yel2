@@ -1,0 +1,14 @@
+// ---
+// description: as? makes a literal union from a string
+// features: [types, sets, as]
+// ---
+from "std:testing" include expect;
+
+type method = "get" | "post";
+
+main: func() {
+    let text: string = "get";
+    let other: string = "patch";
+    expect.equal(expect.some(text as? method), "get");
+    expect.none(other as? method);
+}

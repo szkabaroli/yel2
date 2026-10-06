@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: an if's condition: expected bool, found string
+// features: [control]
+// negative: compile
+// error: 8:8: an if's condition: expected bool, found string
+// ---
+main: func() {
+    if "yes" { }
+}

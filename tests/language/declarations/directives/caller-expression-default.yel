@@ -1,0 +1,13 @@
+// ---
+// description: #caller-expression(param) is the text of the argument given
+// features: [declarations,directives]
+// ---
+from "std:testing" include expect;
+
+written: func(value: s32, text: string = #caller-expression(value)) -> string { text }
+
+main: func() {
+    let size = 3;
+    expect.equal(written(size + 1), "size + 1");
+    expect.equal(written(7), "7");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: slice with from equal to to is empty
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal([1, 2, 3,].slice(2, 2).len(), 0);
+}

@@ -1,0 +1,8 @@
+// ---
+// description: a list of lists shows each inner list
+// features: [wave]
+// ---
+main: func() {
+    let rows: list<list<s32>> = [[1, 2,], [], [3,],];
+    print("{rows}\n");
+}

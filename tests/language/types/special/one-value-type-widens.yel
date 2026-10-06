@@ -1,0 +1,15 @@
+// ---
+// description: a one-value type goes where its kind is wanted
+// features: [types, one-value]
+// ---
+from "std:testing" include expect;
+
+type only = "post";
+
+length: func(text: string) -> s64 { text.len() }
+
+main: func() {
+    let value: only = "post";
+    expect.equal(length(value), 4);
+    expect.equal(value, "post");
+}

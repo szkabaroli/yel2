@@ -1,0 +1,15 @@
+// ---
+// description: a resource stored in a map is the same object
+// features: [resources, maps]
+// ---
+from "std:testing" include expect;
+
+resource Counter { value: s32, }
+
+main: func() {
+    let table: map<string, Counter> = map.new();
+    let a: Counter = { value: 1, };
+    table.set("a", a);
+    a.value = 5;
+    expect.equal(table["a"].value, 5);
+}

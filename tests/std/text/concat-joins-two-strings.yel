@@ -1,0 +1,10 @@
+// ---
+// description: concat puts two strings one after the other
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(concat("ab", "cd"), "abcd");
+    expect.equal("ab" + "cd", "abcd");
+}

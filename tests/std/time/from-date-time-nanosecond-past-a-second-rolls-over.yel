@@ -1,0 +1,13 @@
+// ---
+// description: from-date-time takes 1500000000 nanoseconds as one second and a half
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    let when: time.date-time = { year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, nanosecond: 1500000000, offset: 0, };
+    let at = time.from-date-time(when);
+    expect.equal(at.seconds, 1);
+    expect.equal(at.nanoseconds, 500000000);
+}

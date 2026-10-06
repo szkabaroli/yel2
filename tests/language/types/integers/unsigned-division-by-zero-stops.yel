@@ -1,0 +1,12 @@
+// ---
+// description: unsigned division by zero stops the program
+// features: [types, integers]
+// exit: 1
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: u8 = 0;
+    let n: u8 = 5;
+    print("{n / zero}");
+}

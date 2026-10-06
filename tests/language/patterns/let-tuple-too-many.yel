@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: a tuple pattern of 2 on a tuple<an integer, an integer, an integer>
+// features: [patterns]
+// negative: compile
+// error: 8:5: a tuple pattern of 2 on a tuple<an integer, an integer, an integer>
+// ---
+main: func() {
+    let (a, b) = (1, 2, 3);
+}

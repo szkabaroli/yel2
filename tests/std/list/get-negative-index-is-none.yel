@@ -1,0 +1,9 @@
+// ---
+// description: get gives none for a negative index
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none([1, 2,].get(-1));
+}

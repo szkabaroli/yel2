@@ -1,0 +1,11 @@
+// ---
+// description: integers of two widths meet through as
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let narrow: u8 = 200;
+    let wide: u32 = 100;
+    expect.equal(narrow as u32 + wide, 300);
+}

@@ -1,0 +1,9 @@
+// ---
+// description: replace keeps $0 as it is
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/a/.replace("a", "$0"), "$0");
+}

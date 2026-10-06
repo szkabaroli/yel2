@@ -1,0 +1,9 @@
+// ---
+// description: split without a separator in it gives the string
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".split(","), ["abc",]);
+}

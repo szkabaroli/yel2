@@ -1,0 +1,18 @@
+// ---
+// description: a record stored in a list is read back after the local's scope
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Cell { value: s32, }
+fill: func(cells: list<Cell>) {
+    for i in 0..3 {
+        let cell: Cell = { value: i, };
+        cells.push(cell);
+    }
+}
+main: func() {
+    let cells: list<Cell> = [];
+    fill(cells);
+    expect.equal(cells.len(), 3);
+    expect.equal(cells[2].value, 2);
+}

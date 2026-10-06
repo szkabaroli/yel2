@@ -1,0 +1,8 @@
+// ---
+// description: a list of results shows each as ok or err
+// features: [wave]
+// ---
+main: func() {
+    let results: list<result<s32, string>> = [ok(1), err("no"),];
+    print("{results}\n");
+}

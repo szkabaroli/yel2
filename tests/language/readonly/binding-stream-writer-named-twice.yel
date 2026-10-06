@@ -1,0 +1,18 @@
+// ---
+// description: two writers of one name are two locals
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+total: async func(s: stream<s32>) -> s32 {
+    let t = 0;
+    wait for x in s { t += x; }
+    t
+}
+main: async func() {
+    let (s, w) = stream-pair(4);
+    wait w.write(1);
+    expect.equal(wait total(s), 1);
+    let (s2, w) = stream-pair(4);
+    wait w.write(2);
+    expect.equal(wait total(s2), 2);
+}

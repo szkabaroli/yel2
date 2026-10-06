@@ -1,0 +1,10 @@
+// ---
+// description: regexes can be kept in a list
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let patterns = [/a/, /b/, /c/,];
+    expect.equal(patterns.map({ pattern -> pattern.test("b") }), [false, true, false,]);
+}

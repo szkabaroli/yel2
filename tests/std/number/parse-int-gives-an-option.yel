@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: number.parse-int gives an option, not a number
+// features: [number]
+// negative: compile
+// error: 8:23: the value of parsed: expected s32, found option<s64>
+// ---
+main: func() {
+    let parsed: s32 = number.parse-int("5");
+}

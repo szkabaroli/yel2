@@ -1,0 +1,14 @@
+// ---
+// description: a chain of two hundred nested async waits
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+depth: async func(n: s32) -> s32 {
+    if n == 0 { return 0; }
+    1 + wait depth(n - 1)
+}
+
+main: async func() {
+    expect.equal(wait depth(200), 200);
+}

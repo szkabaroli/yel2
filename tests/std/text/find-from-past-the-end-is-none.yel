@@ -1,0 +1,9 @@
+// ---
+// description: find-from past the end gives none
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none("abc".find-from("a", 10));
+}

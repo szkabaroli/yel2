@@ -1,0 +1,9 @@
+// ---
+// description: a lone wildcard arm matches anything
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = match "anything" { _ => 7, };
+    expect.equal(n, 7);
+}

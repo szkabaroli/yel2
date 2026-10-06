@@ -1,0 +1,9 @@
+// ---
+// description: very large and small floats show in exponent form
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{1e10} {2.5e-3}", "1e+10 0.0025");
+}

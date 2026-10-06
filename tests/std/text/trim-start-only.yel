@@ -1,0 +1,9 @@
+// ---
+// description: trim-start takes spaces off the start only
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("  hi  ".trim-start(), "hi  ");
+}

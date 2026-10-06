@@ -1,0 +1,9 @@
+// ---
+// description: xs[i] past the end stops the program
+// features: [list]
+// exit: 1
+// ---
+main: func() {
+    let xs = [1, 2,];
+    print("{xs[5]}\n");
+}

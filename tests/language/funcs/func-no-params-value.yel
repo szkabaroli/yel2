@@ -1,0 +1,13 @@
+// ---
+// description: a func of no parameters is a value
+// features: [funcs]
+// ---
+from "std:testing" include expect;
+
+seven: func() -> s32 { 7 }
+
+run: func(f: func() -> s32) -> s32 { f() + f() }
+
+main: func() {
+    expect.equal(run(seven), 14);
+}

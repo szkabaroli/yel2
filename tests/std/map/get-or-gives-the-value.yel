@@ -1,0 +1,11 @@
+// ---
+// description: get-or gives the value of a key that is there
+// features: [map]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let m: map<string, s32> = map.new();
+    m.set("a", 1);
+    expect.equal(m.get-or("a", 99), 1);
+}

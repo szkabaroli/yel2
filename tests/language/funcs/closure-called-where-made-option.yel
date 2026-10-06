@@ -1,0 +1,12 @@
+// ---
+// description: a closure called where it is made gives an option the wanted type
+// features: [funcs, closures, options]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let found: option<string> = ({ n: s32 -> if n > 0 { none } else { some("negative") } })(3);
+    expect.none(found);
+    let missing: option<string> = ({ n: s32 -> if n > 0 { none } else { some("negative") } })(-3);
+    expect.equal(expect.some(missing), "negative");
+}

@@ -1,0 +1,11 @@
+// ---
+// description: an interpolated number keeps every digit at 10 and 100
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let ten = 10;
+    let hundred = 100;
+    expect.equal("{ten} {hundred} {ten - 1} {hundred - 1}", "10 100 9 99");
+}

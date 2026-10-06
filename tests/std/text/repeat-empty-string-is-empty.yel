@@ -1,0 +1,9 @@
+// ---
+// description: repeat of an empty string is empty
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("".repeat(5), "");
+}

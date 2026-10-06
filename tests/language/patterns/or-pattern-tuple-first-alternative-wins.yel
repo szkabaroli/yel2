@@ -1,0 +1,15 @@
+// ---
+// description: when both alternatives fit, the first binds
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+pair: func(t: tuple<s32, s32>) -> s32 {
+    match t {
+        (0, let y) | (let y, 0) => y,
+        _ => -1,
+    }
+}
+main: func() {
+    expect.equal(pair((0, 0)), 0);
+    expect.equal(pair((0, 9)), 9);
+}

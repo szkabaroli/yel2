@@ -1,0 +1,12 @@
+// ---
+// description: integer division truncates and % keeps the sign of the left
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    expect.equal(17 / 5, 3);
+    expect.equal(17 % 5, 2);
+    expect.equal(-(3 - 10), 7);
+    expect.equal(-17 / 5, -3);
+    expect.equal(-17 % 5, -2);
+}

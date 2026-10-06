@@ -1,0 +1,23 @@
+// ---
+// description: a union of a record and a string, matched by record pattern and type
+// features: [types, unions, match]
+// ---
+from "std:testing" include expect;
+
+resource Item { name: string, count: s32, }
+
+type entry = Item | string;
+
+entry-name: func(found: entry) -> string {
+    match found {
+        let { name, count: 0 } => "{name} (none)",
+        let { name, count } => "{name} ({count})",
+        let s: string => s,
+    }
+}
+
+main: func() {
+    expect.equal(entry-name({ name: "pen", count: 0, }), "pen (none)");
+    expect.equal(entry-name({ name: "cup", count: 3, }), "cup (3)");
+    expect.equal(entry-name("loose"), "loose");
+}

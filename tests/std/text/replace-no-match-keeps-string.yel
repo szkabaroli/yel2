@@ -1,0 +1,9 @@
+// ---
+// description: replace with no match gives the string itself
+// features: [text]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("abc".replace("x", "y"), "abc");
+}

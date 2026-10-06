@@ -1,0 +1,9 @@
+// ---
+// description: replace takes $<name> of an unknown name as empty text
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(/a/.replace("a", "[$<none>]"), "[]");
+}

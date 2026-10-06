@@ -1,0 +1,12 @@
+// ---
+// description: a decimal integer literal is its value
+// features: [syntax,literals]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(42, 42);
+    expect.equal(0, 0);
+    let big: s64 = 9007199254740993;
+    expect.equal(big - 9007199254740992, 1);
+}

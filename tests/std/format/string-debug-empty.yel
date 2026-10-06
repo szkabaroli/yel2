@@ -1,0 +1,9 @@
+// ---
+// description: an empty string shows as two quotes
+// features: [format]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal("{"":?}", "\"\"");
+}

@@ -1,0 +1,9 @@
+// ---
+// description: does not compile: argument 1 of area: expected Shape, found an integer
+// features: [types]
+// negative: compile
+// error: 9:28: argument 1 of area: expected Shape, found an integer
+// ---
+variant Shape { dot, circle(s32), }
+area: func(s: Shape) -> s32 { 0 }
+main: func() -> s32 { area(3) }

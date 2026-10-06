@@ -1,0 +1,14 @@
+// ---
+// description: a set global holds what is added, once each
+// features: [declarations,globals]
+// ---
+from "std:testing" include expect;
+
+let tags: set<string>;
+
+main: func() {
+    tags.add("a");
+    tags.add("a");
+    tags.add("b");
+    expect.equal(tags.len(), 2);
+}

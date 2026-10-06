@@ -1,0 +1,15 @@
+// ---
+// description: parse gives none for a port, query and fragment that are not written
+// features: [url]
+// ---
+from "std:testing" include expect;
+from "std:url" include url;
+
+main: func() {
+    let u = expect.ok(url.parse("https://example.com/a"));
+    expect.none(u.port);
+    expect.none(u.query);
+    expect.none(u.fragment);
+    expect.equal(u.username, "");
+    expect.equal(u.password, "");
+}

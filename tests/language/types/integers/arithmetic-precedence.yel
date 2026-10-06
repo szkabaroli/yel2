@@ -1,0 +1,14 @@
+// ---
+// description: * / % bind tighter than + -, and parens group
+// features: [types, integers]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let two: s32 = 2;
+    expect.equal(1 + two * 3, 7);
+    expect.equal((1 + two) * 3, 9);
+    expect.equal(10 - 4 - 3, 3);
+    expect.equal(20 / 4 / 5, 1);
+    expect.equal(7 % 4 * 2, 6);
+}

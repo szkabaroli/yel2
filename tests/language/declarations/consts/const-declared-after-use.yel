@@ -1,0 +1,13 @@
+// ---
+// description: a const may be declared after the func that uses it
+// features: [declarations,consts]
+// ---
+from "std:testing" include expect;
+
+use-it: func() -> s32 { LATER + 1 }
+
+const LATER = 4;
+
+main: func() {
+    expect.equal(use-it(), 5);
+}

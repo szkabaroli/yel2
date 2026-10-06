@@ -1,0 +1,9 @@
+// ---
+// description: parse-float refuses an exponent with nothing before it
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.none(number.parse-float("e5"));
+}

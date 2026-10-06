@@ -1,0 +1,14 @@
+// ---
+// description: a let before a range pattern is not needed to match, but let k binds the value
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let n = 42;
+    let text = match n {
+        1..=9 => "one digit",
+        let k if k >= 10 && k <= 99 => "two digits: {k}",
+        _ => "other",
+    };
+    expect.equal(text, "two digits: 42");
+}

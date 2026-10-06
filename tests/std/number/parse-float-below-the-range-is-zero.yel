@@ -1,0 +1,9 @@
+// ---
+// description: parse-float gives zero for a number too small for f64
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("1e-400"), some(0.0));
+}

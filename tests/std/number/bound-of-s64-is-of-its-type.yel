@@ -1,0 +1,11 @@
+// ---
+// description: s64.MAX fits where a s64 is wanted
+// features: [number, integer]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let top: s64 = s64.MAX;
+    let bottom: s64 = s64.MIN;
+    expect.holds(bottom <= top);
+}

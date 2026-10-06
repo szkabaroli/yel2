@@ -1,0 +1,9 @@
+// ---
+// description: a class can have several ranges
+// features: [regex]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(expect.some(/[a-cx-z0-2]+/.find("!abxy13")).text, "abxy1");
+}

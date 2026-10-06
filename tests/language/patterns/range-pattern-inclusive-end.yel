@@ -1,0 +1,17 @@
+// ---
+// description: an inclusive range pattern includes both ends
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+inside: func(n: s32) -> bool {
+    match n {
+        5..=8 => true,
+        _ => false,
+    }
+}
+main: func() {
+    expect.holds(!inside(4));
+    expect.holds(inside(5));
+    expect.holds(inside(8));
+    expect.holds(!inside(9));
+}

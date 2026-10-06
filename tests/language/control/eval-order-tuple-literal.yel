@@ -1,0 +1,12 @@
+// ---
+// description: a tuple evaluates its items in order
+// features: [control]
+// ---
+from "std:testing" include expect;
+let trace: list<string>;
+mark: func(label: string) -> string { trace.push(label); label }
+main: func() {
+    let pair = (mark("first"), mark("second"));
+    expect.equal(pair.0, "first");
+    expect.equal(trace, ["first", "second",]);
+}

@@ -1,0 +1,16 @@
+// ---
+// description: a constant list of tuples reads back as written
+// features: [records, static-lists, tuples]
+// ---
+from "std:testing" include expect;
+
+pairs: func() -> list<tuple<string, s32>> { [("one", 1), ("two", 2),] }
+
+main: func() {
+    let all = pairs();
+    expect.equal(all.len(), 2);
+    expect.equal(all[0].0, "one");
+    expect.equal(all[0].1, 1);
+    expect.equal(all[1].0, "two");
+    expect.equal(all[1].1, 2);
+}

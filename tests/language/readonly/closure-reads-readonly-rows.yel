@@ -1,0 +1,14 @@
+// ---
+// description: std's any, all, map and filter take a closure that only reads a readonly list's rows
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let grid: list<list<s32>> & readonly = [[1,], [2, 3,], [],];
+    expect.holds(grid.any({ row -> row.len() == 2 }));
+    expect.holds(!grid.all({ row -> row.len() > 0 }));
+    expect.equal(grid.map({ row -> row.len() }), [1, 2, 0,]);
+    let full = grid.filter({ row -> row.len() > 0 });
+    expect.equal(full.len(), 2);
+    expect.equal(full[1][0], 2);
+}

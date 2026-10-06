@@ -1,0 +1,1 @@
+panic: tests/language/funcs/assert-failure-tells-condition.yel:10:5: assertion failed: total * 2 == 7

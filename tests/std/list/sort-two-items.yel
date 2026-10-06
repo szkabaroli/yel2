@@ -1,0 +1,11 @@
+// ---
+// description: sort swaps two items that are out of order
+// features: [list]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let xs = [2, 1,];
+    xs.sort({ a, b -> a < b });
+    expect.equal(xs, [1, 2,]);
+}

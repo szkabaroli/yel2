@@ -1,0 +1,20 @@
+// ---
+// description: a shorter task ends before a longer one that started first
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+run-job: async func(name: string, steps: s32) {
+    for step in 0..steps { wait yield-turn(); }
+    log.push(name);
+}
+
+main: async func() {
+    let long = start run-job("long", 4);
+    let short = start run-job("short", 1);
+    wait long;
+    wait short;
+    expect.equal(log, ["short", "long",]);
+}

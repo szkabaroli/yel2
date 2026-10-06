@@ -1,0 +1,22 @@
+// ---
+// description: a task waiting for another resumes only after it is done
+// features: [async]
+// ---
+from "std:testing" include expect;
+
+let log: list<string>;
+
+inner: async func() {
+    wait yield-turn();
+    log.push("inner done");
+}
+
+outer: async func() {
+    wait inner();
+    log.push("outer resumed");
+}
+
+main: async func() {
+    wait outer();
+    expect.equal(log, ["inner done", "outer resumed",]);
+}

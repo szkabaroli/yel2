@@ -1,0 +1,17 @@
+// ---
+// description: a value kept in the caller's map outlives the call
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+resource Point { x: s32, y: s32, }
+put: func(m: map<string, Point>, k: string, n: s32) {
+    let p: Point = { x: n, y: n * 2, };
+    m.set(k, p);
+}
+main: func() {
+    let m: map<string, Point> = map.new();
+    for i in 0..20 { put(m, "k{i}", i); }
+    let total = 0;
+    for p in m.values() { total += p.y; }
+    expect.equal(total, 380);
+}

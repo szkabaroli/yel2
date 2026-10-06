@@ -1,0 +1,14 @@
+// ---
+// description: a float shows its shortest digits that read back
+// features: [types, floats, display]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let third: f64 = 1.0 / 3.0;
+    expect.equal("{third}", "0.3333333333333333");
+    let half: f64 = 0.5;
+    expect.equal("{half}", "0.5");
+    let negative: f64 = -2.75;
+    expect.equal("{negative}", "-2.75");
+}

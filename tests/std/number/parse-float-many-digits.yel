@@ -1,0 +1,9 @@
+// ---
+// description: parse-float reads a long run of digits
+// features: [number]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    expect.equal(number.parse-float("12345678901234567890"), some(12345678901234567890.0));
+}

@@ -1,0 +1,17 @@
+// ---
+// description: names a let pattern binds in a loop are each turn's own where a closure captures them
+// features: [patterns, let, closures]
+// ---
+from "std:testing" include expect;
+
+resource Point { x: s32, y: s32, }
+
+main: func() {
+    let gs: list<func() -> s32> = [];
+    let points: list<Point> = [{ x: 3, y: 4, }, { x: 7, y: 8, },];
+    for q in points {
+        let { x: qx, y: qy } = q;
+        gs.push({ qx * 10 + qy });
+    }
+    expect.equal(gs.map({ g -> g() }), [34, 78,]);
+}

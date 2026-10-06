@@ -1,0 +1,10 @@
+// ---
+// description: a shadowing let may have another type
+// features: [control]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let value = 42;
+    let value = "text {value}";
+    expect.equal(value, "text 42");
+}

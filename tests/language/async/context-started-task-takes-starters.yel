@@ -1,0 +1,19 @@
+// ---
+// description: a started task takes its starter's @(context) value as it is then
+// features: [async, context]
+// ---
+from "std:testing" include expect;
+
+@(context) let request: string = "none";
+
+inherits: async func() -> string {
+    wait yield-turn();
+    request
+}
+
+main: async func() {
+    request = "parent";
+    let child = start inherits();
+    request = "changed after start";
+    expect.equal(wait child, "parent");
+}

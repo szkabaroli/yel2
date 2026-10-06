@@ -1,0 +1,10 @@
+// ---
+// description: a duration of whole seconds shows no fraction
+// features: [time]
+// ---
+from "std:testing" include expect;
+from "std:time" include time;
+
+main: func() {
+    expect.equal("{time.seconds(5)}", "5s");
+}

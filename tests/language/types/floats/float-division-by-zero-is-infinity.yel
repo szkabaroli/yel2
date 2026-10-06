@@ -1,0 +1,12 @@
+// ---
+// description: dividing a float by zero gives an infinity, not a stop
+// features: [types, floats]
+// ---
+from "std:testing" include expect;
+
+main: func() {
+    let zero: f64 = 0.0;
+    let one: f64 = 1.0;
+    expect.equal(one / zero, inf);
+    expect.equal(-one / zero, -inf);
+}

@@ -1,0 +1,18 @@
+// ---
+// description: each evaluation of a list of record-making calls is its own
+// features: [records, static-lists]
+// ---
+from "std:testing" include expect;
+
+record part { id: string, tags: list<string>, }
+
+part-of: func(name: string) -> part { { id: name, tags: ["made",], } }
+
+parts: func() -> list<part> { [part-of("inbox"), part-of("compose"),] }
+
+main: func() {
+    let made = parts();
+    made[0].tags.push("again");
+    expect.equal(made[0].tags.len(), 2);
+    expect.equal(parts()[0].tags.len(), 1);
+}

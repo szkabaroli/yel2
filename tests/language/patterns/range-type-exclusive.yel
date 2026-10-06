@@ -1,0 +1,11 @@
+// ---
+// description: 1..6 holds 1 to 5
+// features: [patterns]
+// ---
+from "std:testing" include expect;
+type grade = 1..6;
+main: func() {
+    let low: grade = 1;
+    let high: grade = 5;
+    expect.equal(low + high, 6);
+}

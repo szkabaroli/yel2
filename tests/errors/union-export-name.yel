@@ -1,5 +1,0 @@
-// error: 4:5: "GET" is no WIT name (kebab-case, a-z, 0-9 and -): it cannot be a WIT enum's case
-module api {
-    type method = "GET" | "post";
-    pick: func(m: method) -> s32 { 0 }
-}

@@ -1,0 +1,14 @@
+// ---
+// description: the items of a readonly list are readonly and read as deep as needed
+// features: [readonly]
+// ---
+from "std:testing" include expect;
+main: func() {
+    let grid: list<list<s32>> & readonly = [[1, 2,], [3,],];
+    let total = 0;
+    for row in grid {
+        for cell in row { total += cell; }
+    }
+    expect.equal(total, 6);
+    expect.equal(grid[1], [3,]);
+}
