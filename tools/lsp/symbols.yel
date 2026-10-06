@@ -106,18 +106,18 @@ module symbols {
     outline: async func(state: Server, id: json.value, params: json.value) {
         let uri = json.string-value(json.path(params, ["textDocument", "uri"])).unwrap-or("");
         let checked = wait check.checked(state, uri);
-        let found = analysis.outline(checked, check.path(uri)).map({ s -> document-symbol(state, checked, s) });
+        let found = analysis.outline(checked, check.path(uri)).map({ symbol -> document-symbol(state, checked, symbol) });
         wait rpc.reply(state.connection, id, json.value.array(found));
     }
 
-    @(private) document-symbol: func(state: Server, checked: analysis.Checked, s: analysis.Symbol) -> json.value {
+    @(private) document-symbol: func(state: Server, checked: analysis.Checked, symbol: analysis.Symbol) -> json.value {
         json.object([
-            ("name", json.value.text(s.name)),
-            ("detail", json.value.text(s.detail)),
-            ("kind", json.value.number("{s.kind}")),
-            ("range", check.range(state, checked.texts, s.range)),
-            ("selectionRange", check.range(state, checked.texts, s.selection)),
-            ("children", json.value.array(s.children.map({ c -> document-symbol(state, checked, c) }))),
+            ("name", json.value.text(symbol.name)),
+            ("detail", json.value.text(symbol.detail)),
+            ("kind", json.value.number("{symbol.kind}")),
+            ("range", check.range(state, checked.texts, symbol.range)),
+            ("selectionRange", check.range(state, checked.texts, symbol.selection)),
+            ("children", json.value.array(symbol.children.map({ child -> document-symbol(state, checked, child) }))),
         ])
     }
 
@@ -128,8 +128,8 @@ module symbols {
         let (checked, file, line, column) = wait position(state, params);
         match analysis.signature-help(checked, file, line, column) {
             some(help) => {
-                let parameters = help.params.map({ p ->
-                    let (from, to) = p;
+                let parameters = help.params.map({ parameter ->
+                    let (from, to) = parameter;
                     json.object([("label", json.value.array([
                         json.value.number("{server.client-column(state, help.label, from)}"),
                         json.value.number("{server.client-column(state, help.label, to)}"),
@@ -171,10 +171,10 @@ module symbols {
         match wait analysis.rename(checked, file, line, column, name) {
             ok(edits) => {
                 let by-file: map<string, list<json.value>> = map.new();
-                for e in edits {
-                    let uri = check.file-uri(e.place.path);
+                for edit in edits {
+                    let uri = check.file-uri(edit.place.path);
                     if !by-file.has(uri) { by-file.set(uri, []); }
-                    by-file[uri].push(json.object([("range", check.range(state, checked.texts, e.place)), ("newText", json.value.text(e.text)),]));
+                    by-file[uri].push(json.object([("range", check.range(state, checked.texts, edit.place)), ("newText", json.value.text(edit.text)),]));
                 }
                 let changes: list<tuple<string, json.value>> = [];
                 for uri in by-file.keys() { changes.push((uri, json.value.array(by-file[uri]))); }

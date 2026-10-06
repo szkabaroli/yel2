@@ -103,6 +103,9 @@ resource Gen {
     // what each extern does (flow.derive), by its C name
     extern-effects: map<string, RuntimeEffect>,
     observed-writes: list<ObservedWrite>,
+    // the variants held by value (value-variants: a struct of the tag and the cases' union, in
+    // place), by name; every other variant with a payload is a pointer to its object
+    value-variants: map<Name, bool>,
 }
 
 // the resource whose field it is (a local), and the field's index
@@ -126,6 +129,8 @@ resource Lowered {
     funcs: list<IrFunc>,
     facts: Facts,
     pointer-types: map<Name, bool>,
+    // the variants held by value, each with its payloads
+    value-payloads: map<Name, list<Type>>,
     func-holders: map<Name, bool>,
     roots: list<string>,
     exports: map<string, list<Func>>,
@@ -139,43 +144,43 @@ resource Lowered {
 module gen {
     // a yel name (or key) as a C one: - is _, _ is _u (so a-b and a_b stay apart), . is __, : is _C
     // and / is _S (so lexer.lex is lexer__lex, and yel:ui/api.render yel_Cui_Sapi__render)
-    mangle: func(n: string) -> string {
+    mangle: func(name: string) -> string {
         let out = [];
-        for i in 0..n.len() {
-            let c = n.byte-at(i);
-            if c == 45 { out.push("_"); }
-            else if c == 95 { out.push("_u"); }
-            else if c == 46 { out.push("__"); }
-            else if c == 58 { out.push("_C"); }
-            else if c == 47 { out.push("_S"); }
-            else { out.push(from-byte(c)); }
+        for index in 0..name.len() {
+            let byte = name.byte-at(index);
+            if byte == 45 { out.push("_"); }
+            else if byte == 95 { out.push("_u"); }
+            else if byte == 46 { out.push("__"); }
+            else if byte == 58 { out.push("_C"); }
+            else if byte == 47 { out.push("_S"); }
+            else { out.push(from-byte(byte)); }
         }
         out.join("")
     }
 
     // bytes as the inside of a C string literal (each byte not plainly printable as \ooo)
-    c-escape: func(s: string) -> string {
+    c-escape: func(source: string) -> string {
         let out = [];
-        for i in 0..s.len() {
-            let c = s.byte-at(i);
-            if c == 34 { out.push("\\\""); }
-            else if c == 92 { out.push("\\\\"); }
-            else if c == 63 { out.push("\\?"); }
-            else if c >= 32 && c <= 126 { out.push(from-byte(c)); }
-            else { out.push("\\" + octal(c)); }
+        for index in 0..source.len() {
+            let byte = source.byte-at(index);
+            if byte == 34 { out.push("\\\""); }
+            else if byte == 92 { out.push("\\\\"); }
+            else if byte == 63 { out.push("\\?"); }
+            else if byte >= 32 && byte <= 126 { out.push(from-byte(byte)); }
+            else { out.push("\\" + octal(byte)); }
         }
         out.join("")
     }
 
-    octal: func(c: s64) -> string {
-        "{c / 64}{(c / 8) % 8}{c % 8}"
+    octal: func(byte: s64) -> string {
+        "{byte / 64}{(byte / 8) % 8}{byte % 8}"
     }
 
     // whether a func's body is a record literal and nothing else (its value)
-    made-record: func(f: Func) -> bool {
-        if f.body.stmts.len() != 1 { return false; }
-        match f.body.stmts[0] {
-            expr-stmt(x) => x.is-value && match x.value.kind {
+    made-record: func(function: Func) -> bool {
+        if function.body.stmts.len() != 1 { return false; }
+        match function.body.stmts[0] {
+            expr-stmt(statement) => statement.is-value && match statement.value.kind {
                 record-lit(_) => true,
                 _ => false,
             },
@@ -185,7 +190,7 @@ module gen {
 
     generator: func(context: Context, decls: list<Decl>) -> Gen {
         let file = context.input;
-        let g: Gen = {
+        let generator: Gen = {
             builds: map.new(),
             context: context,
             literals: map.new(), literal-decls: [], funcs: map.new(),
@@ -196,6 +201,7 @@ module gen {
             core-imports: map.new(), wit-used: map.new(),
             lifted: [], env-decls: [], envs: 0, observed-reads: map.new(), observed-writes: [],
             extern-effects: map.new(),
+            value-variants: map.new(),
             wit-versions: map.new(),
             wit-fields: map.new(),
             owned: map.new(),
@@ -211,90 +217,90 @@ module gen {
         };
         // what each extern does, from its declaration as written (its & readonly params only read),
         // before the types below are made what C holds
-        g.extern-effects = flow.extern-effects(decls);
+        generator.extern-effects = flow.extern-effects(decls);
         // the declared types as C holds their values (checked by now): a literal or union type as
         // its values' kind
-        for d in decls {
-            match d {
-                record-decl(r) => {
+        for declaration in decls {
+            match declaration {
+                record-decl(record-declaration) => {
                     let ws: list<Type> = [];
-                    for t in r.field-types { ws.push(without-readonly(erase-distinct(t))); }
-                    g.wit-fields.set(r.name, ws);
+                    for field-type in record-declaration.field-types { ws.push(without-readonly(erase-distinct(field-type))); }
+                    generator.wit-fields.set(record-declaration.name, ws);
                     let ts: list<Type> = [];
-                    for t in r.field-types { ts.push(represented(t)); }
-                    r.field-types = ts;
+                    for field-type in record-declaration.field-types { ts.push(represented(field-type)); }
+                    record-declaration.field-types = ts;
                 }
-                variant-decl(v) => {
+                variant-decl(variant-declaration) => {
                     let ps: list<Type> = [];
-                    for k in v.cases { ps.push(without-readonly(erase-distinct(k.payload))); }
-                    g.wit-cases.set(v.name, ps);
-                    for k in v.cases { k.payload = represented(k.payload); }
+                    for variant-case in variant-declaration.cases { ps.push(without-readonly(erase-distinct(variant-case.payload))); }
+                    generator.wit-cases.set(variant-declaration.name, ps);
+                    for variant-case in variant-declaration.cases { variant-case.payload = represented(variant-case.payload); }
                 }
                 // an alias of a literal or union type: its name at a component's boundary
-                type-decl(x) => {
-                    match x.resolved {
-                        union-type(xs) => set-name(g, x),
-                        singleton(s) => set-name(g, x),
-                        anon-record(r) => set-name(g, x),
+                type-decl(type-declaration) => {
+                    match type-declaration.resolved {
+                        union-type(_) => set-name(generator, type-declaration),
+                        singleton(_) => set-name(generator, type-declaration),
+                        anon-record(_) => set-name(generator, type-declaration),
                         _ => {}
                     }
                 }
-                func-decl(f) => {
-                    if f.is-generator { g.generators.set(f.name, true); }
+                func-decl(function-declaration) => {
+                    if function-declaration.is-generator { generator.generators.set(function-declaration.name, true); }
                     let wps: list<Type> = [];
-                    for t in f.param-types { wps.push(without-readonly(erase-distinct(t))); }
-                    g.wit-sigs.set(f.name, {
+                    for parameter-type in function-declaration.param-types { wps.push(without-readonly(erase-distinct(parameter-type))); }
+                    generator.wit-sigs.set(function-declaration.name, {
                         params: wps,
-                        result: without-readonly(erase-distinct(f.result)),
+                        result: without-readonly(erase-distinct(function-declaration.result)),
                     });
                     // a display func: found while its param is the type it shows (a distinct one
                     // not yet its base)
-                    if is-display(f) { g.displays.push({ key: f.name, shows: f.param-types[0], }); }
+                    if is-display(function-declaration) { generator.displays.push({ key: function-declaration.name, shows: function-declaration.param-types[0], }); }
                     let ts: list<Type> = [];
-                    for t in f.param-types { ts.push(represented(t)); }
-                    f.param-types = ts;
-                    f.result = represented(f.result);
+                    for parameter-type in function-declaration.param-types { ts.push(represented(parameter-type)); }
+                    function-declaration.param-types = ts;
+                    function-declaration.result = represented(function-declaration.result);
                 }
-                extern-decl(x) => {
+                extern-decl(extern-declaration) => {
                     let ts: list<Type> = [];
-                    for t in x.param-types { ts.push(represented(t)); }
-                    x.param-types = ts;
-                    x.result = represented(x.result);
+                    for parameter-type in extern-declaration.param-types { ts.push(represented(parameter-type)); }
+                    extern-declaration.param-types = ts;
+                    extern-declaration.result = represented(extern-declaration.result);
                 }
                 _ => {}
             }
         }
-        for d in decls {
-            match d {
-                func-decl(f) => {
-                    g.funcs.set(f.name, {
-                        c-name: "u_" + mangle(f.name),
+        for declaration in decls {
+            match declaration {
+                func-decl(function-declaration) => {
+                    generator.funcs.set(function-declaration.name, {
+                        c-name: "u_" + mangle(function-declaration.name),
                         is-extern: false,
-                        type-params: f.type-params,
+                        type-params: function-declaration.type-params,
                     });
-                    if f.type-params.len() > 0 { g.generic.set(f.name, f); }
-                    else if made-record(f) { g.constructors.set(f.name, f); }
+                    if function-declaration.type-params.len() > 0 { generator.generic.set(function-declaration.name, function-declaration); }
+                    else if made-record(function-declaration) { generator.constructors.set(function-declaration.name, function-declaration); }
                 }
-                extern-decl(x) => {
-                    if x.wit-module != "" {
-                        g.funcs.set(x.name, {
-                            c-name: "w_" + mangle(x.name),
+                extern-decl(extern-declaration) => {
+                    if extern-declaration.wit-module != "" {
+                        generator.funcs.set(extern-declaration.name, {
+                            c-name: "w_" + mangle(extern-declaration.name),
                             is-extern: true,
                             type-params: [],
                         });
-                        g.wit-externs.set(x.name, x);
-                        let at = find-byte(x.wit-module, 64).unwrap-or(-1);
+                        generator.wit-externs.set(extern-declaration.name, extern-declaration);
+                        let at = find-byte(extern-declaration.wit-module, 64).unwrap-or(-1);
                         if at > 0 {
-                            g.wit-versions.set(
-                                x.wit-module.substring(0, at),
-                                x.wit-module.substring(at + 1, x.wit-module.len()),
+                            generator.wit-versions.set(
+                                extern-declaration.wit-module.substring(0, at),
+                                extern-declaration.wit-module.substring(at + 1, extern-declaration.wit-module.len()),
                             );
                         }
                     } else {
-                        g.funcs.set(x.name, {
-                            c-name: x.c-name,
+                        generator.funcs.set(extern-declaration.name, {
+                            c-name: extern-declaration.c-name,
                             is-extern: true,
-                            type-params: x.type-params,
+                            type-params: extern-declaration.type-params,
                         });
                     }
                 }
@@ -304,31 +310,32 @@ module gen {
         }
         // a resource's fields and a variant's payloads as held: a record's (a value's) inline, its
         // fields in place
-        for r in g.symbols.records.values() {
-            if !r.value { r.field-types = r.field-types.map({ t -> value-records(g, t) }); }
+        for record-declaration in generator.symbols.records.values() {
+            if !record-declaration.value { record-declaration.field-types = record-declaration.field-types.map({ field-type -> value-records(generator, field-type) }); }
         }
         // an observable resource's registrar: its last field, made with it
-        for r in g.symbols.records.values() {
-            if r.observable {
-                r.fields.push(observers-field());
-                r.field-types.push(observers-type());
+        for record-declaration in generator.symbols.records.values() {
+            if record-declaration.observable {
+                record-declaration.fields.push(observers-field());
+                record-declaration.field-types.push(observers-type());
             }
         }
-        for v in g.symbols.variants.values() {
-            for k in v.cases { k.payload = value-records(g, k.payload); }
+        for variant-declaration in generator.symbols.variants.values() {
+            for variant-case in variant-declaration.cases { variant-case.payload = value-records(generator, variant-case.payload); }
         }
-        g
+        generator.value-variants = find-value-variants(generator);
+        generator
     }
 
     // the will-sets before calls given an observable resource's field (a list, a map): kept where
     // the call may change what it is given there (as the program's flow says: not through an
     // @(observable) resource in it, which tells of its own fields), else nothing
-    settle-observed: func(g: Gen, facts: Facts) {
-        for w in g.observed-writes {
-            let flow = opt.call-flow(facts, w.call);
-            if w.arg < flow.changes.len() && !flow.changes[w.arg] {
-                w.marker.kind = Kind.block({ body: [], label: -1, });
-                w.marker.fx = 0;
+    settle-observed: func(generator: Gen, facts: Facts) {
+        for observed in generator.observed-writes {
+            let flow = opt.call-flow(facts, observed.call);
+            if observed.arg < flow.changes.len() && !flow.changes[observed.arg] {
+                observed.marker.kind = Kind.block({ body: [], label: -1, });
+                observed.marker.fx = 0;
             }
         }
     }
@@ -339,140 +346,282 @@ module gen {
     observers-type: func() -> Type { Type.named(intern("yel:std/observe.Registrar")) }
 
     // a field observe is told of: one of an @(observable) resource's not @(ignored), by its index
-    observed-field: func(g: Gen, t: Type, field: string) -> option<s64> {
-        let tn = match without-readonly(t) {
-            named(n) => n,
+    observed-field: func(generator: Gen, given: Type, field: string) -> option<s64> {
+        let tn = match without-readonly(given) {
+            named(name) => name,
             _ => { return none; }
         };
-        let r = match g.symbols.records.get(tn) {
-            some(x) => x,
+        let record-declaration = match generator.symbols.records.get(tn) {
+            some(found) => found,
             none => { return none; }
         };
-        if !r.observable { return none; }
-        for x in r.ignored { if x == field { return none; } }
-        for i in 0..r.fields.len() { if r.fields[i] == field { return some(i); } }
+        if !record-declaration.observable { return none; }
+        for ignored in record-declaration.ignored { if ignored == field { return none; } }
+        for index in 0..record-declaration.fields.len() { if record-declaration.fields[index] == field { return some(index); } }
         none
     }
 
     // the fields of an observable resource a program has (its registrar's not one)
-    observed-count: func(r: RecordDecl) -> s64 {
-        if r.observable {
-            r.fields.len() - 1
+    observed-count: func(record-declaration: RecordDecl) -> s64 {
+        if record-declaration.observable {
+            record-declaration.fields.len() - 1
         } else {
-            r.fields.len()
+            record-declaration.fields.len()
         }
     }
 
     // an alias of a literal or union type: the name the type has across a component's boundary (the
     // first alias of a type)
-    set-name: func(g: Gen, x: TypeDecl) {
-        let k = show-type(x.resolved);
-        if !g.set-names.has(k) { g.set-names.set(k, x.name); }
-        g.set-types.set(x.name, x.resolved);
+    set-name: func(generator: Gen, type-declaration: TypeDecl) {
+        let shown = show-type(type-declaration.resolved);
+        if !generator.set-names.has(shown) { generator.set-names.set(shown, type-declaration.name); }
+        generator.set-types.set(type-declaration.name, type-declaration.resolved);
     }
 
     // the WIT funcs a node calls (its operands' too), into used
-    imports-called: func(g: Gen, n: Node, wrappers: map<string, string>, used: map<string, bool>) {
-        match n.kind {
-            call(x) => {
-                if g.wit-used.has(x.key) { used.set(x.key, true); }
-                if wrappers.has(x.c-name) { used.set(wrappers[x.c-name], true); }
+    imports-called: func(generator: Gen, node: Node, wrappers: map<string, string>, used: map<string, bool>) {
+        match node.kind {
+            call(called) => {
+                if generator.wit-used.has(called.key) { used.set(called.key, true); }
+                if wrappers.has(called.c-name) { used.set(wrappers[called.c-name], true); }
             }
             _ => {}
         }
-        for index in 0..operand-count(n) { imports-called(g, operand(n, index), wrappers, used); }
+        for index in 0..operand-count(node) { imports-called(generator, operand(node, index), wrappers, used); }
     }
 
     // a string literal: a static ystr, one for each text
-    literal: func(g: Gen, s: string) -> string {
-        if g.literals.has(s) { return g.literals[s]; }
-        let c = "S{g.literal-decls.len()}";
-        g.literals.set(s, c);
-        g.literal-decls.push(c"static const ystr {c} = { {s.len()}, \"{c-escape(s)}\" };");
-        c
+    literal: func(generator: Gen, content: string) -> string {
+        if generator.literals.has(content) { return generator.literals[content]; }
+        let name = "S{generator.literal-decls.len()}";
+        generator.literals.set(content, name);
+        generator.literal-decls.push(c"static const ystr {name} = { {content.len()}, \"{c-escape(content)}\" };");
+        name
     }
 
     // a type as C is made of it: settled, the func's type parameters replaced; a literal's type
     // left open is s32 or f32, anything else open unit
-    gen-type: func(g: Gen, t0: Type) -> Type {
-        let t = resolve(t0);
-        match t {
-            distinct-type(x) => gen-type(g, x.base),
-            param(n) => if g.subst.has(n) { g.subst[n] } else { Type.unit-type },
-            var(v) => unsettled-number(v.kind),
+    gen-type: func(generator: Gen, t0: Type) -> Type {
+        let resolved = resolve(t0);
+        match resolved {
+            distinct-type(distinct) => gen-type(generator, distinct.base),
+            param(name) => if generator.subst.has(name) { generator.subst[name] } else { Type.unit-type },
+            var(variable) => unsettled-number(variable.kind),
             // held as its kinds (one: that kind's type)
             union-type(xs) => {
                 let reps: list<Type> = [];
-                for x in xs { reps.push(gen-type(g, represented(x))); }
+                for member in xs { reps.push(gen-type(generator, represented(member))); }
                 kinds-union(reps)
             }
-            singleton(s) => gen-type(g, s.base),
-            range-type(r) => gen-type(g, r.base),
+            singleton(single) => gen-type(generator, single.base),
+            range-type(record-declaration) => gen-type(generator, record-declaration.base),
             // held as what it reads
-            readonly-type(x) => gen-type(g, x),
+            readonly-type(inner) => gen-type(generator, inner),
             // a record (a value): held as its fields, in their order, as an anonymous record is
-            named(n) => match g.symbols.records.get(n) {
-                some(r) => if r.value {
+            named(name) => match generator.symbols.records.get(name) {
+                some(record-declaration) => if record-declaration.value {
                     Type.anon-record({
-                        fields: r.fields,
-                        types: r.field-types.map({ x -> gen-type(g, x) }),
-                        name: r.name,
+                        fields: record-declaration.fields,
+                        types: record-declaration.field-types.map({ member -> gen-type(generator, member) }),
+                        name: record-declaration.name,
                     })
                 } else {
-                    t
+                    resolved
                 },
-                none => t,
+                none => resolved,
             },
-            _ => map-children(t, { x -> gen-type(g, x) }),
+            _ => map-children(resolved, { member -> gen-type(generator, member) }),
         }
     }
 
     // a type with its records (values) as the generator holds them (anonymous records, named) and
     // the rest as it is: what crosses WIT keeps its literal and union types (an enum, a variant)
-    value-records: func(g: Gen, t: Type) -> Type {
-        match t {
-            named(n) => match g.symbols.records.get(n) {
-                some(r) => if r.value {
+    value-records: func(generator: Gen, given: Type) -> Type {
+        match given {
+            named(name) => match generator.symbols.records.get(name) {
+                some(record-declaration) => if record-declaration.value {
                     Type.anon-record({
-                        fields: r.fields,
-                        types: r.field-types.map({ x -> value-records(g, x) }),
-                        name: r.name,
+                        fields: record-declaration.fields,
+                        types: record-declaration.field-types.map({ member -> value-records(generator, member) }),
+                        name: record-declaration.name,
                     })
                 } else {
-                    t
+                    given
                 },
-                none => t,
+                none => given,
             },
-            _ => map-children(t, { x -> value-records(g, x) }),
+            _ => map-children(given, { member -> value-records(generator, member) }),
         }
     }
 
     // a declared type (a signature's) inside a func with type parameters tps
-    decl-type: func(g: Gen, tps: list<string>, t: Type) -> Type { gen-type(g, generalize(t, tps)) }
+    decl-type: func(generator: Gen, tps: list<string>, given: Type) -> Type { gen-type(generator, generalize(given, tps)) }
 
-    expr-type: func(g: Gen, e: Expr) -> Type { gen-type(g, e.ty) }
+    expr-type: func(generator: Gen, expression: Expr) -> Type { gen-type(generator, expression.ty) }
 
     // what a named type is: "record", "flags", "handle" (a resource's), "enum" or "variant"
-    named-kind: func(g: Gen, n: Name) -> declared-kind {
-        if g.symbols.records.has(n) { return "record"; }
-        if g.symbols.flags.has(n) { return "flags"; }
-        if g.symbols.resources.has(n) { return "handle"; }
-        if is-enum(g, n) { return "enum"; }
+    named-kind: func(generator: Gen, name: Name) -> declared-kind {
+        if generator.symbols.records.has(name) { return "record"; }
+        if generator.symbols.flags.has(name) { return "flags"; }
+        if generator.symbols.resources.has(name) { return "handle"; }
+        if is-enum(generator, name) { return "enum"; }
         "variant"
     }
 
     // a variant whose cases carry nothing (an enum) is a C int
-    is-enum: func(g: Gen, n: Name) -> bool {
-        if !g.symbols.variants.has(n) { return false; }
-        for k in g.symbols.variants[n].cases {
-            if k.has-payload { return false; }
+    is-enum: func(generator: Gen, name: Name) -> bool {
+        if !generator.symbols.variants.has(name) { return false; }
+        for variant-case in generator.symbols.variants[name].cases {
+            if variant-case.has-payload { return false; }
         }
         true
     }
 
-    case-index: func(v: VariantDecl, n: string) -> s64 {
-        for i in 0..v.cases.len() {
-            if v.cases[i].name == n { return i; }
+    // whether a variant is held by value: its tag and its cases' union in place (V_x), not a
+    // pointer to an object (V_x *)
+    value-variant: func(generator: Gen, name: Name) -> bool { generator.value-variants.has(name) }
+
+    // the variants held by value: each with a payload, every payload at most 16 bytes (the value 24
+    // at most, with its tag), and none holding the variant itself in place (in its payload, or
+    // through another variant held by value, an option, a result, a tuple, a record of fields, a
+    // union or a fixed-length list: through a list, a map or a pointer is not in place). Decided
+    // once, for every part of the generator to read (value-variant)
+    find-value-variants: func(generator: Gen) -> map<Name, bool> {
+        let held: map<Name, bool> = map.new();
+        for name in generator.symbols.variants.keys() {
+            if !is-enum(generator, name) { held.set(name, true); }
+        }
+        // one holding itself in place: a pointer (which breaks the cycle for the others in it)
+        for name in generator.symbols.variants.keys() {
+            if !held.has(name) { continue; }
+            let seen: map<Name, bool> = map.new();
+            for variant-case in generator.symbols.variants[name].cases {
+                if held.has(name) && variant-case.has-payload && holds-in-place(generator, held, variant-case.payload, name, seen) {
+                    let _ = held.remove(name);
+                }
+            }
+        }
+        // one with a payload past 16 bytes: a pointer (which makes others no larger)
+        for round in 0..1000 {
+            let changed = false;
+            for name in generator.symbols.variants.keys() {
+                if !held.has(name) { continue; }
+                for variant-case in generator.symbols.variants[name].cases {
+                    if held.has(name) && variant-case.has-payload && in-place-layout(generator, held, variant-case.payload)[0] > 16 {
+                        let _ = held.remove(name);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed { break; }
+        }
+        held
+    }
+
+    // whether a value of type given holds the variant target in place, the variants of held taken
+    // as held by value (seen: those looked into already)
+    holds-in-place: func(generator: Gen, held: map<Name, bool>, given: Type, target: Name, seen: map<Name, bool>) -> bool {
+        let resolved = resolve(given);
+        if needs-representing(resolved) { return holds-in-place(generator, held, represented(resolved), target, seen); }
+        let inside = { item: Type -> holds-in-place(generator, held, item, target, seen) };
+        match resolved {
+            named(name) => {
+                if name == target { return true; }
+                if !held.has(name) || seen.has(name) { return false; }
+                seen.set(name, true);
+                for variant-case in generator.symbols.variants[name].cases {
+                    if variant-case.has-payload && inside(variant-case.payload) { return true; }
+                }
+                false
+            }
+            option-type(_) => any-child(resolved, inside),
+            result-type(_) => any-child(resolved, inside),
+            tuple-type(_) => any-child(resolved, inside),
+            anon-record(_) => any-child(resolved, inside),
+            union-type(_) => any-child(resolved, inside),
+            fixed-list(_) => any-child(resolved, inside),
+            distinct-type(distinct) => inside(distinct.base),
+            readonly-type(inner) => inside(inner),
+            _ => false,
+        }
+    }
+
+    // a value's size and alignment in bytes, as C lays it out on a 64-bit target (no target lays
+    // it out larger), the variants of held in place
+    in-place-layout: func(generator: Gen, held: map<Name, bool>, given: Type) -> list<s64> {
+        let resolved = resolve(given);
+        if needs-representing(resolved) { return in-place-layout(generator, held, represented(resolved)); }
+        let pointer = [8, 8,];
+        let measured = { item: Type -> in-place-layout(generator, held, item) };
+        match resolved {
+            num(kind) => {
+                let bytes = if kind == "s8" || kind == "u8" {
+                    1
+                } else if kind == "s16" || kind == "u16" {
+                    2
+                } else if kind == "s32" || kind == "u32" || kind == "f32" {
+                    4
+                } else {
+                    8
+                };
+                [bytes, bytes,]
+            }
+            bool-type => [1, 1,],
+            char-type => [4, 4,],
+            string-type => [16, 8,],
+            func-type(_) => [16, 8,],
+            option-type(inner) => fields-layout([[1, 1,], measured(inner),]),
+            result-type(outcome) => fields-layout([[1, 1,], measured(outcome.ok), measured(outcome.err),]),
+            tuple-type(xs) => fields-layout(xs.map(measured)),
+            anon-record(anonymous) => if anonymous.types.len() == 0 { [1, 1,] } else { fields-layout(anonymous.types.map(measured)) },
+            union-type(xs) => {
+                let parts = [[4, 4,],];
+                for item in xs { parts.push(measured(item)); }
+                fields-layout(parts)
+            }
+            fixed-list(fixed) => {
+                let item = measured(fixed.item);
+                [item[0] * fixed.len, item[1],]
+            }
+            named(name) => {
+                let kind = named-kind(generator, name);
+                if kind == "flags" && generator.symbols.flags[name].flags.len() > 32 { return [8, 8,]; }
+                if kind == "flags" || kind == "enum" || kind == "handle" { return [4, 4,]; }
+                if kind != "variant" || !held.has(name) { return pointer; }
+                let size = 1;
+                let align = 1;
+                for variant-case in generator.symbols.variants[name].cases {
+                    if !variant-case.has-payload { continue; }
+                    let part = measured(variant-case.payload);
+                    if part[0] > size { size = part[0]; }
+                    if part[1] > align { align = part[1]; }
+                }
+                fields-layout([[4, 4,], [size, align,],])
+            }
+            distinct-type(distinct) => measured(distinct.base),
+            readonly-type(inner) => measured(inner),
+            unit-type => [1, 1,],
+            never-type => [1, 1,],
+            // a pointer: a list, a map, a buffer, a stream, a started call, a record's object
+            _ => pointer,
+        }
+    }
+
+    // a struct's size and alignment, of its fields' (each at its alignment, the whole padded to
+    // the largest)
+    fields-layout: func(fields: list<list<s64>>) -> list<s64> {
+        let offset = 0;
+        let align = 1;
+        for field in fields {
+            offset = (offset + field[1] - 1) / field[1] * field[1] + field[0];
+            if field[1] > align { align = field[1]; }
+        }
+        [(offset + align - 1) / align * align, align,]
+    }
+
+    case-index: func(definition: VariantDecl, case-name: string) -> s64 {
+        for index in 0..definition.cases.len() {
+            if definition.cases[index].name == case-name { return index; }
         }
         -1
     }
@@ -481,34 +630,34 @@ module gen {
     // concatenated ids stay apart (a named type's is its kind, its name's length, its name)
     // f is a display func: display: func(value: T) -> string, T a declared type
     // whether the func key names is async: a state machine, its call begun by s_<name>
-    async-func: func(g: Gen, key: string) -> bool {
-        match g.symbols.funcs.get(key) {
+    async-func: func(generator: Gen, key: string) -> bool {
+        match generator.symbols.funcs.get(key) {
             some(sig) => sig.is-async,
             none => false,
         }
     }
 
-    is-display: func(f: Func) -> bool {
-        if base-name(f.name) != "display" || f.type-params.len() > 0
-            || f.param-types.len() != 1 { return false; }
-        let declared = match f.param-types[0] {
+    is-display: func(function: Func) -> bool {
+        if base-name(function.name) != "display" || function.type-params.len() > 0
+            || function.param-types.len() != 1 { return false; }
+        let declared = match function.param-types[0] {
             named(_) => true,
             distinct-type(_) => true,
             _ => false,
         };
-        declared && show-type(f.result) == "string"
+        declared && show-type(function.result) == "string"
     }
 
     // whether the helper name is made already (if not, it is about to be)
-    made-before: func(g: Gen, name: string) -> bool {
-        if g.made.has(name) { return true; }
-        g.made.set(name, true);
+    made-before: func(generator: Gen, name: string) -> bool {
+        if generator.made.has(name) { return true; }
+        generator.made.set(name, true);
         false
     }
 
-    type-id: func(g: Gen, t: Type) -> string {
-        match t {
-            num(n) => {
+    type-id: func(generator: Gen, given: Type) -> string {
+        match given {
+            num(kind) => {
                 let ids = [
                     "s8",
                     "s16",
@@ -522,91 +671,91 @@ module gen {
                     "f64",
                     "usize",
                 ];
-                "ABCDEFGHJKT".substring(index-of(ids, n), index-of(ids, n) + 1)
+                "ABCDEFGHJKT".substring(index-of(ids, kind), index-of(ids, kind) + 1)
             }
-            canonical-type(x) => "C" + type-id(g, x),
+            canonical-type(canonical) => "C" + type-id(generator, canonical),
             bool-type => "b",
             char-type => "c",
             string-type => "s",
             buffer-type => "W",
-            list-type(x) => "L" + type-id(g, x),
-            fixed-list(x) => "Q{x.len}" + type-id(g, x.item),
-            func-type(f) => {
+            list-type(listed) => "L" + type-id(generator, listed),
+            fixed-list(fixed) => "Q{fixed.len}" + type-id(generator, fixed.item),
+            func-type(function) => {
                 let ids: list<string> = [];
-                for x in f.params { ids.push(type-id(g, x)); }
-                "Z{f.params.len()}{ids.join("")}" + type-id(g, f.result)
+                for parameter-type in function.params { ids.push(type-id(generator, parameter-type)); }
+                "Z{function.params.len()}{ids.join("")}" + type-id(generator, function.result)
             }
-            map-type(x) => "M" + type-id(g, x.key) + type-id(g, x.value),
-            future-type(x) => "F" + type-id(g, x),
-            seq-type(x) => "G" + type-id(g, x),
-            stream-type(x) => (if x.writer { "O" } else { "I" }) + type-id(g, x.item),
-            option-type(x) => "O" + type-id(g, x),
-            result-type(r) => "Y" + type-id(g, r.ok) + type-id(g, r.err),
+            map-type(mapped) => "M" + type-id(generator, mapped.key) + type-id(generator, mapped.value),
+            future-type(awaited) => "F" + type-id(generator, awaited),
+            seq-type(sequence) => "G" + type-id(generator, sequence),
+            stream-type(streaming) => (if streaming.writer { "O" } else { "I" }) + type-id(generator, streaming.item),
+            option-type(optional) => "O" + type-id(generator, optional),
+            result-type(outcome) => "Y" + type-id(generator, outcome.ok) + type-id(generator, outcome.err),
             tuple-type(xs) => {
                 let ids: list<string> = [];
-                for x in xs { ids.push(type-id(g, x)); }
+                for member in xs { ids.push(type-id(generator, member)); }
                 "P{xs.len()}" + ids.join("")
             }
             union-type(xs) => {
                 let ids: list<string> = [];
-                for x in xs { ids.push(type-id(g, x)); }
+                for member in xs { ids.push(type-id(generator, member)); }
                 "U{xs.len()}" + ids.join("")
             }
             // its fields' names and types
-            anon-record(r) => {
+            anon-record(anonymous) => {
                 let ids: list<string> = [];
-                for i in 0..r.fields.len() {
-                    ids.push("{mangle(r.fields[i]).len()}{mangle(r.fields[i])}{type-id(g, r.types[i])}");
+                for index in 0..anonymous.fields.len() {
+                    ids.push("{mangle(anonymous.fields[index]).len()}{mangle(anonymous.fields[index])}{type-id(generator, anonymous.types[index])}");
                 }
-                "N{r.fields.len()}" + ids.join("")
+                "N{anonymous.fields.len()}" + ids.join("")
             }
             // a range, as written (a component's boundary: its checks its own)
-            range-type(r) => "R{type-id(g, r.base)}{mangle(r.lo).len()}{mangle(r.lo)}{mangle(r.hi).len()}{mangle(r.hi)}",
+            range-type(ranged) => "R{type-id(generator, ranged.base)}{mangle(ranged.lo).len()}{mangle(ranged.lo)}{mangle(ranged.hi).len()}{mangle(ranged.hi)}",
             // a literal type, as written (a component's boundary: its helpers its own)
-            singleton(s) => "X{type-id(g, s.base)}{mangle(s.key).len()}{mangle(s.key)}",
-            named(n) => "{named-kind(g, n).substring(0, 1)}{mangle(name-text(n)).len()}{mangle(name-text(n))}",
+            singleton(single) => "X{type-id(generator, single.base)}{mangle(single.key).len()}{mangle(single.key)}",
+            named(name) => "{named-kind(generator, name).substring(0, 1)}{mangle(name-text(name)).len()}{mangle(name-text(name))}",
             _ => "u",
         }
     }
 
-    num-c: func(n: string) -> string {
-        if n == "usize" { return "uintptr_t"; }
-        if n == "f32" { return "float"; }
-        if n == "f64" { return "double"; }
-        let bits = n.substring(1, n.len());
-        if is-signed(n) { "int{bits}_t" } else { "uint{bits}_t" }
+    num-c: func(name: string) -> string {
+        if name == "usize" { return "uintptr_t"; }
+        if name == "f32" { return "float"; }
+        if name == "f64" { return "double"; }
+        let bits = name.substring(1, name.len());
+        if is-signed(name) { "int{bits}_t" } else { "uint{bits}_t" }
     }
 
     // a (settled) type's C type
-    c-type: func(g: Gen, t: Type) -> string {
+    c-type: func(generator: Gen, given: Type) -> string {
         // a type as written (a component's boundary): held as its representation
-        if needs-representing(t) { return c-type(g, represented(t)); }
-        match t {
-            num(n) => num-c(n),
+        if needs-representing(given) { return c-type(generator, represented(given)); }
+        match given {
+            num(kind) => num-c(kind),
             bool-type => "bool",
             char-type => "uint32_t",
             string-type => "ystr",
             buffer-type => "ybuffer *",
-            list-type(x) => "ylist *",
-            fixed-list(x) => value-struct(g, t),
-            func-type(f) => func-typedef(g, t),
-            map-type(x) => "ymap *",
+            list-type(_) => "ylist *",
+            fixed-list(_) => value-struct(generator, given),
+            func-type(_) => func-typedef(generator, given),
+            map-type(_) => "ymap *",
             // a started call's frame
-            future-type(x) => "y_async *",
-            seq-type(x) => "y_async *",
-            stream-type(x) => "ystream *",
+            future-type(_) => "y_async *",
+            seq-type(_) => "y_async *",
+            stream-type(_) => "ystream *",
             address-type => "void *",
-            canonical-type(x) => abi-type(g, x),
-            option-type(x) => value-struct(g, t),
-            result-type(r) => value-struct(g, t),
-            tuple-type(xs) => value-struct(g, t),
-            union-type(xs) => value-struct(g, t),
-            anon-record(r) => value-struct(g, t),
-            named(n) => {
-                let kind = named-kind(g, n);
-                if kind == "record" { "R_{mangle(name-text(n))} *" }
+            canonical-type(canonical) => abi-type(generator, canonical),
+            option-type(_) => value-struct(generator, given),
+            result-type(_) => value-struct(generator, given),
+            tuple-type(_) => value-struct(generator, given),
+            union-type(_) => value-struct(generator, given),
+            anon-record(_) => value-struct(generator, given),
+            named(name) => {
+                let kind = named-kind(generator, name);
+                if kind == "record" { "R_{mangle(name-text(name))} *" }
                 else if kind == "flags" {
-                    if g.symbols.flags[n].flags.len() > 32 {
+                    if generator.symbols.flags[name].flags.len() > 32 {
                         "uint64_t"
                     } else {
                         "uint32_t"
@@ -614,7 +763,8 @@ module gen {
                 }
                 else if kind == "enum" { "int32_t" }
                 else if kind == "handle" { "uint32_t" }
-                else { "V_{mangle(name-text(n))} *" }
+                else if value-variant(generator, name) { variant-struct(generator, name) }
+                else { "V_{mangle(name-text(name))} *" }
             }
             _ => "yunit",
         }
@@ -623,59 +773,59 @@ module gen {
     // a func value's C type: a pointer to its C function, typedef'd once a func value's C type: its
     // C function (which takes the environment it was made in first) and that environment (NULL for
     // a top-level func's), typedef'd once; F_x__fn is the function's type
-    func-typedef: func(g: Gen, t: Type) -> string {
-        let n = "F_" + type-id(g, t);
-        if made-before(g, n) { return n; }
-        match t {
-            func-type(f) => {
+    func-typedef: func(generator: Gen, given: Type) -> string {
+        let typedef-name = "F_" + type-id(generator, given);
+        if made-before(generator, typedef-name) { return typedef-name; }
+        match given {
+            func-type(function) => {
                 let ps: list<string> = ["void *",];
-                for x in f.params { ps.push(c-type(g, x)); }
-                g.value-decls.push("typedef {c-type(g, f.result)} (*{n}__fn)({ps.join(", ")});");
-                g.value-decls.push(c"typedef struct { {n}__fn fn; void *env; } {n};");
+                for parameter-type in function.params { ps.push(c-type(generator, parameter-type)); }
+                generator.value-decls.push("typedef {c-type(generator, function.result)} (*{typedef-name}__fn)({ps.join(", ")});");
+                generator.value-decls.push(c"typedef struct { {typedef-name}__fn fn; void *env; } {typedef-name};");
             }
             _ => {}
         }
-        n
+        typedef-name
     }
 
     // a top-level func as a value's C function: an adapter taking the environment (none) first,
     // made once (a helper: key and c-name the func's)
-    value-adapter: func(g: Gen, key: string, c-name: string, t: Type) -> string {
-        let n = c-name + "__value";
-        if made-before(g, n) { return n; }
-        match t {
+    value-adapter: func(generator: Gen, key: string, c-name: string, given: Type) -> string {
+        let adapter-name = c-name + "__value";
+        if made-before(generator, adapter-name) { return adapter-name; }
+        match given {
             func-type(ft) => {
-                let f = helper-func(g, n, ft.result, false);
-                f.closure = true;
+                let helper = helper-func(generator, adapter-name, ft.result, false);
+                helper.closure = true;
                 let args: list<Node> = [];
-                for i in 0..ft.params.len() {
-                    let a = helper-local(f, ft.params[i], "a{i}", true);
-                    args.push(local(a, ft.params[i]));
+                for index in 0..ft.params.len() {
+                    let argument = helper-local(helper, ft.params[index], "a{index}", true);
+                    args.push(local(argument, ft.params[index]));
                 }
-                f.body.push(return-stmt(call(key, c-name, args, ft.result, fx().call)));
+                helper.body.push(return-stmt(call(key, c-name, args, ft.result, fx().call)));
             }
             _ => {}
         }
-        n
+        adapter-name
     }
 
     // an option, result or tuple: a struct held by value, declared once (after the ones inside it)
-    value-struct: func(g: Gen, t: Type) -> string {
-        let n = "T_" + type-id(g, t);
-        if made-before(g, n) { return n; }
-        let fields = match t {
-            option-type(x) => "bool has; {c-type(g, x)} value;",
-            fixed-list(x) => "{c-type(g, x.item)} items[{x.len}];",
-            result-type(r) => "bool is_err; {c-type(g, r.ok)} ok; {c-type(g, r.err)} err;",
+    value-struct: func(generator: Gen, given: Type) -> string {
+        let struct-name = "T_" + type-id(generator, given);
+        if made-before(generator, struct-name) { return struct-name; }
+        let fields = match given {
+            option-type(optional) => "bool has; {c-type(generator, optional)} value;",
+            fixed-list(fixed) => "{c-type(generator, fixed.item)} items[{fixed.len}];",
+            result-type(outcome) => "bool is_err; {c-type(generator, outcome.ok)} ok; {c-type(generator, outcome.err)} err;",
             tuple-type(xs) => {
                 let parts: list<string> = [];
-                for i in 0..xs.len() { parts.push("{c-type(g, xs[i])} f{i};"); }
+                for index in 0..xs.len() { parts.push("{c-type(generator, xs[index])} f{index};"); }
                 parts.join(" ")
             }
-            anon-record(r) => {
+            anon-record(anonymous) => {
                 let parts: list<string> = [];
-                for i in 0..r.fields.len() {
-                    parts.push("{c-type(g, r.types[i])} f_{mangle(r.fields[i])};");
+                for index in 0..anonymous.fields.len() {
+                    parts.push("{c-type(generator, anonymous.types[index])} f_{mangle(anonymous.fields[index])};");
                 }
                 if parts.len() == 0 { "char none;" } else { parts.join(" ") }
             }
@@ -683,52 +833,69 @@ module gen {
             // pointers: the fields not the tag's are zero)
             union-type(xs) => {
                 let parts = ["int32_t tag;",];
-                for i in 0..xs.len() { parts.push("{c-type(g, xs[i])} c{i};"); }
+                for index in 0..xs.len() { parts.push("{c-type(generator, xs[index])} c{index};"); }
                 parts.join(" ")
             }
             _ => "",
         };
-        g.value-decls.push(c"typedef struct { {fields} } {n};");
-        n
+        generator.value-decls.push(c"typedef struct { {fields} } {struct-name};");
+        struct-name
     }
 
-    // the C of the records and variants: structs, and a static for each case without a payload
-    type-decls: func(g: Gen, decls: list<Decl>, forward: list<string>, bodies: list<string>) {
-        for d in decls {
-            match d {
-                record-decl(r) => {
-                    let n = "R_" + mangle(r.name);
-                    forward.push("typedef struct {n} {n};");
-                    bodies.push(c"struct {n} {");
-                    for i in 0..r.fields.len() {
-                        bodies.push("\t{c-type(g, r.field-types[i])} f_{mangle(r.fields[i])};");
+    // a variant held by value: its struct (its tag and a union of its cases' payloads), declared
+    // once among the value structs, after the ones its payloads hold
+    variant-struct: func(generator: Gen, name: Name) -> string {
+        let struct-name = "V_" + mangle(name-text(name));
+        if made-before(generator, struct-name) { return struct-name; }
+        let members: list<string> = [];
+        for variant-case in generator.symbols.variants[name].cases {
+            if variant-case.has-payload { members.push("{c-type(generator, variant-case.payload)} c_{mangle(variant-case.name)};"); }
+        }
+        generator.value-decls.push(c"struct {struct-name} { int32_t tag; union { {members.join(" ")} } u; };");
+        struct-name
+    }
+
+    // the C of the records and variants (those held by value: variant-struct's): structs, and a
+    // static for each case without a payload
+    type-decls: func(generator: Gen, decls: list<Decl>, forward: list<string>, bodies: list<string>) {
+        for declaration in decls {
+            match declaration {
+                record-decl(record-declaration) => {
+                    let struct-name = "R_" + mangle(record-declaration.name);
+                    forward.push("typedef struct {struct-name} {struct-name};");
+                    bodies.push(c"struct {struct-name} {");
+                    for index in 0..record-declaration.fields.len() {
+                        bodies.push("\t{c-type(generator, record-declaration.field-types[index])} f_{mangle(record-declaration.fields[index])};");
                     }
-                    if r.fields.len() == 0 { bodies.push("\tchar none;"); }
+                    if record-declaration.fields.len() == 0 { bodies.push("\tchar none;"); }
                     bodies.push(c"};");
                 }
-                variant-decl(v) => {
-                    if !is-enum(g, intern(v.name)) {
-                        let n = "V_" + mangle(v.name);
-                        forward.push("typedef struct {n} {n};");
-                        bodies.push(c"struct {n} {");
+                variant-decl(variant-declaration) => {
+                    let name = intern(variant-declaration.name);
+                    if !is-enum(generator, name) {
+                        forward.push("typedef struct V_{mangle(variant-declaration.name)} V_{mangle(variant-declaration.name)};");
+                    }
+                    if !is-enum(generator, name) && !value-variant(generator, name) {
+                        let struct-name = "V_" + mangle(variant-declaration.name);
+                        bodies.push(c"struct {struct-name} {");
                         bodies.push("\tint32_t tag;");
                         bodies.push(c"\tunion {");
-                        for k in v.cases {
-                            if k.has-payload {
-                                bodies.push("\t\t{c-type(g, k.payload)} c_{mangle(k.name)};");
+                        for variant-case in variant-declaration.cases {
+                            if variant-case.has-payload {
+                                bodies.push("\t\t{c-type(generator, variant-case.payload)} c_{mangle(variant-case.name)};");
                             }
                         }
                         bodies.push(c"\t} u;");
                         bodies.push(c"};");
-                        for i in 0..v.cases.len() {
-                            let k = v.cases[i];
+                        for index in 0..variant-declaration.cases.len() {
+                            let variant-case = variant-declaration.cases[index];
                             // a case carrying nothing (no payload, or one of ()): one value, shared
-                            let carries = k.has-payload && match resolve(k.payload) {
+                            let carries = variant-case.has-payload && match resolve(variant-case.payload) {
                                 unit-type => false,
                                 _ => true,
                             };
                             if !carries {
-                                bodies.push(c"static {n} {singleton(v.name, k.name)} = { .tag = {i} };");
+                                bodies.push(c"static {struct-name} {singleton(variant-declaration.name, variant-case.name)} = { .tag = {index} };");
                             }
                         }
                     }
@@ -739,16 +906,16 @@ module gen {
     }
 
     // the static of a case without a payload
-    singleton: func(v: string, k: string) -> string { "K_{mangle(v)}__{mangle(k)}" }
+    singleton: func(owner: string, key: string) -> string { "K_{mangle(owner)}__{mangle(key)}" }
 
     // the func that writes a value of type t at an interpolation's buffer's end as WAVE (the
     // Component Model's text for values: strings and chars quoted and escaped, records { a: 1 }):
     // std's format.write-*, or (anything made of parts) std's value.render over its descriptor
-    debug-fn: func(g: Gen, t: Type) -> Formatter {
-        let writer = match t {
-            num(n) => if !is-int(n) {
-                "write-{n}"
-            } else if is-signed(n) {
+    debug-fn: func(generator: Gen, given: Type) -> Formatter {
+        let writer = match given {
+            num(kind) => if !is-int(kind) {
+                "write-{kind}"
+            } else if is-signed(kind) {
                 "write-int"
             } else {
                 "write-uint"
@@ -760,16 +927,16 @@ module gen {
             unit-type => "write-unit",
             _ => "",
         };
-        if writer != "" { return Formatter.writer(std-func(g, "yel:std/format." + writer)); }
-        walker(g, t, false)
+        if writer != "" { return Formatter.writer(std-func(generator, "yel:std/format." + writer)); }
+        walker(generator, given, false)
     }
 
     // a formatter that hands std's value.render a value of type held, by its descriptor (made
     // here): debug, or display (render.yel writes the call)
-    walker: func(g: Gen, held: Type, display: bool) -> Formatter {
-        std-func(g, render-key());
-        std-func(g, "yel:std/buffer.push");
-        type-desc(g, held);
+    walker: func(generator: Gen, held: Type, display: bool) -> Formatter {
+        std-func(generator, render-key());
+        std-func(generator, "yel:std/buffer.push");
+        type-desc(generator, held);
         Formatter.render({ held: held, display: display, })
     }
 
@@ -777,18 +944,18 @@ module gen {
     render-key: func() -> string { "yel:std/value.render" }
 
     // a std func that C the compiler writes calls (kept, though no yel calls it): its C name
-    std-func: func(g: Gen, key: string) -> string {
-        g.made.set("root " + key, true);
-        g.funcs[key].c-name
+    std-func: func(generator: Gen, key: string) -> string {
+        generator.made.set("root " + key, true);
+        generator.funcs[key].c-name
     }
 
     // the descriptor of type held (runtime/yel.h's ytype), made once: what y_debug and y_display
     // read to show a value of it
-    type-desc: func(g: Gen, held: Type) -> string {
-        let name = "Y_D_" + type-id(g, held);
-        if made-before(g, name) { return name; }
-        g.helper-protos.push("static const ytype {name};");
-        let ct = c-type(g, held);
+    type-desc: func(generator: Gen, held: Type) -> string {
+        let name = "Y_D_" + type-id(generator, held);
+        if made-before(generator, name) { return name; }
+        generator.helper-protos.push("static const ytype {name};");
+        let ct = c-type(generator, held);
         let kind = "UNIT";
         let count = 0;
         let parts: list<string> = [];
@@ -817,28 +984,28 @@ module gen {
             stream-type(_) => { kind = "STREAM"; }
             list-type(item) => {
                 kind = "LIST";
-                parts.push("&" + type-desc(g, item));
+                parts.push("&" + type-desc(generator, item));
             }
             fixed-list(fixed) => {
                 kind = "FIXED";
                 count = fixed.len;
-                parts.push("&" + type-desc(g, fixed.item));
+                parts.push("&" + type-desc(generator, fixed.item));
             }
             option-type(inner) => {
                 kind = "OPTION";
-                parts.push("&" + type-desc(g, inner));
+                parts.push("&" + type-desc(generator, inner));
                 offsets = ["offsetof({ct}, has)", "offsetof({ct}, value)",];
             }
             result-type(sides) => {
                 kind = "RESULT";
-                parts = ["&" + type-desc(g, sides.ok), "&" + type-desc(g, sides.err),];
+                parts = ["&" + type-desc(generator, sides.ok), "&" + type-desc(generator, sides.err),];
                 offsets = ["offsetof({ct}, is_err)", "offsetof({ct}, ok)", "offsetof({ct}, err)",];
             }
             tuple-type(members) => {
                 kind = "TUPLE";
                 count = members.len();
                 for index in 0..members.len() {
-                    parts.push("&" + type-desc(g, members[index]));
+                    parts.push("&" + type-desc(generator, members[index]));
                     offsets.push("offsetof({ct}, f{index})");
                 }
             }
@@ -846,7 +1013,7 @@ module gen {
                 kind = if fields.name != "" { "VALUE_RECORD" } else { "ANON_RECORD" };
                 count = fields.fields.len();
                 for index in 0..count {
-                    parts.push("&" + type-desc(g, fields.types[index]));
+                    parts.push("&" + type-desc(generator, fields.types[index]));
                     offsets.push("offsetof({ct}, f_{mangle(fields.fields[index])})");
                     names.push("\"{c-escape(fields.fields[index])}\"");
                 }
@@ -856,42 +1023,48 @@ module gen {
                 count = members.len();
                 offsets.push("offsetof({ct}, tag)");
                 for index in 0..members.len() {
-                    parts.push("&" + type-desc(g, members[index]));
+                    parts.push("&" + type-desc(generator, members[index]));
                     offsets.push("offsetof({ct}, c{index})");
                 }
             }
             named(type-name) => {
-                let declared = named-kind(g, type-name);
+                let declared = named-kind(generator, type-name);
                 if declared == "record" {
                     kind = "RECORD";
-                    let decl = g.symbols.records[type-name];
+                    let decl = generator.symbols.records[type-name];
                     let object = "R_" + mangle(name-text(type-name));
                     // (an observable resource's registrar not shown)
                     count = observed-count(decl);
                     for index in 0..count {
-                        parts.push("&" + type-desc(g, decl.field-types[index]));
+                        parts.push("&" + type-desc(generator, decl.field-types[index]));
                         offsets.push("offsetof({object}, f_{mangle(decl.fields[index])})");
                         names.push("\"{c-escape(decl.fields[index])}\"");
                     }
                 } else if declared == "flags" {
                     kind = "FLAGS";
-                    let decl = g.symbols.flags[type-name];
+                    let decl = generator.symbols.flags[type-name];
                     count = decl.flags.len();
                     for flag in decl.flags { names.push("\"{c-escape(flag)}\""); }
                 } else if declared == "handle" {
                     kind = "HANDLE";
                     names.push("\"{c-escape(base-name(name-text(type-name)))}\"");
                 } else {
-                    let decl = g.symbols.variants[type-name];
+                    let decl = generator.symbols.variants[type-name];
                     let object = "V_" + mangle(name-text(type-name));
-                    kind = if declared == "enum" { "ENUM" } else { "VARIANT" };
+                    kind = if declared == "enum" {
+                        "ENUM"
+                    } else if value-variant(generator, type-name) {
+                        "VALUE_VARIANT"
+                    } else {
+                        "VARIANT"
+                    };
                     count = decl.cases.len();
                     if declared != "enum" { offsets.push("offsetof({object}, tag)"); }
                     for variant-case in decl.cases {
                         names.push("\"{c-escape(variant-case.name)}\"");
                         if declared != "enum" {
                             if variant-case.has-payload {
-                                parts.push("&" + type-desc(g, variant-case.payload));
+                                parts.push("&" + type-desc(generator, variant-case.payload));
                                 offsets.push("offsetof({object}, u.c_{mangle(variant-case.name)})");
                             } else {
                                 parts.push("NULL");
@@ -911,38 +1084,30 @@ module gen {
         ] {
             if table[2] == "" { fields.push("NULL"); }
             else {
-                g.helper-bodies.push(c"{table[1]} {name}_{table[0]}[] = { {table[2]} };");
+                generator.helper-bodies.push(c"{table[1]} {name}_{table[0]}[] = { {table[2]} };");
                 fields.push("{name}_{table[0]}");
             }
         }
-        g.helper-bodies.push(c"static const ytype {name} = { Y_K_{kind}, {count}, sizeof({ct}), {fields.join(", ")} };");
+        generator.helper-bodies.push(c"static const ytype {name} = { Y_K_{kind}, {count}, sizeof({ct}), {fields.join(", ")} };");
         name
-    }
-
-    // a label as WAVE writes it: one that is also a WAVE keyword takes a %
-    wave-label: func(n: string) -> string {
-        if contains(["true", "false", "inf", "nan", "some", "none", "ok", "err",], n) {
-            return "%" + n;
-        }
-        n
     }
 
     // the func that writes a value in an interpolation: a string or char as its text, anything
     // else as WAVE
-    display-fn: func(g: Gen, t: Type) -> Formatter {
-        match t {
-            string-type => Formatter.writer(std-func(g, "yel:std/buffer.push")),
-            buffer-type => Formatter.writer(std-func(g, "yel:std/format.write-buffer")),
-            char-type => Formatter.writer(std-func(g, "yel:std/buffer.push-char")),
+    display-fn: func(generator: Gen, given: Type) -> Formatter {
+        match given {
+            string-type => Formatter.writer(std-func(generator, "yel:std/buffer.push")),
+            buffer-type => Formatter.writer(std-func(generator, "yel:std/format.write-buffer")),
+            char-type => Formatter.writer(std-func(generator, "yel:std/buffer.push-char")),
             // its value as that kind displays (a string of a union raw too)
-            union-type(_) => walker(g, t, true),
-            _ => debug-fn(g, t),
+            union-type(_) => walker(generator, given, true),
+            _ => debug-fn(generator, given),
         }
     }
 
     // a value compared and hashed by its parts (an option, a result, a tuple, a fixed list, a
     // record of fields, a union, a variant), by a helper made for its type
-    by-parts: func(g: Gen, whole: Type) -> bool {
+    by-parts: func(generator: Gen, whole: Type) -> bool {
         match whole {
             option-type(_) => true,
             fixed-list(_) => true,
@@ -950,7 +1115,7 @@ module gen {
             tuple-type(_) => true,
             union-type(_) => true,
             anon-record(_) => true,
-            named(name) => named-kind(g, name) == "variant",
+            named(name) => named-kind(generator, name) == "variant",
             _ => false,
         }
     }
@@ -958,58 +1123,58 @@ module gen {
     // the func that gives a value of type from as type to, held another way (types as sets: a
     // value into a union of kinds, out of one where the checker found its kind, between unions,
     // and inside an option, a result or a tuple), made once (a helper)
-    conv-fn: func(g: Gen, from: Type, to: Type) -> string {
-        let n = "y_conv_" + type-id(g, from) + "_" + type-id(g, to);
-        if made-before(g, n) { return n; }
-        let f = helper-func(g, n, to, false);
-        let x = helper-local(f, from, "x", true);
-        let r = helper-local(f, to, "r", false);
-        let xs = { -> local(x, from) };
-        let rs = { -> local(r, to) };
+    conv-fn: func(generator: Gen, from: Type, to: Type) -> string {
+        let helper-name = "y_conv_" + type-id(generator, from) + "_" + type-id(generator, to);
+        if made-before(generator, helper-name) { return helper-name; }
+        let helper = helper-func(generator, helper-name, to, false);
+        let input = helper-local(helper, from, "x", true);
+        let result = helper-local(helper, to, "r", false);
+        let xs = { -> local(input, from) };
+        let rs = { -> local(result, to) };
         let s32 = Type.num("s32");
         let set = { field: list<string>, ty: Type, value: Node -> store(load(rs(), field, false, ty, true), value) };
         let get = { field: list<string>, ty: Type -> load(xs(), field, false, ty, false) };
-        let tag-is = { k: s64 -> bin("==", Type.bool-type, get(["tag",], s32), int-const(k, s32)) };
+        let tag-is = { kind-position: s64 -> bin("==", Type.bool-type, get(["tag",], s32), int-const(kind-position, s32)) };
         // out of a union: its value of that kind, as the whole
         let out-of = {
             fs: list<Type> ->
-                let j = kind-index(g, to, fs);
-            if j < 0 { panic("conv-fn: {show-type(from)} to {show-type(to)}"); }
-            f.body.push(assign(r, conv-node(g, fs[j], to, get(["c{j}",], fs[j]))));
+                let target-position = kind-index(generator, to, fs);
+            if target-position < 0 { panic("conv-fn: {show-type(from)} to {show-type(to)}"); }
+            helper.body.push(assign(result, conv-node(generator, fs[target-position], to, get(["c{target-position}",], fs[target-position]))));
         };
         match to {
             union-type(ks) => {
                 match from {
                     union-type(fs) => {
-                        for j in 0..fs.len() {
-                            let i = kind-index(g, fs[j], ks);
-                            if i >= 0 {
-                                f.body.push(if-stmt(tag-is(j), [
-                                    set(["tag",], s32, int-const(i, s32)),
+                        for index in 0..fs.len() {
+                            let member-position = kind-index(generator, fs[index], ks);
+                            if member-position >= 0 {
+                                helper.body.push(if-stmt(tag-is(index), [
+                                    set(["tag",], s32, int-const(member-position, s32)),
                                     set(
-                                        ["c{i}",],
-                                        ks[i],
-                                        conv-node(g, fs[j], ks[i], get(["c{j}",], fs[j])),
+                                        ["c{member-position}",],
+                                        ks[member-position],
+                                        conv-node(generator, fs[index], ks[member-position], get(["c{index}",], fs[index])),
                                     ),
                                 ], []));
                             }
                         }
                     }
                     _ => {
-                        let i = kind-index(g, from, ks);
-                        f.body.push(set(["tag",], s32, int-const(i, s32)));
-                        f.body.push(set(["c{i}",], ks[i], conv-node(g, from, ks[i], xs())));
+                        let source-position = kind-index(generator, from, ks);
+                        helper.body.push(set(["tag",], s32, int-const(source-position, s32)));
+                        helper.body.push(set(["c{source-position}",], ks[source-position], conv-node(generator, from, ks[source-position], xs())));
                     }
                 }
             }
-            option-type(y) => {
+            option-type(wanted-item) => {
                 match from {
-                    option-type(v) => {
-                        f.body.push(set(["has",], Type.bool-type, get(["has",], Type.bool-type)));
-                        f.body.push(
+                    option-type(given-item) => {
+                        helper.body.push(set(["has",], Type.bool-type, get(["has",], Type.bool-type)));
+                        helper.body.push(
                             if-stmt(
                                 get(["has",], Type.bool-type),
-                                [set(["value",], y, conv-node(g, v, y, get(["value",], v))),],
+                                [set(["value",], wanted-item, conv-node(generator, given-item, wanted-item, get(["value",], given-item))),],
                                 [],
                             )
                         );
@@ -1018,23 +1183,23 @@ module gen {
                     _ => {}
                 }
             }
-            result-type(q) => {
+            result-type(wanted-outcome) => {
                 match from {
-                    result-type(p) => {
-                        f.body.push(
+                    result-type(given-outcome) => {
+                        helper.body.push(
                             set(["is_err",], Type.bool-type, get(["is_err",], Type.bool-type))
                         );
-                        f.body.push(
+                        helper.body.push(
                             if-stmt(
                                 get(["is_err",], Type.bool-type),
                                 [
                                     set(
                                         ["err",],
-                                        q.err,
-                                        conv-node(g, p.err, q.err, get(["err",], p.err)),
+                                        wanted-outcome.err,
+                                        conv-node(generator, given-outcome.err, wanted-outcome.err, get(["err",], given-outcome.err)),
                                     ),
                                 ],
-                                [set(["ok",], q.ok, conv-node(g, p.ok, q.ok, get(["ok",], p.ok))),],
+                                [set(["ok",], wanted-outcome.ok, conv-node(generator, given-outcome.ok, wanted-outcome.ok, get(["ok",], given-outcome.ok))),],
                             )
                         );
                     }
@@ -1042,16 +1207,16 @@ module gen {
                     _ => {}
                 }
             }
-            anon-record(q) => {
+            anon-record(wanted-record) => {
                 match from {
-                    anon-record(p) => {
-                        for i in 0..p.fields.len() {
-                            let field = ["f_" + mangle(p.fields[i]),];
-                            f.body.push(
+                    anon-record(given-record) => {
+                        for index in 0..given-record.fields.len() {
+                            let field = ["f_" + mangle(given-record.fields[index]),];
+                            helper.body.push(
                                 set(
                                     field,
-                                    q.types[i],
-                                    conv-node(g, p.types[i], q.types[i], get(field, p.types[i])),
+                                    wanted-record.types[index],
+                                    conv-node(generator, given-record.types[index], wanted-record.types[index], get(field, given-record.types[index])),
                                 )
                             );
                         }
@@ -1063,12 +1228,12 @@ module gen {
             tuple-type(ys) => {
                 match from {
                     tuple-type(vs) => {
-                        for i in 0..vs.len() {
-                            f.body.push(
+                        for index in 0..vs.len() {
+                            helper.body.push(
                                 set(
-                                    ["f{i}",],
-                                    ys[i],
-                                    conv-node(g, vs[i], ys[i], get(["f{i}",], vs[i])),
+                                    ["f{index}",],
+                                    ys[index],
+                                    conv-node(generator, vs[index], ys[index], get(["f{index}",], vs[index])),
                                 )
                             );
                         }
@@ -1084,83 +1249,83 @@ module gen {
                 }
             }
         }
-        f.body.push(return-stmt(rs()));
-        n
+        helper.body.push(return-stmt(rs()));
+        helper-name
     }
 
     // a value of type from (the node's) as type to
-    conv-node: func(g: Gen, from: Type, to: Type, value: Node) -> Node {
-        if type-id(g, from) == type-id(g, to) { return value; }
-        pure-call(conv-fn(g, from, to), [value,], to)
+    conv-node: func(generator: Gen, from: Type, to: Type, value: Node) -> Node {
+        if type-id(generator, from) == type-id(generator, to) { return value; }
+        pure-call(conv-fn(generator, from, to), [value,], to)
     }
 
     // which of kinds a value of type t is held as: the same type, else (it is held another way)
     // the kind made the same way (an option, a result, a tuple of as many)
-    kind-index: func(g: Gen, t: Type, ks: list<Type>) -> s64 {
-        let id = type-id(g, t);
-        for i in 0..ks.len() {
-            if type-id(g, ks[i]) == id { return i; }
+    kind-index: func(generator: Gen, given: Type, ks: list<Type>) -> s64 {
+        let id = type-id(generator, given);
+        for index in 0..ks.len() {
+            if type-id(generator, ks[index]) == id { return index; }
         }
-        for i in 0..ks.len() {
-            let same = match t {
-                option-type(x) => match ks[i] {
-                    option-type(y) => true,
+        for index in 0..ks.len() {
+            let same = match given {
+                option-type(_) => match ks[index] {
+                    option-type(_) => true,
                     _ => false,
                 },
-                result-type(r) => match ks[i] {
-                    result-type(q) => true,
+                result-type(_) => match ks[index] {
+                    result-type(_) => true,
                     _ => false,
                 },
-                tuple-type(xs) => match ks[i] {
+                tuple-type(xs) => match ks[index] {
                     tuple-type(ys) => xs.len() == ys.len(),
                     _ => false,
                 },
-                anon-record(x) => match ks[i] {
-                    anon-record(y) => x.fields.join(",") == y.fields.join(","),
+                anon-record(wanted-record) => match ks[index] {
+                    anon-record(candidate-record) => wanted-record.fields.join(",") == candidate-record.fields.join(","),
                     _ => false,
                 },
                 _ => false,
             };
-            if same { return i; }
+            if same { return index; }
         }
         -1
     }
 
     // the C func that reads a future's result of type t (an async frame's result follows its
     // header), made once
-    result-fn: func(g: Gen, t: Type) -> string {
-        let n = "y_result_" + type-id(g, t);
-        if made-before(g, n) { return n; }
-        let ct = c-type(g, t);
-        g.value-decls.push(c"typedef struct { y_async h; {ct} result; } W_{type-id(g, t)};");
-        g.helper-protos.push("static {ct} {n}(y_async *f);");
+    result-fn: func(generator: Gen, given: Type) -> string {
+        let helper-name = "y_result_" + type-id(generator, given);
+        if made-before(generator, helper-name) { return helper-name; }
+        let ct = c-type(generator, given);
+        generator.value-decls.push(c"typedef struct { y_async h; {ct} result; } W_{type-id(generator, given)};");
+        generator.helper-protos.push("static {ct} {helper-name}(y_async *f);");
         // read from where it is, whatever the frame's own struct (copied: no pointer of another
         // struct's type reads it)
-        g.helper-bodies.push(c"static {ct} {n}(y_async *f) { {ct} r; memcpy(&r, (char *)f + offsetof(W_{type-id(g, t)}, result), sizeof r); return r; }");
-        g.helper-bodies.push("");
-        n
+        generator.helper-bodies.push(c"static {ct} {helper-name}(y_async *f) { {ct} r; memcpy(&r, (char *)f + offsetof(W_{type-id(generator, given)}, result), sizeof r); return r; }");
+        generator.helper-bodies.push("");
+        helper-name
     }
 
     // the func that compares two values of a composite type by their parts (as eq-node), made once
     // (a helper): an option's, a result's, a union's or a variant's by its kind and what it holds,
     // a tuple's, a record of fields' or a fixed list's part by part
-    eq-fn: func(g: Gen, held: Type) -> string {
-        let name = "y_eq_" + type-id(g, held);
-        if made-before(g, name) { return name; }
-        let f = helper-func(g, name, Type.bool-type, false);
-        let a = helper-local(f, held, "a", true);
-        let b = helper-local(f, held, "b", true);
+    eq-fn: func(generator: Gen, held: Type) -> string {
+        let name = "y_eq_" + type-id(generator, held);
+        if made-before(generator, name) { return name; }
+        let helper = helper-func(generator, name, Type.bool-type, false);
+        let first = helper-local(helper, held, "a", true);
+        let second = helper-local(helper, held, "b", true);
         let bool = Type.bool-type;
         let s32 = Type.num("s32");
-        let left = { field: list<string>, ty: Type, arrow: bool -> load(local(a, held), field, arrow, ty, false) };
-        let right = { field: list<string>, ty: Type, arrow: bool -> load(local(b, held), field, arrow, ty, false) };
+        let left = { field: list<string>, ty: Type, arrow: bool -> load(local(first, held), field, arrow, ty, false) };
+        let right = { field: list<string>, ty: Type, arrow: bool -> load(local(second, held), field, arrow, ty, false) };
         let answer = { yes: bool -> return-stmt(bool-const(yes)) };
         // unless a part is equal: false
         let part = {
             field: list<string>, ty: Type, arrow: bool ->
-                f.body.push(
+                helper.body.push(
                 if-stmt(
-                    un("!", bool, eq-node(g, ty, left(field, ty, arrow), right(field, ty, arrow))),
+                    un("!", bool, eq-node(generator, ty, left(field, ty, arrow), right(field, ty, arrow))),
                     [answer(false),],
                     [],
                 )
@@ -1169,23 +1334,23 @@ module gen {
         // the same kind (its tag), and for each kind its part
         let kinds = {
             arrow: bool, fields: list<list<string>>, types: list<Type> ->
-                f.body.push(
+                helper.body.push(
                 if-stmt(
                     bin("!=", bool, left(["tag",], s32, arrow), right(["tag",], s32, arrow)),
                     [answer(false),],
                     [],
                 )
             );
-            for k in 0..fields.len() {
-                if fields[k].len() > 0 {
-                    f.body.push(
-                        if-stmt(bin("==", bool, left(["tag",], s32, arrow), int-const(k, s32)), [
+            for index in 0..fields.len() {
+                if fields[index].len() > 0 {
+                    helper.body.push(
+                        if-stmt(bin("==", bool, left(["tag",], s32, arrow), int-const(index, s32)), [
                             return-stmt(
                                 eq-node(
-                                    g,
-                                    types[k],
-                                    left(fields[k], types[k], arrow),
-                                    right(fields[k], types[k], arrow),
+                                    generator,
+                                    types[index],
+                                    left(fields[index], types[index], arrow),
+                                    right(fields[index], types[index], arrow),
                                 )
                             ),
                         ], [])
@@ -1194,25 +1359,25 @@ module gen {
             }
         };
         match held {
-            option-type(x) => {
-                f.body.push(
+            option-type(optional) => {
+                helper.body.push(
                     if-stmt(
                         bin("!=", bool, left(["has",], bool, false), right(["has",], bool, false)),
                         [answer(false),],
                         [],
                     )
                 );
-                f.body.push(
+                helper.body.push(
                     if-stmt(un("!", bool, left(["has",], bool, false)), [answer(true),], [])
                 );
-                f.body.push(
+                helper.body.push(
                     return-stmt(
-                        eq-node(g, x, left(["value",], x, false), right(["value",], x, false))
+                        eq-node(generator, optional, left(["value",], optional, false), right(["value",], optional, false))
                     )
                 );
             }
-            result-type(r) => {
-                f.body.push(
+            result-type(outcome) => {
+                helper.body.push(
                     if-stmt(
                         bin(
                             "!=",
@@ -1224,110 +1389,110 @@ module gen {
                         [],
                     )
                 );
-                f.body.push(
+                helper.body.push(
                     if-stmt(
                         left(["is_err",], bool, false),
                         [
                             return-stmt(
                                 eq-node(
-                                    g,
-                                    r.err,
-                                    left(["err",], r.err, false),
-                                    right(["err",], r.err, false),
+                                    generator,
+                                    outcome.err,
+                                    left(["err",], outcome.err, false),
+                                    right(["err",], outcome.err, false),
                                 )
                             ),
                         ],
                         [
                             return-stmt(
                                 eq-node(
-                                    g,
-                                    r.ok,
-                                    left(["ok",], r.ok, false),
-                                    right(["ok",], r.ok, false),
+                                    generator,
+                                    outcome.ok,
+                                    left(["ok",], outcome.ok, false),
+                                    right(["ok",], outcome.ok, false),
                                 )
                             ),
                         ],
                     )
                 );
             }
-            tuple-type(xs) => { for i in 0..xs.len() { part(["f{i}",], xs[i], false); } }
-            anon-record(r) => {
-                for i in 0..r.fields.len() {
-                    part(["f_" + mangle(r.fields[i]),], r.types[i], false);
+            tuple-type(xs) => { for index in 0..xs.len() { part(["f{index}",], xs[index], false); } }
+            anon-record(anonymous) => {
+                for index in 0..anonymous.fields.len() {
+                    part(["f_" + mangle(anonymous.fields[index]),], anonymous.types[index], false);
                 }
             }
-            fixed-list(x) => {
-                for k in 0..x.len {
-                    let index = int-const(k, Type.num("s64"));
-                    let one = list-get(local(a, held), index, c-type(g, x.item), x.item, true);
+            fixed-list(fixed) => {
+                for position in 0..fixed.len {
+                    let index = int-const(position, Type.num("s64"));
+                    let one = list-get(local(first, held), index, c-type(generator, fixed.item), fixed.item, true);
                     let other = list-get(
-                        local(b, held),
-                        int-const(k, Type.num("s64")),
-                        c-type(g, x.item),
-                        x.item,
+                        local(second, held),
+                        int-const(position, Type.num("s64")),
+                        c-type(generator, fixed.item),
+                        fixed.item,
                         true,
                     );
-                    f.body.push(
-                        if-stmt(un("!", bool, eq-node(g, x.item, one, other)), [answer(false),], [])
+                    helper.body.push(
+                        if-stmt(un("!", bool, eq-node(generator, fixed.item, one, other)), [answer(false),], [])
                     );
                 }
             }
             union-type(xs) => {
                 let fields: list<list<string>> = [];
-                for k in 0..xs.len() { fields.push(["c{k}",]); }
+                for index in 0..xs.len() { fields.push(["c{index}",]); }
                 kinds(false, fields, xs);
             }
-            named(n) => {
-                let v = g.symbols.variants[n];
+            named(name) => {
+                let variant-declaration = generator.symbols.variants[name];
                 let fields: list<list<string>> = [];
                 let types: list<Type> = [];
-                for k in v.cases {
-                    fields.push(if k.has-payload { ["u", "c_" + mangle(k.name),] } else { [] });
-                    types.push(k.payload);
+                for variant-case in variant-declaration.cases {
+                    fields.push(if variant-case.has-payload { ["u", "c_" + mangle(variant-case.name),] } else { [] });
+                    types.push(variant-case.payload);
                 }
-                kinds(true, fields, types);
+                kinds(!value-variant(generator, name), fields, types);
             }
             _ => {}
         }
-        f.body.push(answer(true));
+        helper.body.push(answer(true));
         name
     }
 
     // a value's hash, as == compares it (the node's value): a string's by its bytes, a composite's
     // by its parts (hash-fn), a float's by its bits (0.0 and -0.0 one hash), anything else by its
     // bits (a declared record's, a list's: its identity)
-    hash-node: func(g: Gen, t: Type, a: Node) -> Node {
+    hash-node: func(generator: Gen, given: Type, node: Node) -> Node {
         let u64 = Type.num("u64");
-        if by-parts(g, t) { return pure-call(hash-fn(g, t), [a,], u64); }
-        match t {
-            string-type => std-call(g, "yel:std/text.hash", [a,], u64),
+        if by-parts(generator, given) { return pure-call(hash-fn(generator, given), [node,], u64); }
+        match given {
+            string-type => std-call(generator, "yel:std/text.hash", [node,], u64),
             unit-type => int-const(1, u64),
-            bool-type => pure-call("y_hash_bits", [convert(u64, a),], u64),
-            num(n) => if n == "f32" || n == "f64" {
-                pure-call("y_hash_" + n, [a,], u64)
+            bool-type => pure-call("y_hash_bits", [convert(u64, node),], u64),
+            num(kind) => if kind == "f32" || kind == "f64" {
+                pure-call("y_hash_" + kind, [node,], u64)
             } else {
-                pure-call("y_hash_bits", [convert(u64, a),], u64)
+                pure-call("y_hash_bits", [convert(u64, node),], u64)
             },
             // (a, a helper's local or deref, read twice)
-            func-type(x) => pure-call("y_hash_mix", [
+            func-type(_) => pure-call("y_hash_mix", [
                 pure-call(
                     "y_hash_address",
-                    [load(a, ["fn",], false, Type.address-type, false),],
+                    [load(node, ["fn",], false, Type.address-type, false),],
                     u64,
                 ),
                 pure-call(
                     "y_hash_address",
-                    [load(a, ["env",], false, Type.address-type, false),],
+                    [load(node, ["env",], false, Type.address-type, false),],
                     u64,
                 ),
             ], u64),
             _ => {
                 // a pointer by its address; an enum, flags or a handle by its number
-                let pointer = ptr-paths(g, t, "").len() > 0;
+                let pointer = ptr-paths(generator, given, "").len() > 0;
                 if pointer {
-                    pure-call("y_hash_address", [a,], u64)
+                    pure-call("y_hash_address", [node,], u64)
                 } else {
-                    pure-call("y_hash_bits", [convert(u64, a),], u64)
+                    pure-call("y_hash_bits", [convert(u64, node),], u64)
                 }
             }
         }
@@ -1335,74 +1500,74 @@ module gen {
 
     // the func that hashes a value of a composite type (as hash-node), made once (a helper): as
     // std's value-hash would
-    hash-fn: func(g: Gen, held: Type) -> string {
-        let name = "y_hashv_" + type-id(g, held);
-        if made-before(g, name) { return name; }
+    hash-fn: func(generator: Gen, held: Type) -> string {
+        let name = "y_hashv_" + type-id(generator, held);
+        if made-before(generator, name) { return name; }
         let u64 = Type.num("u64");
         let s32 = Type.num("s32");
         let bool = Type.bool-type;
-        let f = helper-func(g, name, u64, false);
-        let a = helper-local(f, held, "a", true);
-        let h = helper-local(f, u64, "h", false);
-        let get = { field: list<string>, ty: Type, arrow: bool -> load(local(a, held), field, arrow, ty, false) };
-        let number = { k: s64 -> int-const(k, u64) };
-        let mix = { x: Node, y: Node -> pure-call("y_hash_mix", [x, y,], u64) };
-        let hs = { -> local(h, u64) };
+        let helper = helper-func(generator, name, u64, false);
+        let argument = helper-local(helper, held, "a", true);
+        let hash = helper-local(helper, u64, "h", false);
+        let get = { field: list<string>, ty: Type, arrow: bool -> load(local(argument, held), field, arrow, ty, false) };
+        let number = { value: s64 -> int-const(value, u64) };
+        let mix = { left: Node, right: Node -> pure-call("y_hash_mix", [left, right,], u64) };
+        let hs = { -> local(hash, u64) };
         // h mixed with each part's hash, from 1
         let parts = {
             fields: list<list<string>>, types: list<Type> ->
-                f.body.push(assign(h, number(1)));
-            for k in 0..fields.len() {
-                f.body.push(
-                    assign(h, mix(hs(), hash-node(g, types[k], get(fields[k], types[k], false))))
+                helper.body.push(assign(hash, number(1)));
+            for index in 0..fields.len() {
+                helper.body.push(
+                    assign(hash, mix(hs(), hash-node(generator, types[index], get(fields[index], types[index], false))))
                 );
             }
-            f.body.push(return-stmt(hs()));
+            helper.body.push(return-stmt(hs()));
         };
         // its kind's bits, mixed with what that kind holds
         let kinds = {
             arrow: bool, fields: list<list<string>>, types: list<Type> ->
-                f.body.push(
-                assign(h, pure-call("y_hash_bits", [convert(u64, get(["tag",], s32, arrow)),], u64))
+                helper.body.push(
+                assign(hash, pure-call("y_hash_bits", [convert(u64, get(["tag",], s32, arrow)),], u64))
             );
-            for k in 0..fields.len() {
-                if fields[k].len() > 0 {
-                    f.body.push(
-                        if-stmt(bin("==", bool, get(["tag",], s32, arrow), int-const(k, s32)), [
+            for index in 0..fields.len() {
+                if fields[index].len() > 0 {
+                    helper.body.push(
+                        if-stmt(bin("==", bool, get(["tag",], s32, arrow), int-const(index, s32)), [
                             return-stmt(
-                                mix(hs(), hash-node(g, types[k], get(fields[k], types[k], arrow)))
+                                mix(hs(), hash-node(generator, types[index], get(fields[index], types[index], arrow)))
                             ),
                         ], [])
                     );
                 }
             }
-            f.body.push(return-stmt(hs()));
+            helper.body.push(return-stmt(hs()));
         };
         match held {
-            option-type(x) => {
-                f.body.push(
+            option-type(optional) => {
+                helper.body.push(
                     if-stmt(
                         un("!", bool, get(["has",], bool, false)),
                         [return-stmt(number(1)),],
                         [],
                     )
                 );
-                f.body.push(
-                    return-stmt(mix(number(2), hash-node(g, x, get(["value",], x, false))))
+                helper.body.push(
+                    return-stmt(mix(number(2), hash-node(generator, optional, get(["value",], optional, false))))
                 );
             }
-            result-type(r) => {
-                f.body.push(
+            result-type(outcome) => {
+                helper.body.push(
                     if-stmt(
                         get(["is_err",], bool, false),
                         [
                             return-stmt(
-                                mix(number(3), hash-node(g, r.err, get(["err",], r.err, false)))
+                                mix(number(3), hash-node(generator, outcome.err, get(["err",], outcome.err, false)))
                             ),
                         ],
                         [
                             return-stmt(
-                                mix(number(5), hash-node(g, r.ok, get(["ok",], r.ok, false)))
+                                mix(number(5), hash-node(generator, outcome.ok, get(["ok",], outcome.ok, false)))
                             ),
                         ],
                     )
@@ -1410,84 +1575,84 @@ module gen {
             }
             tuple-type(xs) => {
                 let fields: list<list<string>> = [];
-                for i in 0..xs.len() { fields.push(["f{i}",]); }
+                for index in 0..xs.len() { fields.push(["f{index}",]); }
                 parts(fields, xs);
             }
-            anon-record(r) => parts(r.fields.map({ x -> ["f_" + mangle(x),] }), r.types),
-            fixed-list(x) => {
-                f.body.push(assign(h, number(1)));
-                for k in 0..x.len {
+            anon-record(anonymous) => parts(anonymous.fields.map({ field -> ["f_" + mangle(field),] }), anonymous.types),
+            fixed-list(fixed) => {
+                helper.body.push(assign(hash, number(1)));
+                for index in 0..fixed.len {
                     let item = list-get(
-                        local(a, held),
-                        int-const(k, Type.num("s64")),
-                        c-type(g, x.item),
-                        x.item,
+                        local(argument, held),
+                        int-const(index, Type.num("s64")),
+                        c-type(generator, fixed.item),
+                        fixed.item,
                         true,
                     );
-                    f.body.push(assign(h, mix(hs(), hash-node(g, x.item, item))));
+                    helper.body.push(assign(hash, mix(hs(), hash-node(generator, fixed.item, item))));
                 }
-                f.body.push(return-stmt(hs()));
+                helper.body.push(return-stmt(hs()));
             }
             union-type(xs) => {
                 let fields: list<list<string>> = [];
-                for i in 0..xs.len() { fields.push(["c{i}",]); }
+                for index in 0..xs.len() { fields.push(["c{index}",]); }
                 kinds(false, fields, xs);
             }
-            named(n) => {
-                let v = g.symbols.variants[n];
+            named(name) => {
+                let variant-declaration = generator.symbols.variants[name];
                 let fields: list<list<string>> = [];
                 let types: list<Type> = [];
-                for k in v.cases {
-                    fields.push(if k.has-payload { ["u", "c_" + mangle(k.name),] } else { [] });
-                    types.push(k.payload);
+                for variant-case in variant-declaration.cases {
+                    fields.push(if variant-case.has-payload { ["u", "c_" + mangle(variant-case.name),] } else { [] });
+                    types.push(variant-case.payload);
                 }
-                kinds(true, fields, types);
+                kinds(!value-variant(generator, name), fields, types);
             }
-            _ => f.body.push(return-stmt(number(1))),
+            _ => helper.body.push(return-stmt(number(1))),
         }
         name
     }
 
     // a map's key's hash and equality, given its address (the runtime's map takes these), made once
     // (helpers)
-    key-hash-fn: func(g: Gen, t: Type) -> string {
-        let n = "y_khash_" + type-id(g, t);
-        if made-before(g, n) { return n; }
-        let f = helper-func(g, n, Type.num("u64"), false);
-        let k = helper-local(f, Type.address-type, "k", true);
-        f.body.push(return-stmt(hash-node(g, t, deref(local(k, Type.address-type), t))));
-        n
+    key-hash-fn: func(generator: Gen, given: Type) -> string {
+        let helper-name = "y_khash_" + type-id(generator, given);
+        if made-before(generator, helper-name) { return helper-name; }
+        let helper = helper-func(generator, helper-name, Type.num("u64"), false);
+        let key = helper-local(helper, Type.address-type, "k", true);
+        helper.body.push(return-stmt(hash-node(generator, given, deref(local(key, Type.address-type), given))));
+        helper-name
     }
 
-    key-eq-fn: func(g: Gen, t: Type) -> string {
-        let n = "y_keq_" + type-id(g, t);
-        if made-before(g, n) { return n; }
-        let f = helper-func(g, n, Type.bool-type, false);
-        let a = helper-local(f, Type.address-type, "a", true);
-        let b = helper-local(f, Type.address-type, "b", true);
-        f.body.push(
+    key-eq-fn: func(generator: Gen, given: Type) -> string {
+        let helper-name = "y_keq_" + type-id(generator, given);
+        if made-before(generator, helper-name) { return helper-name; }
+        let helper = helper-func(generator, helper-name, Type.bool-type, false);
+        let argument = helper-local(helper, Type.address-type, "a", true);
+        let second = helper-local(helper, Type.address-type, "b", true);
+        helper.body.push(
             return-stmt(
                 eq-node(
-                    g,
-                    t,
-                    deref(local(a, Type.address-type), t),
-                    deref(local(b, Type.address-type), t),
+                    generator,
+                    given,
+                    deref(local(argument, Type.address-type), given),
+                    deref(local(second, Type.address-type), given),
                 )
             )
         );
-        n
+        helper-name
     }
 
     // a flags type's flag as its bit
-    flag-bit: func(g: Gen, tn: string, flag: string) -> u64 {
-        (1 as u64) << (index-of(g.symbols.flags[intern(tn)].flags, flag) as u64)
+    flag-bit: func(generator: Gen, tn: string, flag: string) -> u64 {
+        (1 as u64) << (index-of(generator.symbols.flags[intern(tn)].flags, flag) as u64)
     }
 
     // whether e (named ok or err) is a result
-    is-result: func(g: Gen, e: Expr, n: string) -> bool {
-        if n != "ok" && n != "err" { return false; }
-        match expr-type(g, e) {
-            result-type(r) => true,
+    is-result: func(generator: Gen, expression: Expr, name: string) -> bool {
+        if name != "ok" && name != "err" { return false; }
+        match expr-type(generator, expression) {
+            result-type(_) => true,
             _ => false,
         }
     }
@@ -1495,9 +1660,9 @@ module gen {
     // an integer literal (e, written text) as C, once it fits its type t (negated: under a -, where
     // a signed type's least value is allowed). C's octal is 0755 (yel's 0o755), a decimal loses its
     // leading zeros (C would read 007 as octal), and one of a type other than s32 is cast to it
-    int-value: func(g: Gen, e: Expr, text: string, t: Type, negated: bool) -> u64 {
-        let tn = match t {
-            num(x) => x,
+    int-value: func(generator: Gen, expression: Expr, text: string, given: Type, negated: bool) -> u64 {
+        let tn = match given {
+            num(kind) => kind,
             _ => "s32",
         };
         let width = if tn == "s8" || tn == "u8" {
@@ -1517,48 +1682,50 @@ module gen {
             repeat("1", width - 1)
         };
         let bits = literal-bits(text);
-        if !bits-fit(bits, limit) {
+        // (under a -, an unsigned type's only value is 0)
+        let negative = negated && !is-signed(tn) && bits.replace("0", "") != "";
+        if negative || !bits-fit(bits, limit) {
             let sign = if negated { "-" } else { "" };
             diagnostics.report(
-                g.context,
-                diagnostics.error(e.span, "{sign}{text} is out of range for {tn}", ""),
+                generator.context,
+                diagnostics.error(expression.span, "{sign}{text} is out of range for {tn}", ""),
             );
         }
         let value: u64 = 0;
-        for k in 0..bits.len() { value = (value << 1) | ((bits.byte-at(k) - 48) as u64); }
+        for index in 0..bits.len() { value = (value << 1) | ((bits.byte-at(index) - 48) as u64); }
         value
     }
 
     // whether a binary number (no leading zeros) is at most limit (another)
     bits-fit: func(bits: string, limit: string) -> bool {
-        let n = bits.len();
-        if n != limit.len() { return n < limit.len(); }
-        for i in 0..n {
-            let a = bits.byte-at(i);
-            let b = limit.byte-at(i);
-            if a != b { return a < b; }
+        let length = bits.len();
+        if length != limit.len() { return length < limit.len(); }
+        for index in 0..length {
+            let bit = bits.byte-at(index);
+            let limit-bit = limit.byte-at(index);
+            if bit != limit-bit { return bit < limit-bit; }
         }
         true
     }
 
-    repeat: func(s: string, n: s64) -> string {
+    repeat: func(piece: string, times: s64) -> string {
         let out: list<string> = [];
-        for i in 0..n { out.push(s); }
+        for index in 0..times { out.push(piece); }
         out.join("")
     }
 
     // an integer literal's value in binary digits, without leading zeros ("0" for zero)
     literal-bits: func(text: string) -> string {
-        let n = text.len();
+        let length = text.len();
         let out: list<string> = [];
-        let radix = if n > 2 && text.byte-at(0) == 48 { radix-of(text.byte-at(1)) } else { 0 };
+        let radix = if length > 2 && text.byte-at(0) == 48 { radix-of(text.byte-at(1)) } else { 0 };
         if radix > 0 {
             // each digit is 4, 3 or 1 bits
             let per = if radix == 16 { 4 } else if radix == 8 { 3 } else { 1 };
-            for i in 2..n {
-                let d = hex-value(text.byte-at(i));
-                for k in 0..per {
-                    let place = per - 1 - k;
+            for position in 2..length {
+                let digit = hex-value(text.byte-at(position));
+                for offset in 0..per {
+                    let place = per - 1 - offset;
                     let weight = if place == 3 {
                         8
                     } else if place == 2 {
@@ -1568,22 +1735,22 @@ module gen {
                     } else {
                         1
                     };
-                    out.push("{(d / weight) % 2}");
+                    out.push("{(digit / weight) % 2}");
                 }
             }
         } else {
             // a decimal: halved, as a list of digits, until nothing is left; its remainders the
             // bits
             let digits: list<s64> = [];
-            for i in 0..n { digits.push(text.byte-at(i) - 48); }
+            for index in 0..length { digits.push(text.byte-at(index) - 48); }
             let rev: list<string> = [];
-            for step in 0..4 * n + 1 {
+            for step in 0..4 * length + 1 {
                 if all-zero(digits) { return trim-bits(reversed(rev)); }
                 let carry = 0;
-                for i in 0..digits.len() {
-                    let d = carry * 10 + digits[i];
-                    digits[i] = d / 2;
-                    carry = d % 2;
+                for index in 0..digits.len() {
+                    let digit = carry * 10 + digits[index];
+                    digits[index] = digit / 2;
+                    carry = digit % 2;
                 }
                 rev.push("{carry}");
             }
@@ -1593,75 +1760,87 @@ module gen {
     }
 
     all-zero: func(digits: list<s64>) -> bool {
-        for d in digits {
-            if d != 0 { return false; }
+        for digit in digits {
+            if digit != 0 { return false; }
         }
         true
     }
 
     reversed: func(xs: list<string>) -> string {
         let out: list<string> = [];
-        for i in 0..xs.len() { out.push(xs[xs.len() - 1 - i]); }
+        for index in 0..xs.len() { out.push(xs[xs.len() - 1 - index]); }
         out.join("")
     }
 
     trim-bits: func(bits: string) -> string {
-        let n = bits.len();
-        for i in 0..n {
-            if bits.byte-at(i) != 48 { return bits.substring(i, n); }
+        let length = bits.len();
+        for index in 0..length {
+            if bits.byte-at(index) != 48 { return bits.substring(index, length); }
         }
         "0"
     }
 
     // the pointers in parts, each at member + its index
-    parts-paths: func(g: Gen, parts: list<Type>, member: string) -> list<string> {
+    parts-paths: func(generator: Gen, parts: list<Type>, member: string) -> list<string> {
         let out: list<string> = [];
         for index in 0..parts.len() {
-            for path in ptr-paths(g, parts[index], "{member}{index}") { out.push(path); }
+            for path in ptr-paths(generator, parts[index], "{member}{index}") { out.push(path); }
         }
         out
     }
 
     // the pointers a value of type t holds, as C expressions from base (the value): a string's
     // bytes, a list, map, record or variant, and those inside an option, result or tuple
-    ptr-paths: func(g: Gen, t: Type, base: string) -> list<string> {
-        if needs-representing(t) { return ptr-paths(g, represented(t), base); }
-        match t {
+    ptr-paths: func(generator: Gen, given: Type, base: string) -> list<string> {
+        if needs-representing(given) { return ptr-paths(generator, represented(given), base); }
+        match given {
             string-type => ["{base}.data",],
             buffer-type => [base,],
             // a func value's environment (a closure's)
-            func-type(f) => ["{base}.env",],
-            list-type(x) => [base,],
+            func-type(_) => ["{base}.env",],
+            list-type(_) => [base,],
             // each item's (a long list of pointers: as many slots)
-            fixed-list(x) => {
+            fixed-list(fixed) => {
                 let out: list<string> = [];
-                for k in 0..x.len {
-                    for q in ptr-paths(g, x.item, "{base}.items[{k}]") { out.push(q); }
+                for index in 0..fixed.len {
+                    for path in ptr-paths(generator, fixed.item, "{base}.items[{index}]") { out.push(path); }
                 }
                 out
             }
-            map-type(x) => [base,],
-            future-type(x) => [base,],
-            seq-type(x) => [base,],
-            stream-type(x) => [base,],
-            option-type(x) => ptr-paths(g, x, "{base}.value"),
-            result-type(r) => {
-                let out = ptr-paths(g, r.ok, "{base}.ok");
-                for q in ptr-paths(g, r.err, "{base}.err") { out.push(q); }
+            map-type(_) => [base,],
+            future-type(_) => [base,],
+            seq-type(_) => [base,],
+            stream-type(_) => [base,],
+            option-type(optional) => ptr-paths(generator, optional, "{base}.value"),
+            result-type(outcome) => {
+                let out = ptr-paths(generator, outcome.ok, "{base}.ok");
+                for path in ptr-paths(generator, outcome.err, "{base}.err") { out.push(path); }
                 out
             }
-            tuple-type(xs) => parts-paths(g, xs, "{base}.f"),
-            union-type(xs) => parts-paths(g, xs, "{base}.c"),
-            anon-record(r) => {
+            tuple-type(xs) => parts-paths(generator, xs, "{base}.f"),
+            union-type(xs) => parts-paths(generator, xs, "{base}.c"),
+            anon-record(anonymous) => {
                 let out: list<string> = [];
-                for i in 0..r.fields.len() {
-                    for q in ptr-paths(g, r.types[i], "{base}.f_{mangle(r.fields[i])}") {
-                        out.push(q);
+                for index in 0..anonymous.fields.len() {
+                    for path in ptr-paths(generator, anonymous.types[index], "{base}.f_{mangle(anonymous.fields[index])}") {
+                        out.push(path);
                     }
                 }
                 out
             }
-            named(n) => if named-kind(g, n) == "record" || named-kind(g, n) == "variant" {
+            // a variant held by value: each word of its union, whatever case it holds (a word not
+            // a pointer of the case there is never an object's, and the collector passes over it):
+            // its payloads are 16 bytes at most, so 2 words of 8 (4 of 4 on wasm32), one root each
+            // where the cases' pointers would be many, all at the same few places
+            named(name) => if value-variant(generator, name) {
+                let out: list<string> = [];
+                if generator.symbols.variants[name].cases.any({ one -> one.has-payload && ptr-paths(generator, one.payload, "x").len() > 0 }) {
+                    for word in 0..4 {
+                        out.push("({word} < sizeof({base}.u) / sizeof(void *) ? ((void **)&{base}.u)[{word}] : NULL)");
+                    }
+                }
+                out
+            } else if named-kind(generator, name) == "record" || named-kind(generator, name) == "variant" {
                 [base,]
             } else {
                 []
@@ -1673,80 +1852,81 @@ module gen {
     // the func that marks the pointers in one value of type t, given its address (a list's item,
     // a map's value), made once (a helper); NULL when t holds none, the runtime's for a string or
     // a pointer
-    scan-fn: func(g: Gen, t: Type) -> string {
-        if needs-representing(t) { return scan-fn(g, represented(t)); }
-        let paths = ptr-paths(g, t, "(*v)");
+    scan-fn: func(generator: Gen, given: Type) -> string {
+        if needs-representing(given) { return scan-fn(generator, represented(given)); }
+        let paths = ptr-paths(generator, given, "(*v)");
         if paths.len() == 0 { return "NULL"; }
-        match t {
+        match given {
             string-type => { return "y_scan_str"; }
-            option-type(x) => {}
-            result-type(r) => {}
-            tuple-type(xs) => {}
-            union-type(xs) => {}
-            anon-record(r) => {}
-            fixed-list(x) => {}
-            func-type(f) => {}
+            option-type(_) => {}
+            result-type(_) => {}
+            tuple-type(_) => {}
+            union-type(_) => {}
+            anon-record(_) => {}
+            fixed-list(_) => {}
+            func-type(_) => {}
+            named(name) => { if !value-variant(generator, name) { return "y_scan_ptr"; } }
             _ => { return "y_scan_ptr"; }
         }
-        let n = "y_scan_" + type-id(g, t);
-        if made-before(g, n) { return n; }
-        let f = helper-func(g, n, Type.unit-type, true);
-        let value = helper-local(f, Type.address-type, "value", true);
-        let v = helper-local(f, t, "v", false);
-        f.body.push(assign(v, deref(local(value, Type.address-type), t)));
-        marks(g, t, { -> local(v, t) }, f.body);
-        n
+        let helper-name = "y_scan_" + type-id(generator, given);
+        if made-before(generator, helper-name) { return helper-name; }
+        let helper = helper-func(generator, helper-name, Type.unit-type, true);
+        let value = helper-local(helper, Type.address-type, "value", true);
+        let subject = helper-local(helper, given, "v", false);
+        helper.body.push(assign(subject, deref(local(value, Type.address-type), given)));
+        marks(generator, given, { -> local(subject, given) }, helper.body);
+        helper-name
     }
 
     // the func that marks the pointers in a record or variant object (its trace), made once (a
     // helper); NULL when it holds none
-    trace-fn: func(g: Gen, tn: Name) -> string {
-        let n = "y_trace_" + type-id(g, Type.named(tn));
-        if g.made.has(n) { return n; }
+    trace-fn: func(generator: Gen, tn: Name) -> string {
+        let helper-name = "y_trace_" + type-id(generator, Type.named(tn));
+        if generator.made.has(helper-name) { return helper-name; }
         let object = Type.named(tn);
         let held = 0;
-        if g.symbols.records.has(tn) {
-            let r = g.symbols.records[tn];
-            for ft in r.field-types { held += ptr-paths(g, ft, "").len(); }
+        if generator.symbols.records.has(tn) {
+            let record-declaration = generator.symbols.records[tn];
+            for ft in record-declaration.field-types { held += ptr-paths(generator, ft, "").len(); }
         } else {
-            for k in g.symbols.variants[tn].cases {
-                if k.has-payload { held += ptr-paths(g, k.payload, "").len(); }
+            for variant-case in generator.symbols.variants[tn].cases {
+                if variant-case.has-payload { held += ptr-paths(generator, variant-case.payload, "").len(); }
             }
         }
         if held == 0 { return "NULL"; }
-        g.made.set(n, true);
-        let f = helper-func(g, n, Type.unit-type, true);
-        let obj = helper-local(f, Type.address-type, "obj", true);
-        let o = helper-local(f, object, "o", false);
-        f.body.push(assign(o, convert(object, local(obj, Type.address-type))));
-        if g.symbols.records.has(tn) {
-            let r = g.symbols.records[tn];
-            for i in 0..r.fields.len() {
-                let ft = r.field-types[i];
-                let field = ["f_" + mangle(r.fields[i]),];
-                marks(g, ft, { -> load(local(o, object), field, true, ft, false) }, f.body);
+        generator.made.set(helper-name, true);
+        let helper = helper-func(generator, helper-name, Type.unit-type, true);
+        let obj = helper-local(helper, Type.address-type, "obj", true);
+        let traced = helper-local(helper, object, "o", false);
+        helper.body.push(assign(traced, convert(object, local(obj, Type.address-type))));
+        if generator.symbols.records.has(tn) {
+            let record-declaration = generator.symbols.records[tn];
+            for index in 0..record-declaration.fields.len() {
+                let ft = record-declaration.field-types[index];
+                let field = ["f_" + mangle(record-declaration.fields[index]),];
+                marks(generator, ft, { -> load(local(traced, object), field, true, ft, false) }, helper.body);
             }
         } else {
-            let v = g.symbols.variants[tn];
+            let variant-declaration = generator.symbols.variants[tn];
             let s32 = Type.num("s32");
-            for i in 0..v.cases.len() {
-                let k = v.cases[i];
-                if k.has-payload && ptr-paths(g, k.payload, "").len() > 0 {
+            for index in 0..variant-declaration.cases.len() {
+                let variant-case = variant-declaration.cases[index];
+                if variant-case.has-payload && ptr-paths(generator, variant-case.payload, "").len() > 0 {
                     let case-marks: list<Node> = [];
-                    let field = ["u", "c_" + mangle(k.name),];
+                    let field = ["u", "c_" + mangle(variant-case.name),];
                     marks(
-                        g,
-                        k.payload,
-                        { -> load(local(o, object), field, true, k.payload, false) },
+                        generator,
+                        variant-case.payload,
+                        { -> load(local(traced, object), field, true, variant-case.payload, false) },
                         case-marks,
                     );
-                    f.body.push(
+                    helper.body.push(
                         if-stmt(
                             bin(
                                 "==",
                                 Type.bool-type,
-                                load(local(o, object), ["tag",], true, s32, false),
-                                int-const(i, s32),
+                                load(local(traced, object), ["tag",], true, s32, false),
+                                int-const(index, s32),
                             ),
                             case-marks,
                             [],
@@ -1755,33 +1935,33 @@ module gen {
                 }
             }
         }
-        n
+        helper-name
     }
 
     // the collector's marks of the pointers a value of type t holds (at: the value, each time a
     // node of its own), into out: a string's bytes, a list, map, record or variant, and those
     // inside an option, result or tuple (as ptr-paths)
-    marks: func(g: Gen, t: Type, at: func() -> Node, out: list<Node>) {
-        if needs-representing(t) {
-            marks(g, represented(t), at, out);
+    marks: func(generator: Gen, given: Type, at: func() -> Node, out: list<Node>) {
+        if needs-representing(given) {
+            marks(generator, represented(given), at, out);
             return;
         }
-        let mark = { p: Node -> out.push(runtime-call("y_mark", [p,], Type.unit-type)) };
-        let inside = { field: list<string>, ty: Type -> marks(g, ty, { -> load(at(), field, false, ty, false) }, out) };
-        match t {
+        let mark = { pointer: Node -> out.push(runtime-call("y_mark", [pointer,], Type.unit-type)) };
+        let inside = { field: list<string>, ty: Type -> marks(generator, ty, { -> load(at(), field, false, ty, false) }, out) };
+        match given {
             string-type => mark(load(at(), ["data",], false, Type.address-type, false)),
-            func-type(f) => mark(load(at(), ["env",], false, Type.address-type, false)),
-            fixed-list(x) => {
-                for k in 0..x.len {
+            func-type(_) => mark(load(at(), ["env",], false, Type.address-type, false)),
+            fixed-list(fixed) => {
+                for index in 0..fixed.len {
                     marks(
-                        g,
-                        x.item,
+                        generator,
+                        fixed.item,
                         {
                             -> list-get(
                                 at(),
-                                int-const(k, Type.num("s64")),
-                                c-type(g, x.item),
-                                x.item,
+                                int-const(index, Type.num("s64")),
+                                c-type(generator, fixed.item),
+                                fixed.item,
                                 true,
                             )
                         },
@@ -1789,22 +1969,30 @@ module gen {
                     );
                 }
             }
-            option-type(x) => inside(["value",], x),
-            result-type(r) => {
-                inside(["ok",], r.ok);
-                inside(["err",], r.err);
+            option-type(optional) => inside(["value",], optional),
+            result-type(outcome) => {
+                inside(["ok",], outcome.ok);
+                inside(["err",], outcome.err);
             }
-            tuple-type(xs) => { for i in 0..xs.len() { inside(["f{i}",], xs[i]); } }
-            union-type(xs) => { for i in 0..xs.len() { inside(["c{i}",], xs[i]); } }
-            anon-record(r) => {
-                for i in 0..r.fields.len() {
-                    inside(["f_" + mangle(r.fields[i]),], r.types[i]);
+            tuple-type(xs) => { for index in 0..xs.len() { inside(["f{index}",], xs[index]); } }
+            union-type(xs) => { for index in 0..xs.len() { inside(["c{index}",], xs[index]); } }
+            anon-record(anonymous) => {
+                for index in 0..anonymous.fields.len() {
+                    inside(["f_" + mangle(anonymous.fields[index]),], anonymous.types[index]);
                 }
             }
+            // a variant held by value: each case's payload (as ptr-paths)
+            named(name) => if value-variant(generator, name) {
+                for variant-case in generator.symbols.variants[name].cases {
+                    if variant-case.has-payload { inside(["u", "c_" + mangle(variant-case.name),], variant-case.payload); }
+                }
+            } else if ptr-paths(generator, given, "").len() > 0 {
+                mark(at());
+            },
             _ => {
                 // a list, a map, a buffer, a record's or a variant's object, a started call: the
                 // pointer itself
-                if ptr-paths(g, t, "").len() > 0 { mark(at()); }
+                if ptr-paths(generator, given, "").len() > 0 { mark(at()); }
             }
         }
     }
@@ -1814,16 +2002,16 @@ module gen {
     // a helper: a func made for a type (a trace, a scan, an equality, a hash, a conversion, a func
     // value's adapter), C's and the bitcode's alike (rendered and lowered after the program's
     // funcs)
-    helper-func: func(g: Gen, c-name: string, result: Type, void-result: bool) -> IrFunc {
-        let f: IrFunc = {
+    helper-func: func(generator: Gen, c-name: string, result: Type, void-result: bool) -> IrFunc {
+        let helper: IrFunc = {
             key: c-name, span: nowhere(), c-name: c-name, name: intern(c-name), params: [], locals: [], body: [],
             result: result, labels: 0, rooted: [],
             closure: false, env-param: -1, async: false, states: 0, generator: false,
             void-result: void-result,
             export-name: "", build: "", release: false,
         };
-        g.helpers.push(f);
-        f
+        generator.helpers.push(helper);
+        helper
     }
 
     // ================================================================ globals
@@ -1835,32 +2023,32 @@ module gen {
     // make what each starts as (y_globals_init: its literal, or its zero value's collections made
     // empty) and mark what each holds (y_globals_mark: the collector's roots). The runtime runs the
     // first once, before the program's first code (y_globals, globals-start); none without globals
-    globals-helpers: func(g: Gen) {
-        if g.symbols.globals.len() == 0 { return; }
-        let init = helper-func(g, "y_globals_init", Type.unit-type, true);
-        let mark = helper-func(g, "y_globals_mark", Type.unit-type, true);
-        for k in g.symbols.globals.keys() {
-            let x = g.symbols.globals[k];
-            let t = gen-type(g, x.ty);
-            g.helper-protos.push("static {c-type(g, t)} {global-c(k)};");
-            let place = { -> global-node(k, t) };
-            match x.value {
-                some(v) => init.body.push(store(place(), literal-node(g, v, t))),
-                none => zero-into(g, t, place, init.body),
+    globals-helpers: func(generator: Gen) {
+        if generator.symbols.globals.len() == 0 { return; }
+        let init = helper-func(generator, "y_globals_init", Type.unit-type, true);
+        let mark = helper-func(generator, "y_globals_mark", Type.unit-type, true);
+        for key in generator.symbols.globals.keys() {
+            let global = generator.symbols.globals[key];
+            let global-type = gen-type(generator, global.ty);
+            generator.helper-protos.push("static {c-type(generator, global-type)} {global-c(key)};");
+            let place = { -> global-node(key, global-type) };
+            match global.value {
+                some(literal) => init.body.push(store(place(), literal-node(generator, literal, global-type))),
+                none => zero-into(generator, global-type, place, init.body),
             }
-            marks(g, t, place, mark.body);
+            marks(generator, global-type, place, mark.body);
             // @(context): the runtime's, made each task's own (its place, its size, its scan)
-            if x.context {
-                scan-fn(g, t);
-                init.body.push(runtime-call("y_context_global", [address-of(place()), size-of(t), scan(t),], Type.unit-type));
+            if global.context {
+                scan-fn(generator, global-type);
+                init.body.push(runtime-call("y_context_global", [address-of(place()), size-of(global-type), scan(global-type),], Type.unit-type));
             }
         }
     }
 
     // the call that makes the program's globals (once: the runtime's y_globals), where its code is
     // first entered: main's start, an export's
-    globals-start: func(g: Gen) -> list<Node> {
-        if g.symbols.globals.len() == 0 { return []; }
+    globals-start: func(generator: Gen) -> list<Node> {
+        if generator.symbols.globals.len() == 0 { return []; }
         let pointer = Type.address-type;
         [
             runtime-call(
@@ -1875,76 +2063,76 @@ module gen {
     }
 
     // a global's literal (the checker allows nothing else), as a constant of type t
-    literal-node: func(g: Gen, e: Expr, t: Type) -> Node {
-        match e.kind {
-            int-lit(v) => const(Constant.int(int-value(g, e, v, t, false)), t),
-            float-lit(v) => const(Constant.float(parse-f64(v)), t),
-            char-lit(code) => int-const(code, t),
-            str-lit(s) => text-const(s),
-            bool-lit(b) => bool-const(b),
-            unary(u) => match u.value.kind {
-                int-lit(v) => const(Constant.int(0 - int-value(g, u.value, v, t, true)), t),
-                float-lit(v) => const(Constant.float(0.0 - parse-f64(v)), t),
-                _ => panic("{g.file}: a global's value is not a literal"),
+    literal-node: func(generator: Gen, expression: Expr, given: Type) -> Node {
+        match expression.kind {
+            int-lit(digits) => const(Constant.int(int-value(generator, expression, digits, given, false)), given),
+            float-lit(digits) => const(Constant.float(parse-f64(digits)), given),
+            char-lit(code) => int-const(code, given),
+            str-lit(content) => text-const(content),
+            bool-lit(value) => bool-const(value),
+            unary(negation) => match negation.value.kind {
+                int-lit(digits) => const(Constant.int(0 - int-value(generator, negation.value, digits, given, true)), given),
+                float-lit(digits) => const(Constant.float(0.0 - parse-f64(digits)), given),
+                _ => panic("{generator.file}: a global's value is not a literal"),
             },
-            _ => panic("{g.file}: a global's value is not a literal"),
+            _ => panic("{generator.file}: a global's value is not a literal"),
         }
     }
 
     // the stores that make a zero value at place (zero bytes already but for what is on the heap:
     // each list, map and set in it made empty), into out
-    zero-into: func(g: Gen, t: Type, place: func() -> Node, out: list<Node>) {
+    zero-into: func(generator: Gen, given: Type, place: func() -> Node, out: list<Node>) {
         let s64 = Type.num("s64");
-        match t {
+        match given {
             list-type(item) => {
-                scan-fn(g, item);
+                scan-fn(generator, item);
                 out.push(
                     store(
                         place(),
                         runtime-call(
                             "y_list_new",
                             [int-const(0, s64), size-of(item), scan(item),],
-                            t,
+                            given,
                         ),
                     )
                 );
             }
-            map-type(x) => out.push(
+            map-type(mapped) => out.push(
                 store(
                     place(),
                     extern-call(
-                        g,
+                        generator,
                         "yel:std/memory.new-map",
-                        [x.key, x.value,],
+                        [mapped.key, mapped.value,],
                         [int-const(8, s64),],
-                        t,
+                        given,
                     ),
                 )
             ),
             tuple-type(xs) => {
-                for i in 0..xs.len() {
-                    zero-into(g, xs[i], { -> load(place(), ["f{i}",], false, xs[i], true) }, out);
+                for index in 0..xs.len() {
+                    zero-into(generator, xs[index], { -> load(place(), ["f{index}",], false, xs[index], true) }, out);
                 }
             }
-            anon-record(r) => {
-                for i in 0..r.types.len() {
+            anon-record(anonymous) => {
+                for index in 0..anonymous.types.len() {
                     zero-into(
-                        g,
-                        r.types[i],
+                        generator,
+                        anonymous.types[index],
                         {
-                            -> load(place(), ["f_" + mangle(r.fields[i]),], false, r.types[i], true)
+                            -> load(place(), ["f_" + mangle(anonymous.fields[index]),], false, anonymous.types[index], true)
                         },
                         out,
                     );
                 }
             }
-            fixed-list(x) => {
-                for k in 0..x.len {
+            fixed-list(fixed) => {
+                for index in 0..fixed.len {
                     zero-into(
-                        g,
-                        x.item,
+                        generator,
+                        fixed.item,
                         {
-                            -> list-get(place(), int-const(k, s64), c-type(g, x.item), x.item, true)
+                            -> list-get(place(), int-const(index, s64), c-type(generator, fixed.item), fixed.item, true)
                         },
                         out,
                     );
@@ -1956,41 +2144,41 @@ module gen {
 
     // the WIT imports (std's own calls too), each one's wrapper's C name (w_<name>, an async one's
     // start: s_<name>) to its native host's (std's host func, std/core/host/host-*.yel; its start)
-    import-hosts: func(g: Gen) -> map<string, string> {
+    import-hosts: func(generator: Gen) -> map<string, string> {
         let out: map<string, string> = map.new();
-        for k in g.wit-externs.keys() {
-            let x = g.wit-externs[k];
-            let host = host-key(g, x);
+        for key in generator.wit-externs.keys() {
+            let declaration = generator.wit-externs[key];
+            let host = host-key(generator, declaration);
             if host == "" { continue; }
-            let c = g.funcs[host].c-name;
-            if x.is-async { out.set("s_" + mangle(x.name), "s" + c.substring(1, c.len())); }
-            else { out.set("w_" + mangle(x.name), c); }
+            let host-name = generator.funcs[host].c-name;
+            if declaration.is-async { out.set("s_" + mangle(declaration.name), "s" + host-name.substring(1, host-name.len())); }
+            else { out.set("w_" + mangle(declaration.name), host-name); }
         }
         out
     }
 
     // the target a func is made only for (//+build: "native", "wasi"; "" for every one): its own,
     // or (a closure lifted out of it: <name>__c<n>) the func it was made in's
-    func-build: func(g: Gen, c-name: string) -> string {
-        let own = g.builds.get-or(c-name, "");
+    func-build: func(generator: Gen, c-name: string) -> string {
+        let own = generator.builds.get-or(c-name, "");
         if own != "" { return own; }
         let at = c-name.len() - 1;
         for step in 0..c-name.len() {
             if at > 2 && c-name.substring(at - 3, at) == "__c" && all-digits(
                 c-name.substring(at, c-name.len())
             ) {
-                return func-build(g, c-name.substring(0, at - 3));
+                return func-build(generator, c-name.substring(0, at - 3));
             }
             at -= 1;
         }
         ""
     }
 
-    all-digits: func(s: string) -> bool {
-        if s.len() == 0 { return false; }
-        for index in 0..s.len() {
-            let c = s.byte-at(index);
-            if c < 48 || c > 57 { return false; }
+    all-digits: func(source: string) -> bool {
+        if source.len() == 0 { return false; }
+        for index in 0..source.len() {
+            let byte = source.byte-at(index);
+            if byte < 48 || byte > 57 { return false; }
         }
         true
     }
@@ -2006,66 +2194,66 @@ module gen {
 
     // whether a node (at any depth) shows a value by std's walker: an interpolation's "render …"
     // piece, a match no arm fits
-    shows-rendered: func(n: Node) -> bool {
-        match n.kind {
-            interp(x) => {
-                for w in x.formatters {
-                    match w {
+    shows-rendered: func(node: Node) -> bool {
+        match node.kind {
+            interp(joined) => {
+                for formatter in joined.formatters {
+                    match formatter {
                         render(_) => { return true; }
                         _ => {}
                     }
                 }
             }
-            unreachable(x) => { return true; }
+            unreachable(_) => { return true; }
             _ => {}
         }
-        for index in 0..operand-count(n) {
-            if shows-rendered(operand(n, index)) { return true; }
+        for index in 0..operand-count(node) {
+            if shows-rendered(operand(node, index)) { return true; }
         }
         false
     }
 
     // the yel funcs a node calls, at any depth of its operands (their C names, into out)
-    called-funcs: func(n: Node, out: list<string>) {
-        match n.kind {
-            call(c) => if c.key != "" { out.push(step-name(c.c-name)); },
+    called-funcs: func(node: Node, out: list<string>) {
+        match node.kind {
+            call(called) => if called.key != "" { out.push(step-name(called.c-name)); },
             _ => {}
         }
-        for index in 0..operand-count(n) { called-funcs(operand(n, index), out); }
+        for index in 0..operand-count(node) { called-funcs(operand(node, index), out); }
     }
 
     // the helpers' roots: which of their locals are live where they may collect (a lift makes
     // objects while it holds others), as the program's funcs' (opt.rooted)
-    root-helpers: func(g: Gen, funcs: list<IrFunc>) {
+    root-helpers: func(generator: Gen, funcs: list<IrFunc>) {
         let all: list<IrFunc> = [];
-        for f in funcs { all.push(f); }
-        for h in g.helpers { all.push(h); }
+        for function in funcs { all.push(function); }
+        for helper in generator.helpers { all.push(helper); }
         let allocating = opt.allocating-funcs(all);
-        for h in g.helpers { h.rooted = opt.rooted(h, allocating); }
+        for helper in generator.helpers { helper.rooted = opt.rooted(helper, allocating); }
     }
 
     // a helper's local (a param where param is): its index (rooted as root-helpers finds)
-    helper-local: func(f: IrFunc, ty: Type, name: string, param: bool) -> s64 {
-        f.locals.push({ ty: ty, name: name, binding: none, });
-        f.rooted.push(false);
-        if param { f.params.push(f.locals.len() - 1); }
-        f.locals.len() - 1
+    helper-local: func(function: IrFunc, ty: Type, name: string, param: bool) -> s64 {
+        function.locals.push({ ty: ty, name: name, binding: none, });
+        function.rooted.push(false);
+        if param { function.params.push(function.locals.len() - 1); }
+        function.locals.len() - 1
     }
 
     // a generic func's C for these type arguments, compiled once (later, from g.pending)
-    instance: func(g: Gen, n: string, type-args: list<Type>) -> string {
-        let f = g.generic[n];
+    instance: func(generator: Gen, generic-name: string, type-args: list<Type>) -> string {
+        let declaration = generator.generic[generic-name];
         let subst: map<string, Type> = map.new();
         let ids: list<string> = [];
-        for i in 0..f.type-params.len() {
-            let t = gen-type(g, type-args[i]);
-            subst.set(f.type-params[i], t);
-            ids.push(type-id(g, t));
+        for index in 0..declaration.type-params.len() {
+            let argument-type = gen-type(generator, type-args[index]);
+            subst.set(declaration.type-params[index], argument-type);
+            ids.push(type-id(generator, argument-type));
         }
-        let c-name = "u_{mangle(n)}__{ids.join("")}";
-        if !g.instances.has(c-name) {
-            g.instances.set(c-name, true);
-            g.pending.push({ decl: f, c-name: c-name, subst: subst, });
+        let c-name = "u_{mangle(generic-name)}__{ids.join("")}";
+        if !generator.instances.has(c-name) {
+            generator.instances.set(c-name, true);
+            generator.pending.push({ decl: declaration, c-name: c-name, subst: subst, });
         }
         c-name
     }
@@ -2079,29 +2267,29 @@ module gen {
         let backend = context.backend;
         // (a component with a main, wasi:cli/run's, runs as one turn: it keeps its frames)
         if context.turns && !is-reactor(decls) { context.turns = false; }
-        let g = generator(context, decls);
+        let generating = generator(context, decls);
         let forward: list<string> = [];
         let structs: list<string> = [];
-        type-decls(g, decls, forward, structs);
+        type-decls(generating, decls, forward, structs);
         // every func built as IR (a generic one for each list of type arguments it is called
         // with), then written as C
         let funcs: list<IrFunc> = [];
         let main-arity = -1;
         let main-async = false;
         let main-result = Type.unit-type;
-        for d in decls {
-            match d {
-                func-decl(f) => {
-                    if f.type-params.len() == 0 {
-                        g.subst = map.new();
-                        funcs.push(codegen-func(g, f, "u_" + mangle(f.name)));
-                        if f.scope.build != "" {
-                            g.builds.set("u_" + mangle(f.name), f.scope.build);
+        for declaration in decls {
+            match declaration {
+                func-decl(function-declaration) => {
+                    if function-declaration.type-params.len() == 0 {
+                        generating.subst = map.new();
+                        funcs.push(codegen-func(generating, function-declaration, "u_" + mangle(function-declaration.name)));
+                        if function-declaration.scope.build != "" {
+                            generating.builds.set("u_" + mangle(function-declaration.name), function-declaration.scope.build);
                         }
-                        if f.name == "main" {
-                            main-arity = f.params.len();
-                            main-result = f.result;
-                            main-async = f.is-async;
+                        if function-declaration.name == "main" {
+                            main-arity = function-declaration.params.len();
+                            main-result = function-declaration.result;
+                            main-async = function-declaration.is-async;
                         }
                     }
                 }
@@ -2110,41 +2298,41 @@ module gen {
         }
         // the generic funcs' instances, as calls find them (each func built may find more)
         loop {
-            if g.pending.len() == 0 { break; }
-            let p = g.pending.pop();
-            g.subst = p.subst;
-            funcs.push(codegen-func(g, p.decl, p.c-name));
-            if p.decl.scope.build != "" { g.builds.set(p.c-name, p.decl.scope.build); }
+            if generating.pending.len() == 0 { break; }
+            let pending = generating.pending.pop();
+            generating.subst = pending.subst;
+            funcs.push(codegen-func(generating, pending.decl, pending.c-name));
+            if pending.decl.scope.build != "" { generating.builds.set(pending.c-name, pending.decl.scope.build); }
         }
         // the closures' bodies, lifted funcs of their own
-        for f in g.lifted { funcs.push(f); }
+        for function in generating.lifted { funcs.push(function); }
         // the component's exports: its visible modules' visible funcs (is-export; @(private) keeps
         // one in, never written into WIT)
         let exports: map<string, list<Func>> = map.new();
         let export-order: list<string> = [];
         let reactor = is-reactor(decls);
-        for d in decls {
-            match d {
-                func-decl(f) => {
-                    let sc = f.scope;
+        for declaration in decls {
+            match declaration {
+                func-decl(function-declaration) => {
+                    let sc = function-declaration.scope;
                     if is-export(sc, reactor) {
-                        if f.type-params.len() > 0 {
-                            let e = diagnostics.error(
-                                f.span,
-                                "{f.name} is generic: a component's export cannot be",
+                        if function-declaration.type-params.len() > 0 {
+                            let problem = diagnostics.error(
+                                function-declaration.span,
+                                "{function-declaration.name} is generic: a component's export cannot be",
                                 "",
                             );
                             diagnostics.help(
-                                e,
-                                "a visible module's func is an export: @(private) keeps {base-name(f.name)} in",
+                                problem,
+                                "a visible module's func is an export: @(private) keeps {base-name(function-declaration.name)} in",
                             );
-                            diagnostics.report(g.context, e);
+                            diagnostics.report(generating.context, problem);
                         } else {
                             if !exports.has(sc.module) {
                                 exports.set(sc.module, []);
                                 export-order.push(sc.module);
                             }
-                            exports[sc.module].push(f);
+                            exports[sc.module].push(function-declaration);
                         }
                     }
                 }
@@ -2153,15 +2341,15 @@ module gen {
         }
         // the resources it exports: each a visible module's (its own funcs there: its constructor,
         // its methods, its drop), each with a table of what the host holds
-        for d in decls {
-            match d {
-                record-decl(r) => {
-                    if !r.value && is-export(r.scope, reactor) {
-                        g.owned.set(intern(r.name), {
-                            table: g.owned.len(),
-                            iface: export-iface(r.scope.pkg, r.scope.module),
-                            wit-name: wit-ident(base-name(r.name)),
-                            module: r.scope.module,
+        for declaration in decls {
+            match declaration {
+                record-decl(record-declaration) => {
+                    if !record-declaration.value && is-export(record-declaration.scope, reactor) {
+                        generating.owned.set(intern(record-declaration.name), {
+                            table: generating.owned.len(),
+                            iface: export-iface(record-declaration.scope.pkg, record-declaration.scope.module),
+                            wit-name: wit-ident(base-name(record-declaration.name)),
+                            module: record-declaration.scope.module,
                             constructor: "",
                             drop: "",
                         });
@@ -2170,14 +2358,14 @@ module gen {
                 _ => {}
             }
         }
-        for m in export-order {
-            for f in exports[m] {
-                match owner(g, f) {
-                    some(n) => { if base-name(f.name) == "drop" { g.owned[n].drop = f.name; } }
+        for module-name in export-order {
+            for function in exports[module-name] {
+                match owner(generating, function) {
+                    some(owner-name) => { if base-name(function.name) == "drop" { generating.owned[owner-name].drop = function.name; } }
                     none => {}
                 }
-                match constructed(g, f) {
-                    some(n) => { g.owned[n].constructor = f.name; }
+                match constructed(generating, function) {
+                    some(owner-name) => { generating.owned[owner-name].constructor = function.name; }
                     none => {}
                 }
             }
@@ -2185,30 +2373,39 @@ module gen {
         // records a func returns inlined where that lets them stay on the caller's stack, funcs no
         // longer called dropped, and every record that never escapes its func on its stack
         let pointer-types: map<Name, bool> = map.new();
-        for r in g.symbols.records.keys() { pointer-types.set(r, true); }
-        for v in g.symbols.variants.keys() {
-            if !is-enum(g, v) { pointer-types.set(v, true); }
+        for record-name in generating.symbols.records.keys() { pointer-types.set(record-name, true); }
+        for variant-name in generating.symbols.variants.keys() {
+            if !is-enum(generating, variant-name) && !value-variant(generating, variant-name) { pointer-types.set(variant-name, true); }
+        }
+        // the variants held by value, each with its payloads (what it holds is what they hold)
+        let value-payloads: map<Name, list<Type>> = map.new();
+        for variant-name in generating.value-variants.keys() {
+            let payloads: list<Type> = [];
+            for variant-case in generating.symbols.variants[variant-name].cases {
+                if variant-case.has-payload { payloads.push(variant-case.payload); }
+            }
+            value-payloads.set(variant-name, payloads);
         }
         // the named types that may hold a func value: a fixed point over records' fields and
         // variants' payloads
         let func-holders: map<Name, bool> = map.new();
         for round in 0..1000 {
             let changed = false;
-            for r in g.symbols.records.keys() {
-                if !func-holders.has(r) {
-                    for t in g.symbols.records[r].field-types {
-                        if !func-holders.has(r) && opt.holds-funcs(func-holders, t) {
-                            func-holders.set(r, true);
+            for record-name in generating.symbols.records.keys() {
+                if !func-holders.has(record-name) {
+                    for field-type in generating.symbols.records[record-name].field-types {
+                        if !func-holders.has(record-name) && opt.holds-funcs(func-holders, field-type) {
+                            func-holders.set(record-name, true);
                             changed = true;
                         }
                     }
                 }
             }
-            for v in g.symbols.variants.keys() {
-                if !func-holders.has(v) {
-                    for k in g.symbols.variants[v].cases {
-                        if !func-holders.has(v) && opt.holds-funcs(func-holders, k.payload) {
-                            func-holders.set(v, true);
+            for variant-name in generating.symbols.variants.keys() {
+                if !func-holders.has(variant-name) {
+                    for variant-case in generating.symbols.variants[variant-name].cases {
+                        if !func-holders.has(variant-name) && opt.holds-funcs(func-holders, variant-case.payload) {
+                            func-holders.set(variant-name, true);
                             changed = true;
                         }
                     }
@@ -2219,51 +2416,52 @@ module gen {
         // what is kept: main, and each exported func
         let roots: list<string> = ["u_main",];
         // an async main: the executor too (the C main calls it); an async export: its runner
-        if main-async { roots.push(g.funcs["yel:std/async.run-tasks"].c-name); }
-        for m in export-order {
-            for f in exports[m] {
-                if f.is-async { roots.push(g.funcs["yel:std/async.run-ready-of"].c-name); }
+        if main-async { roots.push(generating.funcs["yel:std/async.run-tasks"].c-name); }
+        for module-name in export-order {
+            for function in exports[module-name] {
+                if function.is-async { roots.push(generating.funcs["yel:std/async.run-ready-of"].c-name); }
             }
         }
-        for m in export-order { for f in exports[m] { roots.push("u_" + mangle(f.name)); } }
+        for module-name in export-order { for function in exports[module-name] { roots.push("u_" + mangle(function.name)); } }
         // a used WIT import's native host func (std's, which only its wrapper calls): kept
-        for k in g.wit-used.keys() {
-            let host = host-key(g, g.wit-externs[k]);
-            if host != "" { std-func(g, host); }
+        for import-name in generating.wit-used.keys() {
+            let host = host-key(generating, generating.wit-externs[import-name]);
+            if host != "" { std-func(generating, host); }
         }
         // std's funcs that the C the compiler writes calls (std-func): the C backend's
         if backend == "c" {
-            for key in g.made.keys() {
+            for key in generating.made.keys() {
                 if starts-with(key, "root ") {
-                    roots.push(g.funcs[key.substring(5, key.len())].c-name);
+                    roots.push(generating.funcs[key.substring(5, key.len())].c-name);
                 }
             }
         }
         // the globals' helpers (made and marked)
-        globals-helpers(g);
+        globals-helpers(generating);
         // the funcs the helpers call (an equality's text.equal, a func value's adapter's func)
-        for h in g.helpers {
-            for n in flatten(h.body) { called-funcs(n, roots); }
+        for helper in generating.helpers {
+            for statement in flatten(helper.body) { called-funcs(statement, roots); }
         }
         // the ends of the host's streams and futures let go where their locals are last used
         // (releases.yel)
         // the flow of the program: the readonly and move checks (effects.yel), and the ends of the
         // host's streams and futures let go where their locals are last used (releases.yel)
-        let externs = g.extern-effects;
-        let facts = flow-facts(g, funcs, pointer-types, func-holders, externs);
-        settle-observed(g, facts);
-        effects.check-sites(decls, sites, facts, g.context);
-        diagnostics.abort-if-errors(g.context);
+        let externs = generating.extern-effects;
+        let facts = flow-facts(generating, funcs, pointer-types, value-payloads, func-holders, externs);
+        settle-observed(generating, facts);
+        effects.check-sites(decls, sites, facts, generating.context);
+        diagnostics.abort-if-errors(generating.context);
         // yelc check: every error is found by now
-        let made = mode != "check" && g.context.errors.len() == 0;
-        if made { release-ends(g, funcs, facts); }
+        let made = mode != "check" && generating.context.errors.len() == 0;
+        if made { release-ends(generating, funcs, facts); }
         {
-            g: g,
+            g: generating,
             forward: forward,
             structs: structs,
             funcs: funcs,
             facts: facts,
             pointer-types: pointer-types,
+            value-payloads: value-payloads,
             func-holders: func-holders,
             roots: roots,
             exports: exports,
@@ -2284,7 +2482,7 @@ module gen {
         let mode = context.mode;
         let backend = context.backend;
         let triple = context.triple;
-        let g = lowered.g;
+        let generator = lowered.g;
         let forward = lowered.forward;
         let structs = lowered.structs;
         let funcs = lowered.funcs;
@@ -2296,101 +2494,102 @@ module gen {
         let main-arity = lowered.main-arity;
         let main-async = lowered.main-async;
         let main-result = lowered.main-result;
-        let externs = g.extern-effects;
+        let externs = generator.extern-effects;
         if mode != "none" {
             // (std's walker kept for the bitcode's module, which adds it where a kept func shows a
             // value by it)
             let kept-roots: list<string> = [];
-            for r in roots { kept-roots.push(r); }
-            if backend == "bitcode" && g.made.has("root " + render-key()) {
-                kept-roots.push(g.funcs[render-key()].c-name);
-                kept-roots.push(g.funcs["yel:std/buffer.push"].c-name);
+            for root in roots { kept-roots.push(root); }
+            if backend == "bitcode" && generator.made.has("root " + render-key()) {
+                kept-roots.push(generator.funcs[render-key()].c-name);
+                kept-roots.push(generator.funcs["yel:std/buffer.push"].c-name);
             }
             if backend == "bitcode" {
-                for host in import-hosts(g).values() { kept-roots.push(step-name(host)); }
+                for host in import-hosts(generator).values() { kept-roots.push(step-name(host)); }
             }
             funcs = opt.optimize(
                 funcs,
                 pointer-types,
+                lowered.value-payloads,
                 func-holders,
                 mode,
                 kept-roots,
-                wit-wrappers(g),
+                wit-wrappers(generator),
                 externs,
             );
             // the imports what is kept calls (not those of funcs left out: std's sleep's clock) (an
             // import's call: by its key, an async one's start; by its wrapper's C name, a sync one)
             let wrappers: map<string, string> = map.new();
-            for k in g.wit-used.keys() { wrappers.set(g.funcs[k].c-name, k); }
+            for import-name in generator.wit-used.keys() { wrappers.set(generator.funcs[import-name].c-name, import-name); }
             let used: map<string, bool> = map.new();
-            for f in funcs {
-                for n in flatten(f.body) { imports-called(g, n, wrappers, used); }
+            for function in funcs {
+                for statement in flatten(function.body) { imports-called(generator, statement, wrappers, used); }
             }
-            g.wit-used = used;
+            generator.wit-used = used;
         }
         // the collector sees only what is live where it may run
         let allocating = opt.allocating-funcs(funcs);
-        for f in funcs { f.rooted = opt.rooted(f, allocating); }
+        for function in funcs { function.rooted = opt.rooted(function, allocating); }
         // the component's imports the program calls (a sync one's wrapper: IR, both backends'), its
         // exports (a sync one's wrapper and post-return), and its world
         let imported: map<string, bool> = map.new();
-        for k in g.wit-used.keys() {
-            let x = g.wit-externs[k];
-            if x.is-async { async-import-wrapper-ir(g, x); } else { import-wrapper-ir(g, x); }
-            if !imported.has(x.wit-module) {
-                imported.set(x.wit-module, true);
-                world.items.push("  import {x.wit-module};");
+        for import-name in generator.wit-used.keys() {
+            let declaration = generator.wit-externs[import-name];
+            if declaration.is-async { async-import-wrapper-ir(generator, declaration); } else { import-wrapper-ir(generator, declaration); }
+            if !imported.has(declaration.wit-module) {
+                imported.set(declaration.wit-module, true);
+                world.items.push("  import {declaration.wit-module};");
             }
         }
         let interfaces: list<string> = [];
-        for m in export-order {
-            let iface = export-iface(exports[m][0].scope.pkg, m);
+        for module-name in export-order {
+            let iface = export-iface(exports[module-name][0].scope.pkg, module-name);
             interfaces.push(iface);
-            for f in exports[m] {
+            for function in exports[module-name] {
                 // (a resource's drop: run by its destructor, not called by the host)
-                if is-drop(g, f) { continue; }
-                if f.is-async {
-                    async-export-wrapper-ir(g, f, iface);
+                if is-drop(generator, function) { continue; }
+                if function.is-async {
+                    async-export-wrapper-ir(generator, function, iface);
                 } else {
-                    export-wrapper-ir(g, f, iface);
+                    export-wrapper-ir(generator, function, iface);
                 }
             }
-            for n in g.owned.keys() {
-                if g.owned[n].module == m { destructor-ir(g, n); }
+            for owned-name in generator.owned.keys() {
+                if generator.owned[owned-name].module == module-name { destructor-ir(generator, owned-name); }
             }
-            wit-interface(g, m, exports[m], world.interfaces);
-            world.items.push("  export {wit-ident(m)};");
+            wit-interface(generator, module-name, exports[module-name], world.interfaces);
+            world.items.push("  export {wit-ident(module-name)};");
         }
         // the bitcode backend: what its roots reach (whatever --opt says: unreached funcs it has no
         // lowering for yet)
         if backend == "bitcode" {
             // the externs' yel names by their C names
             let externs: map<string, string> = map.new();
-            for k in g.funcs.keys() {
-                if g.funcs[k].is-extern { externs.set(g.funcs[k].c-name, k); }
+            for key in generator.funcs.keys() {
+                if generator.funcs[key].is-extern { externs.set(generator.funcs[key].c-name, key); }
             }
             // natively, a WIT import is std's host func for it (the C backend's wrapper calls it)
-            let imports = import-hosts(g);
+            let imports = import-hosts(generator);
             for host in imports.values() { roots.push(step-name(host)); }
             let kept = opt.reachable(funcs, roots);
             // std's walker, where a kept func shows a value by it ({x:?}, a match no arm fits)
             let renders = false;
-            for f in kept {
-                for n in flatten(f.body) { if shows-rendered(n) { renders = true; } }
+            for function in kept {
+                for statement in flatten(function.body) { if shows-rendered(statement) { renders = true; } }
             }
             if renders {
-                roots.push(g.funcs[render-key()].c-name);
-                roots.push(g.funcs["yel:std/buffer.push"].c-name);
+                roots.push(generator.funcs[render-key()].c-name);
+                roots.push(generator.funcs["yel:std/buffer.push"].c-name);
                 kept = opt.reachable(funcs, roots);
             }
-            root-helpers(g, kept);
-            for f in g.helpers { kept.push(f); }
-            return llvm.module(g, kept, triple, externs, imports);
+            root-helpers(generator, kept);
+            for helper in generator.helpers { kept.push(helper); }
+            return llvm.module(generator, kept, triple, externs, imports);
         }
         let bodies: list<string> = [];
         // a func of a file built for one target: made only there
-        for f in funcs {
-            let build = if f.build != "" { f.build } else { func-build(g, f.c-name) };
+        for function in funcs {
+            let build = if function.build != "" { function.build } else { func-build(generator, function.c-name) };
             let guard = if build == "native" {
                 "#if !defined(__wasm__)"
             } else if build == "wasi" {
@@ -2399,35 +2598,35 @@ module gen {
                 ""
             };
             if guard != "" {
-                g.protos.push(guard);
+                generator.protos.push(guard);
                 bodies.push(guard);
             }
-            render-func(g, f, bodies);
+            render-func(generator, function, bodies);
             if guard != "" {
-                g.protos.push("#endif");
+                generator.protos.push("#endif");
                 bodies.push("#endif");
             }
         }
         // the helpers (made while the funcs and wrappers were: each may make more)
-        root-helpers(g, funcs);
+        root-helpers(generator, funcs);
         let helper-index = 0;
         loop {
-            if helper-index >= g.helpers.len() { break; }
-            let h = g.helpers[helper-index];
-            let guard = if h.build == "native" {
+            if helper-index >= generator.helpers.len() { break; }
+            let helper = generator.helpers[helper-index];
+            let guard = if helper.build == "native" {
                 "#if !defined(__wasm__)"
-            } else if h.build == "wasi" {
+            } else if helper.build == "wasi" {
                 "#if defined(__wasm__)"
             } else {
                 ""
             };
             if guard != "" {
-                g.protos.push(guard);
+                generator.protos.push(guard);
                 bodies.push(guard);
             }
-            render-func(g, h, bodies);
+            render-func(generator, helper, bodies);
             if guard != "" {
-                g.protos.push("#endif");
+                generator.protos.push("#endif");
                 bodies.push("#endif");
             }
             helper-index += 1;
@@ -2435,46 +2634,47 @@ module gen {
         // no main: a component of exports only (a reactor), or an error
         if main-arity < 0 && export-order.len() == 0 {
             diagnostics.fatal(
-                g.context,
+                generator.context,
                 diagnostics.error-at(file, "no func main, and no export module"),
             );
         }
         // the environments' records (known once the funcs are built), as the others
         let envs: list<Decl> = [];
-        for r in g.env-decls { envs.push(Decl.record-decl(r)); }
-        type-decls(g, envs, forward, structs);
+        for record-declaration in generator.env-decls { envs.push(Decl.record-decl(record-declaration)); }
+        type-decls(generator, envs, forward, structs);
         let out = ["// compiled by yelc from {file}", "#include \"yel.h\"", "",];
-        for l in forward { out.push(l); }
+        for line in forward { out.push(line); }
         out.push("");
-        for l in g.value-decls { out.push(l); }
+        for line in generator.value-decls { out.push(line); }
         out.push("");
-        for l in structs { out.push(l); }
+        for line in structs { out.push(line); }
         out.push("");
-        for l in g.literal-decls { out.push(l); }
+        for line in generator.literal-decls { out.push(line); }
         out.push("");
-        for l in g.helper-protos { out.push(l); }
-        for l in g.protos { out.push(l); }
+        for line in generator.helper-protos { out.push(line); }
+        for line in generator.protos { out.push(line); }
         out.push("");
-        for l in g.helper-bodies { out.push(l); }
-        for l in bodies { out.push(l); }
+        for line in generator.helper-bodies { out.push(line); }
+        for line in bodies { out.push(line); }
         if main-arity >= 0 {
-            out.push(c"int main(int argc, char **argv) {");
+            // (main's body y_program, which y_main runs where deep recursion has room)
+            out.push(c"static int y_program(int argc, char **argv) {");
             out.push("\tylist *args = y_start(argc, argv);");
-            if g.symbols.globals.len() > 0 {
+            if generator.symbols.globals.len() > 0 {
                 out.push("\ty_globals(y_globals_init, y_globals_mark);");
             }
             let call = if main-arity == 0 { "u_main()" } else { "u_main(args)" };
             // an async main: its task, the executor's root (std's async.run-tasks)
             if main-async {
-                let run = g.funcs["yel:std/async.run-tasks"].c-name;
+                let run = generator.funcs["yel:std/async.run-tasks"].c-name;
                 let start = if main-arity == 0 { "s_main()" } else { "s_main(args)" };
                 // its result, from its frame (Q_main, render.yel's), the exit status: read before
                 // anything allocates again, so no collection lets the done task go first
                 match main-result {
-                    num(n) => {
+                    num(kind) => {
                         out.push("\ty_async *task = {start};");
                         out.push("\t{run}(task);");
-                        out.push("\t{num-c(n)} r = ((Q_main *)task)->result;");
+                        out.push("\t{num-c(kind)} r = ((Q_main *)task)->result;");
                         out.push("\t(void)args;");
                         out.push("\treturn y_finish(r);");
                     }
@@ -2485,16 +2685,18 @@ module gen {
                     }
                 }
                 out.push(c"}");
+                out.push(c"int main(int argc, char **argv) { return y_main(argc, argv, y_program); }");
                 out.push("");
                 return out.join(from-byte(10));
             }
             match main-result {
-                num(n) => out.push("\t{num-c(n)} r = {call};"),
+                num(kind) => out.push("\t{num-c(kind)} r = {call};"),
                 _ => out.push("\t(void){call};\n\tint64_t r = 0;"),
             }
             out.push("\t(void)args;");
             out.push("\treturn y_finish(r);");
             out.push(c"}");
+            out.push(c"int main(int argc, char **argv) { return y_main(argc, argv, y_program); }");
             out.push("");
         }
         out.join(from-byte(10))

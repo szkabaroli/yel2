@@ -74,6 +74,107 @@ module escape-tests {
         expect.equal(lowered.facts.param-changes[grow.name], [true,]);
     }
 
+    // how many times the func tells observe a field is about to change (the will-set markers its
+    // calls kept once the flow settled them)
+    @(private) will-sets: func(function: IrFunc) -> s64 {
+        let count = 0;
+        for node in flatten(function.body) {
+            match node.kind {
+                call(called) => { if called.key == "yel:std/observe.will-set" { count += 1; } }
+                _ => {}
+            }
+        }
+        count
+    }
+
+    // a list filtered from an observable resource's field is a new list: sorting it changes the
+    // copy, not the field, so nothing reading the field is told (a view reading it would loop). The
+    // field's own list, pushed to or sorted, is told
+    @(test) a-filtered-copy-is-not-its-field: async func() {
+        let lowered = wait lowering.built(c"
+            @(observable) resource state { nodes: list<s64>, least: s64, }
+
+            shown: func(app: state) -> list<s64> {
+                let found = app.nodes.filter({ node -> node > 0 });
+                found.sort({ left, right -> left < right });
+                found
+            }
+            filtered: func(app: state) -> list<s64> { app.nodes.filter({ node -> node > 0 }) }
+            // (Drive's shape: the filter's closure reads the resource, through a func given it)
+            above: func(app: state, node: s64) -> bool { node > app.least }
+            captured: func(app: state) -> list<s64> {
+                let found = app.nodes.filter({ node -> above(app, node) && node != app.least });
+                found.sort({ left, right -> left < right });
+                found
+            }
+            grows: func(app: state) { app.nodes.push(1); }
+            sorts: func(app: state) { app.nodes.sort({ left, right -> left < right }); }
+
+            main: func() {
+                let app: state = { nodes: [2, 1,], least: 0, };
+                let one = shown(app);
+                let three = captured(app);
+                let two = filtered(app);
+                grows(app);
+                sorts(app);
+            }
+        ");
+        expect.equal(will-sets(lowering.func-named(lowered, "shown")), 0);
+        expect.equal(will-sets(lowering.func-named(lowered, "filtered")), 0);
+        expect.equal(will-sets(lowering.func-named(lowered, "captured")), 0);
+        expect.equal(will-sets(lowering.func-named(lowered, "grows")), 1);
+        expect.equal(will-sets(lowering.func-named(lowered, "sorts")), 1);
+    }
+
+    // filtering a list whose items hold a list (a record with a list field) only reads it: a view
+    // giving its own list field to such a func is not told the field changed (Drive's grid: its
+    // folders, a let made by filtering its nodes prop, told nodes changed each time it was made,
+    // and so was made again, forever)
+    @(test) filtering-items-that-hold-lists-reads-them: async func() {
+        let lowered = wait lowering.built(c"
+            record entry { id: s64, name: string, tags: list<string>, }
+            @(observable) resource state { nodes: list<entry>, }
+
+            pick: func(nodes: list<entry>) -> list<entry> { nodes.filter({ one -> one.id > 0 }) }
+            through: func(app: state) -> list<entry> { pick(app.nodes) }
+            direct: func(app: state) -> list<entry> { app.nodes.filter({ one -> one.id > 0 }) }
+
+            main: func() {
+                let app: state = { nodes: [{ id: 1, name: \"a\", tags: [\"a\",], },], };
+                let one = through(app);
+                let two = direct(app);
+            }
+        ");
+        expect.equal(will-sets(lowering.func-named(lowered, "through")), 0);
+        expect.equal(will-sets(lowering.func-named(lowered, "direct")), 0);
+        let pick = lowering.func-named(lowered, "pick");
+        expect.equal(lowered.facts.param-changes[pick.name], [false,]);
+    }
+
+    // the same of a parameter: a filtered copy sorted writes the copy, not the parameter; but a
+    // list of lists filtered holds the parameter's own lists, so pushing into one writes it
+    @(test) a-filtered-copy-is-not-its-parameter: async func() {
+        let (lowered, sorted) = wait summary(c"
+            sorted: func(items: list<s64>) -> list<s64> {
+                let copy = items.filter({ item -> item > 0 });
+                copy.sort({ left, right -> left < right });
+                copy
+            }
+            grow-some: func(rows: list<list<s64>>) {
+                let some = rows.filter({ row -> row.len() > 0 });
+                for row in some { row.push(1); }
+            }
+
+            main: func() {
+                let kept = sorted([2, 1,]);
+                grow-some([[1,],]);
+            }
+        ", "sorted");
+        expect.equal(lowered.facts.param-writes[sorted.name], [false,]);
+        let grow = lowering.func-named(lowered, "grow-some");
+        expect.equal(lowered.facts.param-writes[grow.name], [true,]);
+    }
+
     // a parameter pushed into another is kept in it, not let escape
     @(test) kept-in-another-parameter: async func() {
         let (lowered, keep) = wait summary(c"
@@ -143,14 +244,14 @@ module escape-tests {
 
     // for each record a func makes, in order, whether it goes on its stack
     @(private) stacked: func(lowered: Lowered, name: string) -> list<bool> {
-        let f = lowering.func-named(lowered, name);
-        opt.place-records(lowered.facts, f);
+        let function = lowering.func-named(lowered, name);
+        opt.place-records(lowered.facts, function);
         let out: list<bool> = [];
-        for n in flatten(f.body) {
-            match n.kind {
-                assign(x) => {
-                    match x.value.kind {
-                        alloc(a) => { out.push(a.stack); }
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assigned) => {
+                    match assigned.value.kind {
+                        alloc(allocated) => { out.push(allocated.stack); }
                         _ => {}
                     }
                 }

@@ -119,14 +119,14 @@ resource CheckedBody {
 }
 
 // a diagnostic told again of another source: its places in from moved to to
-moved-diagnostic: func(d: Diagnostic, from: s64, to: s64) -> Diagnostic {
+moved-diagnostic: func(diagnostic: Diagnostic, from: s64, to: s64) -> Diagnostic {
     let labels: list<Label> = [];
-    for label in d.labels {
+    for label in diagnostic.labels {
         let at = label.span;
         if at.source == from { at.source = to; }
         labels.push({ span: at, message: label.message, primary: label.primary, });
     }
-    { message: d.message, path: d.path, labels: labels, notes: d.notes, helps: d.helps, }
+    { message: diagnostic.message, path: diagnostic.path, labels: labels, notes: diagnostic.notes, helps: diagnostic.helps, }
 }
 
 // a cache with nothing in it yet
@@ -186,22 +186,22 @@ module diagnostics {
                     end-line: line,
                     end-col: col + 1,
                 };
-                let d = error(sp, message, "");
-                d.path = file;
-                return d;
+                let diagnostic = error(sp, message, "");
+                diagnostic.path = file;
+                return diagnostic;
             }
         }
         { message: message, path: at, labels: [], notes: [], helps: [], }
     }
 
     // another place that explains it
-    also: func(d: Diagnostic, span: Span, message: string) {
-        d.labels.push({ span: span, message: message, primary: false, });
+    also: func(diagnostic: Diagnostic, span: Span, message: string) {
+        diagnostic.labels.push({ span: span, message: message, primary: false, });
     }
 
-    note: func(d: Diagnostic, text: string) { d.notes.push(text); }
+    note: func(diagnostic: Diagnostic, text: string) { diagnostic.notes.push(text); }
 
-    help: func(d: Diagnostic, text: string) { d.helps.push(text); }
+    help: func(diagnostic: Diagnostic, text: string) { diagnostic.helps.push(text); }
 
     // the diagnostic, written to stderr; the compiler stops
     // ---- files, through std:filesystem (WASI's: a component's host, natively std's own), each
@@ -368,7 +368,7 @@ module diagnostics {
                     ok(_) => {}
                     err(error) => fail("cannot read the directory {dir}: {error}"),
                 }
-                names.sort({ a, b -> text.compare(a, b) < 0 });
+                names.sort({ one, other -> text.compare(one, other) < 0 });
                 names
             }
             err(error) => {
@@ -414,7 +414,7 @@ module diagnostics {
                 }
             }
         }
-        if added { names.sort({ a, b -> text.compare(a, b) < 0 }); }
+        if added { names.sort({ one, other -> text.compare(one, other) < 0 }); }
         names
     }
 
@@ -458,13 +458,13 @@ module diagnostics {
 
     // an error found: kept (once: the same message at the same place is one error), and the phase
     // goes on; at ERROR-LIMIT, those found are shown and the compiler stops
-    report: func(context: Context, d: Diagnostic) {
-        for e in context.errors {
-            if same(e, d) { return; }
+    report: func(context: Context, diagnostic: Diagnostic) {
+        for known in context.errors {
+            if same(known, diagnostic) { return; }
         }
         // (kept for a caller: the first ERROR-LIMIT, the phase going on)
         if !context.exits && context.errors.len() >= ERROR-LIMIT { return; }
-        context.errors.push(d);
+        context.errors.push(diagnostic);
         if context.exits
             && context.errors.len() >= ERROR-LIMIT {
             stop(context, "stopped after {ERROR-LIMIT} errors");
@@ -501,8 +501,8 @@ module diagnostics {
 
     // an error the phase cannot go on from: shown with those found before it, and the compiler
     // stops
-    fatal: func(context: Context, d: Diagnostic) -> never {
-        context.errors.push(d);
+    fatal: func(context: Context, diagnostic: Diagnostic) -> never {
+        context.errors.push(diagnostic);
         stop(context, "{context.errors.len()} errors")
     }
 
@@ -511,7 +511,7 @@ module diagnostics {
     stop: func(context: Context, summary: string) -> never {
         let sources = context.sources;
         let shown = context.errors.slice(0, context.errors.len());
-        shown.sort({ a, b -> before(sources, a, b) });
+        shown.sort({ one, other -> before(sources, one, other) });
         let color = stderr-color();
         for index in 0..shown.len() {
             if index > 0 { eprint("\n"); }
@@ -527,38 +527,38 @@ module diagnostics {
     }
 
     // whether two diagnostics are one error: the same message at the same primary place
-    same: func(a: Diagnostic, b: Diagnostic) -> bool {
-        a.message == b.message && a.path == b.path && place(a) == place(b)
+    same: func(one: Diagnostic, other: Diagnostic) -> bool {
+        one.message == other.message && one.path == other.path && place(one) == place(other)
     }
 
     // whether a comes before b: by file (in the order the program read them), line, then column
-    before: func(sources: list<Source>, a: Diagnostic, b: Diagnostic) -> bool {
-        let first = source-of(sources, a);
-        let second = source-of(sources, b);
+    before: func(sources: list<Source>, one: Diagnostic, other: Diagnostic) -> bool {
+        let first = source-of(sources, one);
+        let second = source-of(sources, other);
         if first != second { return first < second; }
-        let left = primary(a);
-        let right = primary(b);
+        let left = primary(one);
+        let right = primary(other);
         if left.line != right.line { return left.line < right.line; }
         left.col < right.col
     }
 
     // a diagnostic's file: its primary span's source, else the one at its path (-1 for none)
-    source-of: func(sources: list<Source>, d: Diagnostic) -> s64 {
-        let span = primary(d);
-        if span.source >= 0 { span.source } else { source-at(sources, d.path) }
+    source-of: func(sources: list<Source>, diagnostic: Diagnostic) -> s64 {
+        let span = primary(diagnostic);
+        if span.source >= 0 { span.source } else { source-at(sources, diagnostic.path) }
     }
 
     // its primary span (line 0 for one with no place in a file)
-    primary: func(d: Diagnostic) -> Span {
+    primary: func(diagnostic: Diagnostic) -> Span {
         let found: Span = { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, };
-        for l in d.labels {
-            if l.primary { found = l.span; }
+        for label in diagnostic.labels {
+            if label.primary { found = label.span; }
         }
         found
     }
 
-    place: func(d: Diagnostic) -> string {
-        let span = primary(d);
+    place: func(diagnostic: Diagnostic) -> string {
+        let span = primary(diagnostic);
         "{span.source}:{span.line}:{span.col}"
     }
 
@@ -571,16 +571,16 @@ module diagnostics {
     }
 
     // a name like n among candidates (a likely typo of one: a few edits away), or ""
-    closest: func(n: string, candidates: list<string>) -> string {
+    closest: func(word: string, candidates: list<string>) -> string {
         let best = "";
-        let best-distance = n.len() / 3 + 1;
+        let best-distance = word.len() / 3 + 1;
         if best-distance > 3 { best-distance = 3; }
-        for c in candidates {
-            if c != n && c.len() > 0 && !starts-at(c, 0, "~") {
-                let d = distance(n, c);
-                if d < best-distance || d == best-distance && best == "" && d <= 1 {
-                    best = c;
-                    best-distance = d;
+        for candidate in candidates {
+            if candidate != word && candidate.len() > 0 && !starts-at(candidate, 0, "~") {
+                let edits = distance(word, candidate);
+                if edits < best-distance || edits == best-distance && best == "" && edits <= 1 {
+                    best = candidate;
+                    best-distance = edits;
                 }
             }
         }
@@ -589,26 +589,26 @@ module diagnostics {
 
     // ================================================================ rendering
 
-    render: func(sources: list<Source>, d: Diagnostic, color: bool) -> string {
+    render: func(sources: list<Source>, diagnostic: Diagnostic, color: bool) -> string {
         let red = if color { from-byte(27) + "[1;31m" } else { "" };
         let blue = if color { from-byte(27) + "[1;34m" } else { "" };
         let bold = if color { from-byte(27) + "[1m" } else { "" };
         let reset = if color { from-byte(27) + "[0m" } else { "" };
         let out: list<string> = [];
-        out.push("{red}error{reset}{bold}: {d.message}{reset}\n");
-        if d.labels.len() == 0 {
-            out.push("  {blue}-->{reset} {d.path}\n");
-            tail(d, out, "  ", blue, bold, reset);
+        out.push("{red}error{reset}{bold}: {diagnostic.message}{reset}\n");
+        if diagnostic.labels.len() == 0 {
+            out.push("  {blue}-->{reset} {diagnostic.path}\n");
+            tail(diagnostic, out, "  ", blue, bold, reset);
             return out.join("");
         }
-        let first = d.labels[0];
-        for l in d.labels {
-            if l.primary { first = l; }
+        let first = diagnostic.labels[0];
+        for label in diagnostic.labels {
+            if label.primary { first = label; }
         }
         // the lines labels start on, in order
         let shown: list<s64> = [];
-        for l in d.labels {
-            if !contains-line(shown, l.span.line) { shown.push(l.span.line); }
+        for label in diagnostic.labels {
+            if !contains-line(shown, label.span.line) { shown.push(label.span.line); }
         }
         sort-lines(shown);
         let width = "{shown[shown.len() - 1]}".len();
@@ -617,9 +617,9 @@ module diagnostics {
         let source = if first.span.source >= 0 {
             first.span.source
         } else {
-            source-at(sources, d.path)
+            source-at(sources, diagnostic.path)
         };
-        let path = if source >= 0 { sources[source].path } else { d.path };
+        let path = if source >= 0 { sources[source].path } else { diagnostic.path };
         let src = if source >= 0 { sources[source].text.lines() } else { [] };
         out.push("{pad}{blue}-->{reset} {path}:{first.span.line}:{first.span.col}\n");
         out.push("{pad} {blue}|{reset}\n");
@@ -637,44 +637,44 @@ module diagnostics {
             let text = if line >= 1 && line <= src.len() { src[line - 1] } else { "" };
             // each label on the line, left to right, its underline under it
             let here: list<Label> = [];
-            for l in d.labels {
-                if l.span.line == line { here.push(l); }
+            for label in diagnostic.labels {
+                if label.span.line == line { here.push(label); }
             }
             sort-labels(here);
-            for l in here {
-                let start = shown-width(text, l.span.col - 1);
-                let end = if l.span.end-line == line && l.span.end-col > l.span.col {
-                    shown-width(text, l.span.end-col - 1)
-                } else if l.span.end-line > line {
+            for label in here {
+                let start = shown-width(text, label.span.col - 1);
+                let end = if label.span.end-line == line && label.span.end-col > label.span.col {
+                    shown-width(text, label.span.end-col - 1)
+                } else if label.span.end-line > line {
                     shown-width(text, text.len())
                 } else {
                     start + 1
                 };
                 if end <= start { end = start + 1; }
-                let mark = if l.primary { "^" } else { "-" };
-                let tone = if l.primary { red } else { blue };
-                let message = if l.message == "" { "" } else { " " + l.message };
+                let mark = if label.primary { "^" } else { "-" };
+                let tone = if label.primary { red } else { blue };
+                let message = if label.message == "" { "" } else { " " + label.message };
                 out.push("{pad} {blue}|{reset} {" ".repeat(start)}{tone}{mark.repeat(end - start)}{message}{reset}\n");
             }
             previous = line;
         }
-        tail(d, out, pad, blue, bold, reset);
+        tail(diagnostic, out, pad, blue, bold, reset);
         out.join("")
     }
 
     // the notes and the help
     tail: func(
-        d: Diagnostic,
+        diagnostic: Diagnostic,
         out: list<string>,
         pad: string,
         blue: string,
         bold: string,
         reset: string,
     ) {
-        if d.notes.len() + d.helps.len() == 0 { return; }
+        if diagnostic.notes.len() + diagnostic.helps.len() == 0 { return; }
         out.push("{pad} {blue}|{reset}\n");
-        for n in d.notes { out.push("{pad} {blue}={reset} {bold}note{reset}: {n}\n"); }
-        for h in d.helps { out.push("{pad} {blue}={reset} {bold}help{reset}: {h}\n"); }
+        for note in diagnostic.notes { out.push("{pad} {blue}={reset} {bold}note{reset}: {note}\n"); }
+        for help in diagnostic.helps { out.push("{pad} {blue}={reset} {bold}help{reset}: {help}\n"); }
     }
 
     source-row: func(
@@ -689,17 +689,17 @@ module diagnostics {
     }
 
     // how wide a line's first n bytes show (a tab as 4 columns, a UTF-8 sequence as one)
-    shown-width: func(text: string, n: s64) -> s64 {
-        let w = 0;
-        let end = if n > text.len() { text.len() } else { n };
-        for k in 0..end {
-            let c = text.byte-at(k);
-            if c == 9 { w += 4; }
-            else if c < 128 || c >= 192 { w += 1; }
+    shown-width: func(text: string, count: s64) -> s64 {
+        let columns = 0;
+        let end = if count > text.len() { text.len() } else { count };
+        for index in 0..end {
+            let byte = text.byte-at(index);
+            if byte == 9 { columns += 4; }
+            else if byte < 128 || byte >= 192 { columns += 1; }
         }
         // past the end of the line (a span at its end): one column each
-        if n > text.len() { w += n - text.len(); }
-        w
+        if count > text.len() { columns += count - text.len(); }
+        columns
     }
 
     expand-tabs: func(text: string) -> string {
@@ -707,76 +707,76 @@ module diagnostics {
         text.split(from-byte(9)).join("    ")
     }
 
-    contains-line: func(xs: list<s64>, x: s64) -> bool {
-        for y in xs {
-            if y == x { return true; }
+    contains-line: func(xs: list<s64>, wanted: s64) -> bool {
+        for line in xs {
+            if line == wanted { return true; }
         }
         false
     }
 
     sort-lines: func(xs: list<s64>) {
-        for i in 1..xs.len() {
-            let j = i;
+        for index in 1..xs.len() {
+            let position = index;
             loop {
-                if j == 0 || xs[j - 1] <= xs[j] { break; }
-                let t = xs[j];
-                xs[j] = xs[j - 1];
-                xs[j - 1] = t;
-                j -= 1;
+                if position == 0 || xs[position - 1] <= xs[position] { break; }
+                let held = xs[position];
+                xs[position] = xs[position - 1];
+                xs[position - 1] = held;
+                position -= 1;
             }
         }
     }
 
     sort-labels: func(xs: list<Label>) {
-        for i in 1..xs.len() {
-            let j = i;
+        for index in 1..xs.len() {
+            let position = index;
             loop {
-                if j == 0 || xs[j - 1].span.col <= xs[j].span.col { break; }
-                let t = xs[j];
-                xs[j] = xs[j - 1];
-                xs[j - 1] = t;
-                j -= 1;
+                if position == 0 || xs[position - 1].span.col <= xs[position].span.col { break; }
+                let held = xs[position];
+                xs[position] = xs[position - 1];
+                xs[position - 1] = held;
+                position -= 1;
             }
         }
     }
 
     // a decimal's value (0 for one that is not)
-    number: func(s: string) -> s64 {
-        let n = 0;
-        if s.len() == 0 { return 0; }
-        for k in 0..s.len() {
-            let c = s.byte-at(k);
-            if c < 48 || c > 57 { return 0; }
-            n = n * 10 + c - 48;
+    number: func(digits: string) -> s64 {
+        let value = 0;
+        if digits.len() == 0 { return 0; }
+        for index in 0..digits.len() {
+            let byte = digits.byte-at(index);
+            if byte < 48 || byte > 57 { return 0; }
+            value = value * 10 + byte - 48;
         }
-        n
+        value
     }
 
     // how many single-byte edits (insert, delete, change, or swap two next to each other) make a
     // into b
-    distance: func(a: string, b: string) -> s64 {
-        let n = a.len();
-        let m = b.len();
-        if n - m > 3 || m - n > 3 { return 4; }
+    distance: func(original: string, target: string) -> s64 {
+        let original-length = original.len();
+        let target-length = target.len();
+        if original-length - target-length > 3 || target-length - original-length > 3 { return 4; }
         let rows: list<list<s64>> = [];
-        for i in 0..n + 1 {
+        for row-index in 0..original-length + 1 {
             let row: list<s64> = [];
-            for j in 0..m + 1 { row.push(if i == 0 { j } else if j == 0 { i } else { 0 }); }
+            for column-index in 0..target-length + 1 { row.push(if row-index == 0 { column-index } else if column-index == 0 { row-index } else { 0 }); }
             rows.push(row);
         }
-        for i in 1..n + 1 {
-            for j in 1..m + 1 {
-                let cost = if a.byte-at(i - 1) == b.byte-at(j - 1) { 0 } else { 1 };
-                let best = rows[i - 1][j] + 1;
-                if rows[i][j - 1] + 1 < best { best = rows[i][j - 1] + 1; }
-                if rows[i - 1][j - 1] + cost < best { best = rows[i - 1][j - 1] + cost; }
-                if i > 1 && j > 1 && a.byte-at(i - 1) == b.byte-at(j - 2)
-                    && a.byte-at(i - 2) == b.byte-at(j - 1) && rows[i - 2][j - 2] + 1 < best {
-                    best = rows[i - 2][j - 2] + 1;
+        for row-index in 1..original-length + 1 {
+            for column-index in 1..target-length + 1 {
+                let cost = if original.byte-at(row-index - 1) == target.byte-at(column-index - 1) { 0 } else { 1 };
+                let best = rows[row-index - 1][column-index] + 1;
+                if rows[row-index][column-index - 1] + 1 < best { best = rows[row-index][column-index - 1] + 1; }
+                if rows[row-index - 1][column-index - 1] + cost < best { best = rows[row-index - 1][column-index - 1] + cost; }
+                if row-index > 1 && column-index > 1 && original.byte-at(row-index - 1) == target.byte-at(column-index - 2)
+                    && original.byte-at(row-index - 2) == target.byte-at(column-index - 1) && rows[row-index - 2][column-index - 2] + 1 < best {
+                    best = rows[row-index - 2][column-index - 2] + 1;
                 }
-                rows[i][j] = best;
+                rows[row-index][column-index] = best;
             }
         }
-        rows[n][m]
+        rows[original-length][target-length]
     }
 }

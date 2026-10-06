@@ -80,11 +80,11 @@ module shapes {
 const LIMIT: s64 = 3;
 ");
         let top = analysis.outline(found, "test.yel");
-        expect.equal(top.map({ s -> "{s.name} {s.kind}" }), ["shapes 2", "LIMIT 14",]);
+        expect.equal(top.map({ symbol -> "{symbol.name} {symbol.kind}" }), ["shapes 2", "LIMIT 14",]);
         let inner = top[0].children;
-        expect.equal(inner.map({ s -> "{s.name} {s.kind}" }), ["point 23", "shape 10", "area 12",]);
-        expect.equal(inner[0].children.map({ s -> "{s.name} {s.kind} {s.detail}" }), ["x 8 x: s64", "y 8 y: s64",]);
-        expect.equal(inner[1].children.map({ s -> s.name }), ["circle", "dot",]);
+        expect.equal(inner.map({ symbol -> "{symbol.name} {symbol.kind}" }), ["point 23", "shape 10", "area 12",]);
+        expect.equal(inner[0].children.map({ symbol -> "{symbol.name} {symbol.kind} {symbol.detail}" }), ["x 8 x: s64", "y 8 y: s64",]);
+        expect.equal(inner[1].children.map({ symbol -> symbol.name }), ["circle", "dot",]);
         expect.equal(inner[2].detail, "area: func(p: point) -> s64");
         // (its range all it covers, its selection its name)
         expect.equal((inner[2].range.line, inner[2].selection.col), (7, 5));
@@ -102,7 +102,7 @@ main: func() {
 ");
         let help = expect.some(analysis.signature-help(found, "test.yel", 5, 24));
         expect.equal(help.label, "add: func(left: s64, right: s64 = 2) -> s64");
-        expect.equal(help.params.map({ p -> { let (from, to) = p; help.label.substring(from, to) } }), ["left: s64", "right: s64 = 2",]);
+        expect.equal(help.params.map({ parameter -> { let (from, to) = parameter; help.label.substring(from, to) } }), ["left: s64", "right: s64 = 2",]);
         expect.equal(help.active, 1);
         // (at its first argument)
         expect.equal(expect.some(analysis.signature-help(found, "test.yel", 5, 21)).active, 0);
@@ -146,7 +146,7 @@ main: func() -> s64 {
 }
 ");
         let edits = expect.ok(wait analysis.rename(found, "test.yel", 3, 9, "sum"));
-        expect.equal(edits.map({ e -> "{e.place.line}:{e.place.col} {e.text}" }), ["3:9 sum", "4:5 sum", "4:13 sum",]);
+        expect.equal(edits.map({ edit -> "{edit.place.line}:{edit.place.col} {edit.text}" }), ["3:9 sum", "4:5 sum", "4:13 sum",]);
         // (a keyword's word: written %name)
         let escaped = expect.ok(wait analysis.rename(found, "test.yel", 3, 9, "if"));
         expect.equal(escaped[0].text, "%if");

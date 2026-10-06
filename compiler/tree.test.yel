@@ -43,20 +43,21 @@ module tree-tests {
         for path in files {
             let text = expect.ok(wait diagnostics.read-file(path));
             let at = 0;
-            for t in wait lexed(path, text) {
-                if t.kind == TokenKind.eof { continue; }
-                if t.start < at { expect.fail("{path}: a token at byte {t.start} overlaps the one before (to {at})"); }
-                let between = text.substring(at, t.start);
-                if !trivia(between) { expect.fail("{path}: {between:?} before byte {t.start} is not whitespace or a comment"); }
-                // (a char's text is what is between its quotes, an escaped name's what follows its
-                // %: the tree takes their bytes)
-                let written = if t.kind == TokenKind.char { "'{t.text}'" } else if t.escaped { "%{t.text}" } else { t.text };
-                if text.substring(t.start, t.end) != written { expect.fail("{path}: the token at byte {t.start} is {t.text:?}, its bytes {text.substring(t.start, t.end):?}"); }
-                let (line, col) = tree.place(text, t.start);
-                if t.span.line != line || t.span.col != col {
-                    expect.fail("{path}: the token {t.text:?} at byte {t.start} says {t.span.line}:{t.span.col}, it is at {line}:{col}");
+            for token in wait lexed(path, text) {
+                if token.kind == TokenKind.eof { continue; }
+                if token.start < at { expect.fail("{path}: a token at byte {token.start} overlaps the one before (to {at})"); }
+                let between = text.substring(at, token.start);
+                if !trivia(between) { expect.fail("{path}: {between:?} before byte {token.start} is not whitespace or a comment"); }
+                // (a char's text is what is between its quotes (one not closed: what follows its
+                // quote), an escaped name's what follows its %: the tree takes their bytes)
+                let closing = if token.end - token.start == token.text.len() + 2 { "'" } else { "" };
+                let written = if token.kind == TokenKind.char { "'{token.text}{closing}" } else if token.escaped { "%{token.text}" } else { token.text };
+                if text.substring(token.start, token.end) != written { expect.fail("{path}: the token at byte {token.start} is {token.text:?}, its bytes {text.substring(token.start, token.end):?}"); }
+                let (line, col) = tree.place(text, token.start);
+                if token.span.line != line || token.span.col != col {
+                    expect.fail("{path}: the token {token.text:?} at byte {token.start} says {token.span.line}:{token.span.col}, it is at {line}:{col}");
                 }
-                at = t.end;
+                at = token.end;
             }
             if !trivia(text.substring(at, text.len())) { expect.fail("{path}: its end is no token's"); }
         }
@@ -66,8 +67,8 @@ module tree-tests {
     @(test) strings-in-pieces: async func() {
         let text = "let s = \"a \{x + f(\"b\")\} c \{n:>4\}\";";
         let kinds: list<string> = [];
-        for t in wait lexed("test.yel", text) {
-            if t.kind != TokenKind.eof { kinds.push("{t.kind:?}".replace("TokenKind.", "") + " " + t.text); }
+        for token in wait lexed("test.yel", text) {
+            if token.kind != TokenKind.eof { kinds.push("{token.kind:?}".replace("TokenKind.", "") + " " + token.text); }
         }
         expect.equal(kinds, [
             "id let", "id s", "op =", "string-start \"", "string-text a ", "interp-start \{", "id x", "op +", "id f",
@@ -79,8 +80,8 @@ module tree-tests {
     // a C template's { is an interpolation's only before a name or a paren
     @(test) templates-keep-their-braces: async func() {
         let pieces: list<string> = [];
-        for t in wait lexed("test.yel", "c\"if (a) \{ \{b\} \}\"") {
-            if t.kind != TokenKind.eof { pieces.push(t.text); }
+        for token in wait lexed("test.yel", "c\"if (a) \{ \{b\} \}\"") {
+            if token.kind != TokenKind.eof { pieces.push(token.text); }
         }
         expect.equal(pieces, ["c\"", "if (a) \{ ", "\{", "b", "\}", " \}", "\"",]);
     }

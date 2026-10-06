@@ -19,24 +19,28 @@ module gen {
     // the program's flow (escape.yel), what both the releases and the readonly and move checks
     // read
     flow-facts: func(
-        g: Gen,
+        generator: Gen,
         funcs: list<IrFunc>,
         pointer-types: map<Name, bool>,
+        value-payloads: map<Name, list<Type>>,
         func-holders: map<Name, bool>,
         externs: map<string, RuntimeEffect>,
     ) -> Facts {
-        let p: Facts = {
+        let facts: Facts = {
             funcs: map.new(),
             param-escapes: map.new(),
             param-kept-in: map.new(),
             param-gives: map.new(),
             param-writes: map.new(),
+            param-lent: map.new(),
             param-changes: map.new(),
             fresh-result: map.new(),
-            wit: wit-wrappers(g),
+            new-top: map.new(),
+            wit: wit-wrappers(generator),
             externs: externs,
             pointer-types: pointer-types,
-            observable-types: observable-types(g),
+            value-payloads: value-payloads,
+            observable-types: observable-types(generator),
             func-holders: func-holders,
             groups: map.new(),
             callees: map.new(),
@@ -44,27 +48,27 @@ module gen {
             mutable-locals: map.new(),
             env-escapes: map.new(),
         };
-        for f in funcs { p.funcs.set(f.name, f); }
-        opt.param-escapes(p, funcs);
-        p
+        for function in funcs { facts.funcs.set(function.name, function); }
+        opt.param-escapes(facts, funcs);
+        facts
     }
 
     // the @(observable) resources, by name (what escape.yel's param-changes stops at)
-    observable-types: func(g: Gen) -> map<Name, bool> {
+    observable-types: func(generator: Gen) -> map<Name, bool> {
         let found: map<Name, bool> = map.new();
-        for r in g.symbols.records.keys() { if g.symbols.records[r].observable { found.set(r, true); } }
+        for record-name in generator.symbols.records.keys() { if generator.symbols.records[record-name].observable { found.set(record-name, true); } }
         found
     }
 
-    release-ends: func(g: Gen, funcs: list<IrFunc>, p: Facts) {
-        let given = given-over(g, funcs);
-        for f in funcs {
-            if p.groups.has(f.name) {
-                let gr = p.groups[f.name];
-                let start = intern("s" + f.c-name.substring(1, f.c-name.len()));
-                let owned: list<bool> = if f.async && given.has(start) { given[start] } else { [] };
-                for i in 0..f.locals.len() {
-                    if owned-end(f, gr, i, owned) { release-local(g, f, gr, i); }
+    release-ends: func(generator: Gen, funcs: list<IrFunc>, facts: Facts) {
+        let given = given-over(generator, funcs);
+        for function in funcs {
+            if facts.groups.has(function.name) {
+                let gr = facts.groups[function.name];
+                let start = intern("s" + function.c-name.substring(1, function.c-name.len()));
+                let owned: list<bool> = if function.async && given.has(start) { given[start] } else { [] };
+                for index in 0..function.locals.len() {
+                    if owned-end(function, gr, index, owned) { release-local(generator, function, index); }
                 }
             }
         }
@@ -77,31 +81,31 @@ module gen {
     // is the func's own; anything else it is given, its caller may still have (a value given two
     // tasks, or read after the start). A func waited for, called by the host or taken as a value
     // owns none of its parameters.
-    given-over: func(g: Gen, funcs: list<IrFunc>) -> map<Name, list<bool>> {
+    given-over: func(generator: Gen, funcs: list<IrFunc>) -> map<Name, list<bool>> {
         let calls: map<Name, s64> = map.new();
         let spawned: map<Name, s64> = map.new();
         let given: map<Name, list<bool>> = map.new();
         let taken: set<Name> = set.new();
         let seen: set<Name> = set.new();
         let all: list<IrFunc> = [];
-        for f in funcs { all.push(f); }
-        for h in g.helpers { all.push(h); }
-        for f in all {
-            if seen.has(f.name) { continue; }
-            seen.add(f.name);
-            let nodes = flatten(f.body);
+        for function in funcs { all.push(function); }
+        for helper in generator.helpers { all.push(helper); }
+        for function in all {
+            if seen.has(function.name) { continue; }
+            seen.add(function.name);
+            let nodes = flatten(function.body);
             // how often each local is read
             let read-counts: list<s64> = [];
-            for i in 0..f.locals.len() { read-counts.push(0); }
-            for n in nodes {
+            for index in 0..function.locals.len() { read-counts.push(0); }
+            for node in nodes {
                 let read: list<s64> = [];
-                reads(n, read);
-                for i in read { read-counts[i] = read-counts[i] + 1; }
+                reads(node, read);
+                for local-index in read { read-counts[local-index] = read-counts[local-index] + 1; }
             }
             // the locals a start's frame is put in
             let frames: map<s64, Name> = map.new();
-            starts-given(f, f.body, true, read-counts, frames, given);
-            for n in nodes { started-calls(n, frames, calls, spawned, taken); }
+            starts-given(function, function.body, true, read-counts, frames, given);
+            for node in nodes { started-calls(node, frames, calls, spawned, taken); }
         }
         let out: map<Name, list<bool>> = map.new();
         for name in spawned.keys() {
@@ -116,30 +120,30 @@ module gen {
     // holds: its frame's local kept, and whether each argument is given over (top: body is the
     // func's own, where its parameters are as if made)
     starts-given: func(
-        f: IrFunc,
+        function: IrFunc,
         body: list<Node>,
         top: bool,
         read-counts: list<s64>,
         frames: map<s64, Name>,
         given: map<Name, list<bool>>,
     ) {
-        for n in body {
-            match n.kind {
-                assign(x) => {
-                    match x.value.kind {
-                        call(c) => {
-                            if starts-at(c.c-name, 0, "s_") {
-                                frames.set(x.dest, c.name);
-                                let before = if given.has(c.name) { given[c.name] } else { [] };
+        for node in body {
+            match node.kind {
+                assign(assigned) => {
+                    match assigned.value.kind {
+                        call(called) => {
+                            if starts-at(called.c-name, 0, "s_") {
+                                frames.set(assigned.dest, called.name);
+                                let before = if given.has(called.name) { given[called.name] } else { [] };
                                 let each: list<bool> = [];
-                                for at in 0..c.args.len() {
-                                    let own = match c.args[at].kind {
-                                        local(j) => ((top && contains(f.params, j)) || made-in(body, j)) && read-once(f, j, read-counts),
+                                for at in 0..called.args.len() {
+                                    let own = match called.args[at].kind {
+                                        local(local-index) => ((top && contains(function.params, local-index)) || made-in(body, local-index)) && read-once(function, local-index, read-counts),
                                         _ => false,
                                     };
                                     each.push(own && (before.len() == 0 || before[at]));
                                 }
-                                given.set(c.name, each);
+                                given.set(called.name, each);
                             }
                         }
                         _ => {}
@@ -147,15 +151,15 @@ module gen {
                 }
                 _ => {}
             }
-            for index in 0..nested-count(n) { starts-given(f, nested-body(n, index), false, read-counts, frames, given); }
+            for index in 0..nested-count(node) { starts-given(function, nested-body(node, index), false, read-counts, frames, given); }
         }
     }
 
     // whether body itself (not a body it holds) assigns j
-    made-in: func(body: list<Node>, j: s64) -> bool {
-        for n in body {
-            match n.kind {
-                assign(x) => { if x.dest == j { return true; } }
+    made-in: func(body: list<Node>, local-index: s64) -> bool {
+        for node in body {
+            match node.kind {
+                assign(assigned) => { if assigned.dest == local-index { return true; } }
                 _ => {}
             }
         }
@@ -164,14 +168,14 @@ module gen {
 
     // whether j is read once, and each local it is a copy of (through any chain) once too: no
     // other name has its value after that read
-    read-once: func(f: IrFunc, j: s64, read-counts: list<s64>) -> bool {
-        if read-counts[j] != 1 { return false; }
-        for n in flatten(f.body) {
-            match n.kind {
-                assign(x) => {
-                    if x.dest == j {
-                        match x.value.kind {
-                            local(k) => { if k != j && !read-once(f, k, read-counts) { return false; } }
+    read-once: func(function: IrFunc, local-index: s64, read-counts: list<s64>) -> bool {
+        if read-counts[local-index] != 1 { return false; }
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assigned) => {
+                    if assigned.dest == local-index {
+                        match assigned.value.kind {
+                            local(other) => { if other != local-index && !read-once(function, other, read-counts) { return false; } }
                             _ => {}
                         }
                     }
@@ -183,27 +187,27 @@ module gen {
     }
 
     // the WIT funcs' wrappers by C name, and an async one's start
-    wit-wrappers: func(g: Gen) -> set<Name> {
+    wit-wrappers: func(generator: Gen) -> set<Name> {
         let out: set<Name> = set.new();
-        for k in g.wit-externs.keys() {
-            let c = g.funcs[k].c-name;
-            out.add(intern(c));
-            out.add(intern("s" + c.substring(1, c.len())));
+        for name in generator.wit-externs.keys() {
+            let native = generator.funcs[name].c-name;
+            out.add(intern(native));
+            out.add(intern("s" + native.substring(1, native.len())));
         }
         out
     }
 
     // n's calls of starts, its operands' too: each counted, and as spawned where it is a frame
     // given the executor; a func taken as a value
-    started-calls: func(n: Node, frames: map<s64, Name>, calls: map<Name, s64>, spawned: map<Name, s64>, taken: set<Name>) {
-        match n.kind {
-            call(c) => {
-                if starts-at(c.c-name, 0, "s_") { calls.set(c.name, calls.get-or(c.name, 0) + 1); }
-                if c.c-name == "yel_async_spawn" && c.args.len() == 1 {
-                    match c.args[0].kind {
-                        local(i) => {
-                            if frames.has(i) {
-                                let name = frames[i];
+    started-calls: func(node: Node, frames: map<s64, Name>, calls: map<Name, s64>, spawned: map<Name, s64>, taken: set<Name>) {
+        match node.kind {
+            call(called) => {
+                if starts-at(called.c-name, 0, "s_") { calls.set(called.name, calls.get-or(called.name, 0) + 1); }
+                if called.c-name == "yel_async_spawn" && called.args.len() == 1 {
+                    match called.args[0].kind {
+                        local(local-index) => {
+                            if frames.has(local-index) {
+                                let name = frames[local-index];
                                 spawned.set(name, spawned.get-or(name, 0) + 1);
                             }
                         }
@@ -211,28 +215,28 @@ module gen {
                     }
                 }
             }
-            func-ref(r) => {
-                taken.add(r.name);
-                if starts-at(r.c-name, 0, "u_") { taken.add(intern("s" + r.c-name.substring(1, r.c-name.len()))); }
+            func-ref(referred) => {
+                taken.add(referred.name);
+                if starts-at(referred.c-name, 0, "u_") { taken.add(intern("s" + referred.c-name.substring(1, referred.c-name.len()))); }
             }
             _ => {}
         }
-        for index in 0..operand-count(n) { started-calls(operand(n, index), frames, calls, spawned, taken); }
+        for index in 0..operand-count(node) { started-calls(operand(node, index), frames, calls, spawned, taken); }
     }
 
     // whether a local is a binding's (not one codegen made)
-    is-binding: func(f: IrFunc, i: s64) -> bool {
-        match f.locals[i].binding {
-            some(m) => true,
+    is-binding: func(function: IrFunc, local-index: s64) -> bool {
+        match function.locals[local-index].binding {
+            some(_) => true,
             none => false,
         }
     }
 
     // what end a type holds: "stream", "writer", "future", or "" (none of its own)
-    end-kind: func(t: Type) -> string {
-        match resolve(t) {
-            stream-type(x) => if x.writer { "writer" } else { "stream" },
-            future-type(x) => "future",
+    end-kind: func(given: Type) -> string {
+        match resolve(given) {
+            stream-type(streamed) => if streamed.writer { "writer" } else { "stream" },
+            future-type(_) => "future",
             _ => "",
         }
     }
@@ -240,32 +244,32 @@ module gen {
     // whether a local is a binding's end that no one else has (see the top)
     // (owned: of a func only ever started, whether each parameter is given over, its own: one
     // never assigned, its value the one it was given, whoever else made it)
-    owned-end: func(f: IrFunc, gr: Groups, i: s64, owned: list<bool>) -> bool {
-        let kind = end-kind(f.locals[i].ty);
-        let at = f.params.index-of(i);
+    owned-end: func(function: IrFunc, gr: Groups, local-index: s64, owned: list<bool>) -> bool {
+        let kind = end-kind(function.locals[local-index].ty);
+        let at = function.params.index-of(local-index);
         let param = at >= 0;
         if kind == "" || (param && (at >= owned.len() || !owned[at])) { return false; }
-        let m = match f.locals[i].binding {
-            some(x) => x,
+        let mark = match function.locals[local-index].binding {
+            some(bound) => bound,
             none => { return false; }
         };
-        if m.captured { return false; }
-        let root = opt.find(gr, i);
+        if mark.captured { return false; }
+        let root = opt.find(gr, local-index);
         // nor one another value holds (a list it is pushed to may read it after)
         if gr.escapes[root] || gr.returned[root] || (gr.stale[root] && !param) || gr.moved[root] || gr.holding-params[root].len() > 0
             || opt.holder-roots(gr, root).len() > 1 {
             return false;
         }
-        for j in 0..f.locals.len() {
-            if j != i && opt.find(gr, j) == root && is-binding(f, j)
-                && end-kind(f.locals[j].ty) == kind {
+        for other in 0..function.locals.len() {
+            if other != local-index && opt.find(gr, other) == root && is-binding(function, other)
+                && end-kind(function.locals[other].ty) == kind {
                 return false;
             }
         }
         let assigned = 0;
-        for n in flatten(f.body) {
-            match n.kind {
-                assign(x) => { if x.dest == i { assigned += 1; } }
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assignment) => { if assignment.dest == local-index { assigned += 1; } }
                 _ => {}
             }
         }
@@ -274,20 +278,20 @@ module gen {
 
     // the locals whose reading is a use of it: itself, and codegen's made from it (a block's value,
     // a call's frame that holds it: a read begun, waited for later), through any chain of them
-    users: func(f: IrFunc, gr: Groups, i: s64) -> list<s64> {
-        let out = [i,];
+    users: func(function: IrFunc, local-index: s64) -> list<s64> {
+        let out = [local-index,];
         let assigns: list<AssignNode> = [];
-        for n in flatten(f.body) {
-            match n.kind {
-                assign(x) => { if !is-binding(f, x.dest) { assigns.push(x); } }
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assigned) => { if !is-binding(function, assigned.dest) { assigns.push(assigned); } }
                 _ => {}
             }
         }
         loop {
             let grew = false;
-            for x in assigns {
-                if !contains(out, x.dest) && uses(x.value, out) {
-                    out.push(x.dest);
+            for assigned in assigns {
+                if !contains(out, assigned.dest) && uses(assigned.value, out) {
+                    out.push(assigned.dest);
                     grew = true;
                 }
             }
@@ -296,73 +300,73 @@ module gen {
     }
 
     // whether a statement (and what it holds) reads any of the locals
-    uses: func(n: Node, locals: list<s64>) -> bool {
-        for x in flatten([n,]) {
+    uses: func(node: Node, locals: list<s64>) -> bool {
+        for inner in flatten([node,]) {
             let read: list<s64> = [];
-            reads(x, read);
-            for r in read {
-                if contains(locals, r) { return true; }
+            reads(inner, read);
+            for local-index in read {
+                if contains(locals, local-index) { return true; }
             }
         }
         false
     }
 
     // the release after the local's last use, and before each way out until then
-    release-local: func(g: Gen, f: IrFunc, gr: Groups, i: s64) {
+    release-local: func(generator: Gen, function: IrFunc, local-index: s64) {
         // (a parameter's: the func's, from its start)
-        let body = if contains(f.params, i) { f.body } else {
-            match defining-list(f.body, i) {
-                some(b) => b,
+        let body = if contains(function.params, local-index) { function.body } else {
+            match defining-list(function.body, local-index) {
+                some(found) => found,
                 none => { return; }
             }
         };
         let def = -1;
-        for k in 0..body.len() {
-            match body[k].kind {
-                assign(x) => { if x.dest == i && def < 0 { def = k; } }
+        for index in 0..body.len() {
+            match body[index].kind {
+                assign(assigned) => { if assigned.dest == local-index && def < 0 { def = index; } }
                 _ => {}
             }
         }
-        let locals = users(f, gr, i);
+        let locals = users(function, local-index);
         let last = def;
-        for k in def + 1..body.len() {
-            if uses(body[k], locals) { last = k; }
+        for index in def + 1..body.len() {
+            if uses(body[index], locals) { last = index; }
         }
         // the labels inside what follows (a break to one stays in it)
         let inner: list<s64> = [];
-        for k in def + 1..last + 1 {
-            for x in flatten([body[k],]) {
-                match x.kind {
-                    loop(l) => { if l.label >= 0 { inner.push(l.label); } }
-                    block(b) => { if b.label >= 0 { inner.push(b.label); } }
+        for index in def + 1..last + 1 {
+            for nested in flatten([body[index],]) {
+                match nested.kind {
+                    loop(looping) => { if looping.label >= 0 { inner.push(looping.label); } }
+                    block(blocked) => { if blocked.label >= 0 { inner.push(blocked.label); } }
                     _ => {}
                 }
             }
         }
         let out: list<Node> = [];
         // a parameter never used: let go at once
-        if last < 0 { out.push(release-node(g, f, i)); }
-        for k in 0..body.len() {
-            let n = body[k];
-            if k > def && k <= last {
-                if leaves(n, false, inner) { out.push(release-node(g, f, i)); }
-                else { before-exits(g, f, i, n, false, inner); }
+        if last < 0 { out.push(release-node(generator, function, local-index)); }
+        for index in 0..body.len() {
+            let node = body[index];
+            if index > def && index <= last {
+                if leaves(node, false, inner) { out.push(release-node(generator, function, local-index)); }
+                else { before-exits(generator, function, local-index, node, false, inner); }
             }
-            out.push(n);
-            if k == last && !is-release(n, i) { out.push(release-node(g, f, i)); }
+            out.push(node);
+            if index == last && !is-release(node, local-index) { out.push(release-node(generator, function, local-index)); }
         }
         replace-body(body, out);
     }
 
     // the statement list the local is first assigned in
-    defining-list: func(body: list<Node>, i: s64) -> option<list<Node>> {
-        for n in body {
-            match n.kind {
-                assign(x) => { if x.dest == i { return some(body); } }
+    defining-list: func(body: list<Node>, local-index: s64) -> option<list<Node>> {
+        for node in body {
+            match node.kind {
+                assign(assigned) => { if assigned.dest == local-index { return some(body); } }
                 _ => {}
             }
-            for index in 0..nested-count(n) {
-                match defining-list(nested-body(n, index), i) {
+            for index in 0..nested-count(node) {
+                match defining-list(nested-body(node, index), local-index) {
                     some(found) => { return some(found); }
                     none => {}
                 }
@@ -373,44 +377,44 @@ module gen {
 
     // whether a statement leaves the list it is in (in-loop: inside a loop of that list, where a
     // break or a continue of its own stays)
-    leaves: func(n: Node, in-loop: bool, inner: list<s64>) -> bool {
-        match n.kind {
-            return(v) => true,
-            break(l) => if l < 0 { !in-loop } else { !contains(inner, l) },
-            continue(l) => if l < 0 { !in-loop } else { !contains(inner, l) },
+    leaves: func(node: Node, in-loop: bool, inner: list<s64>) -> bool {
+        match node.kind {
+            return(_) => true,
+            break(label) => if label < 0 { !in-loop } else { !contains(inner, label) },
+            continue(label) => if label < 0 { !in-loop } else { !contains(inner, label) },
             _ => false,
         }
     }
 
     // the release before each way out inside a statement
-    before-exits: func(g: Gen, f: IrFunc, i: s64, n: Node, in-loop: bool, inner: list<s64>) {
-        let deeper = match n.kind {
-            loop(l) => true,
+    before-exits: func(generator: Gen, function: IrFunc, local-index: s64, node: Node, in-loop: bool, inner: list<s64>) {
+        let deeper = match node.kind {
+            loop(_) => true,
             _ => in-loop,
         };
-        for index in 0..nested-count(n) {
-            let b = nested-body(n, index);
+        for index in 0..nested-count(node) {
+            let nested = nested-body(node, index);
             let out: list<Node> = [];
-            for x in b {
-                if leaves(x, deeper, inner) { out.push(release-node(g, f, i)); }
-                else { before-exits(g, f, i, x, deeper, inner); }
-                out.push(x);
+            for statement in nested {
+                if leaves(statement, deeper, inner) { out.push(release-node(generator, function, local-index)); }
+                else { before-exits(generator, function, local-index, statement, deeper, inner); }
+                out.push(statement);
             }
-            replace-body(b, out);
+            replace-body(nested, out);
         }
     }
 
     // whether a statement is the local's release already (a writer's close, written)
-    is-release: func(n: Node, i: s64) -> bool {
-        match n.kind {
-            call(c) => {
-                if c.c-name != "yel_writer_close" && c.c-name != "yel_stream_release"
-                    && c.c-name != "yel_future_release" {
+    is-release: func(node: Node, local-index: s64) -> bool {
+        match node.kind {
+            call(called) => {
+                if called.c-name != "yel_writer_close" && called.c-name != "yel_stream_release"
+                    && called.c-name != "yel_future_release" {
                     return false;
                 }
-                for a in c.args {
-                    match a.kind {
-                        local(r) => { if r == i { return true; } }
+                for argument in called.args {
+                    match argument.kind {
+                        local(read-index) => { if read-index == local-index { return true; } }
                         _ => {}
                     }
                 }
@@ -421,21 +425,21 @@ module gen {
     }
 
     // the runtime's release of the local's end (a generic extern's: its item's type first)
-    release-node: func(g: Gen, f: IrFunc, i: s64) -> Node {
-        let t = resolve(f.locals[i].ty);
-        let item = match t {
-            stream-type(x) => x.item,
-            future-type(x) => x,
+    release-node: func(generator: Gen, function: IrFunc, local-index: s64) -> Node {
+        let given = resolve(function.locals[local-index].ty);
+        let item = match given {
+            stream-type(streamed) => streamed.item,
+            future-type(ended) => ended,
             _ => Type.unit-type,
         };
-        let c-name = match end-kind(t) {
+        let c-name = match end-kind(given) {
             "writer" => "yel_writer_close",
             "stream" => "yel_stream_release",
             _ => "yel_future_release",
         };
         let arg: TypeArg = { ty: item, key: false, };
-        type-arg-c(g, c-name, 0, arg);
-        let args = [type-arg(item, false), local(i, t),];
+        type-arg-c(generator, c-name, 0, arg);
+        let args = [type-arg(item, false), local(local-index, given),];
         call("", c-name, args, Type.unit-type, fx().call)
     }
 }

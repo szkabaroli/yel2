@@ -28,11 +28,11 @@ resource Program {
 module packages {
     // the directory a path is in ("." for none)
     dir-name: func(path: string) -> string {
-        let n = path.len();
-        for k in 0..n {
-            if path.byte-at(n - 1 - k) == 47 {
-                if k == n - 1 { return "/"; }
-                return path.substring(0, n - 1 - k);
+        let length = path.len();
+        for offset in 0..length {
+            if path.byte-at(length - 1 - offset) == 47 {
+                if offset == length - 1 { return "/"; }
+                return path.substring(0, length - 1 - offset);
             }
         }
         "."
@@ -43,16 +43,16 @@ module packages {
     clean-path: func(path: string) -> string {
         let parts: list<string> = [];
         let start = 0;
-        let n = path.len();
-        for i in 0..n + 1 {
-            if i == n || path.byte-at(i) == 47 {
-                let part = path.substring(start, i);
+        let length = path.len();
+        for index in 0..length + 1 {
+            if index == length || path.byte-at(index) == 47 {
+                let part = path.substring(start, index);
                 if part == ".." && parts.len() > 0 && parts[parts.len() - 1] != ".." {
                     parts.pop();
                 }
                 else if part != "." && part != "" { parts.push(part); }
-                else if part == "" && i == 0 { parts.push(""); }
-                start = i + 1;
+                else if part == "" && index == 0 { parts.push(""); }
+                start = index + 1;
             }
         }
         if parts.len() == 0 { return "."; }
@@ -97,21 +97,21 @@ module packages {
             files.push(dir);
         }
         let scopes: list<Scope> = [];
-        for f in files {
-            let source = wait diagnostics.read-source(prog.context, f);
-            let p = lower.reader(prog.context, source);
-            wait diagnostics.read-embeds(prog.context, f, lower.embedded(p));
-            p.scope = {
+        for file in files {
+            let source = wait diagnostics.read-source(prog.context, file);
+            let reading = lower.reader(prog.context, source);
+            wait diagnostics.read-embeds(prog.context, file, lower.embedded(reading));
+            reading.scope = {
                 pkg: pkg,
                 module: "",
-                file: f,
-                build: p.scope.build,
+                file: file,
+                build: reading.scope.build,
                 includes: map.new(),
                 requests: [],
                 private: "",
             };
-            lower.declarations(p, prog.decls);
-            scopes.push(p.scope);
+            lower.declarations(reading, prog.decls);
+            scopes.push(reading.scope);
         }
         // (a package with views: the compiler's view-host module too, what they do with the host's
         // dom; once: an editor's next check lists it as one of its files)
@@ -119,10 +119,10 @@ module packages {
         if pkg.views && !files.contains(host-file) {
             prog.context.overlays.set(host-file, view-host-source(pkg.views-dom));
             let source = wait diagnostics.read-source(prog.context, host-file);
-            let p = lower.reader(prog.context, source);
-            p.scope = { pkg: pkg, module: "", file: host-file, build: p.scope.build, includes: map.new(), requests: [], private: "", };
-            lower.declarations(p, prog.decls);
-            scopes.push(p.scope);
+            let reading = lower.reader(prog.context, source);
+            reading.scope = { pkg: pkg, module: "", file: host-file, build: reading.scope.build, includes: map.new(), requests: [], private: "", };
+            lower.declarations(reading, prog.decls);
+            scopes.push(reading.scope);
         }
         // an included package's items are keyed by its id
         if !root {
@@ -138,7 +138,7 @@ module packages {
             pkg.prefix = pkg.id + "/";
         }
         for sc in scopes {
-            for r in sc.requests { wait include(prog, pkg, sc, r); }
+            for request in sc.requests { wait include(prog, pkg, sc, request); }
         }
         pkg.state = 1;
         pkg
@@ -214,10 +214,10 @@ module packages {
             if at >= dirs.len() { break; }
             let here = dirs[at];
             at += 1;
-            for f in wait diagnostics.source-entries(prog.context, here) {
-                let path = here + "/" + f;
-                if ends-with(f, ".yel") {
-                    if ends-with(f, ".test.yel") && !with-tests { continue; }
+            for entry in wait diagnostics.source-entries(prog.context, here) {
+                let path = here + "/" + entry;
+                if ends-with(entry, ".yel") {
+                    if ends-with(entry, ".test.yel") && !with-tests { continue; }
                     files.push(path);
                 } else if nested && wait diagnostics.is-source-dir(prog.context, path) {
                     dirs.push(path);
@@ -228,18 +228,18 @@ module packages {
 
     // whether a directory's package is id: what its first file with a package line says
     @(private) declares: async func(prog: Program, dir: string, id: string) -> bool {
-        for f in wait diagnostics.source-entries(prog.context, dir) {
-            if !ends-with(f, ".yel") { continue; }
-            let source = wait diagnostics.read-source(prog.context, dir + "/" + f);
+        for entry in wait diagnostics.source-entries(prog.context, dir) {
+            if !ends-with(entry, ".yel") { continue; }
+            let source = wait diagnostics.read-source(prog.context, dir + "/" + entry);
             let root = tree.root(grammar.parse-file(prog.context, source));
-            for n in tree.child-nodes(root) {
-                if tree.kind(n) != NodeKind.package-decl { continue; }
+            for node in tree.child-nodes(root) {
+                if tree.kind(node) != NodeKind.package-decl { continue; }
                 let written: list<string> = [];
                 let past = false;
-                for t in tree.own-tokens(n) {
-                    if t.green.text == ";" { break; }
-                    if past { written.push(t.green.text); }
-                    if t.green.text == "package" { past = true; }
+                for token in tree.own-tokens(node) {
+                    if token.green.text == ";" { break; }
+                    if past { written.push(token.green.text); }
+                    if token.green.text == "package" { past = true; }
                 }
                 return without-version(written.join("")) == id;
             }
@@ -251,9 +251,9 @@ module packages {
     core-dir: func(prog: Program) -> string { clean-path(prog.library + "/core") }
 
     // an include: its package loaded (once), and each module it names bound in the file's scope
-    include: async func(prog: Program, pkg: Package, sc: Scope, r: Include) {
-        let at = "{sc.file}:{r.span.line}:{r.span.col}";
-        let spec = r.spec;
+    include: async func(prog: Program, pkg: Package, sc: Scope, request: Include) {
+        let at = "{sc.file}:{request.span.line}:{request.span.col}";
+        let spec = request.spec;
         let dir = "";
         let id = "";
         if starts-at(spec, 0, "./") || starts-at(spec, 0, "../") {
@@ -268,14 +268,14 @@ module packages {
             let from-std = starts-with(id, "std:");
             let slash = find-byte(id, 47).unwrap-or(-1);
             if slash > 0 {
-                let m = id.substring(slash + 1, id.len());
+                let module-name = id.substring(slash + 1, id.len());
                 id = id.substring(0, slash);
-                if r.names.len() != 1 || r.names[0] != m {
+                if request.names.len() != 1 || request.names[0] != module-name {
                     diagnostics.report(
                         prog.context,
                         diagnostics.error-at(
                             at,
-                            "{spec} is module {m}: include {m} (or {m} as another name)",
+                            "{spec} is module {module-name}: include {module-name} (or {module-name} as another name)",
                         ),
                     );
                 }
@@ -290,12 +290,12 @@ module packages {
             }
             let dirs: list<string> = if from-std { [prog.library,] } else { [dir-name(pkg.dir),] };
             if !from-std {
-                for d in prog.search { dirs.push(d); }
+                for directory in prog.search { dirs.push(directory); }
             }
             // (a directory of that name only where it is that package: a package's folder of
             // its own named ui is not yel:ui, nor the package including it)
-            for d in dirs {
-                let candidate = d + "/" + name;
+            for directory in dirs {
+                let candidate = directory + "/" + name;
                 if dir == ""
                     && clean-path(candidate) != clean-path(pkg.dir)
                     && wait diagnostics.is-source-dir(prog.context, candidate)
@@ -311,31 +311,31 @@ module packages {
                 wait wit-index(prog);
                 if prog.wit.has(id) {
                     let wp = prog.wit[id];
-                    for i in 0..r.names.len() {
-                        if sc.includes.has(r.aliases[i]) {
+                    for index in 0..request.names.len() {
+                        if sc.includes.has(request.aliases[index]) {
                             diagnostics.report(
                                 prog.context,
-                                diagnostics.error-at(at, "{r.aliases[i]} is included twice"),
+                                diagnostics.error-at(at, "{request.aliases[index]} is included twice"),
                             );
                         }
                         let own = if from-std {
-                            std-module(prog, "{name}-{r.names[i]}")
+                            std-module(prog, "{name}-{request.names[index]}")
                         } else {
                             ""
                         };
-                        sc.includes.set(r.aliases[i], if own != "" { own } else {
-                            wait wit-interface(prog, wp, r.names[i], at)
+                        sc.includes.set(request.aliases[index], if own != "" { own } else {
+                            wait wit-interface(prog, wp, request.names[index], at)
                         });
                     }
                     return;
                 }
-                let d = diagnostics.error-at(at, "no package {asked}");
+                let problem = diagnostics.error-at(at, "no package {asked}");
                 let wit = if asked == id { "a WIT package" } else { "WASI's {id}" };
                 diagnostics.note(
-                    d,
+                    problem,
                     "looked for {name}/ in {dirs.join(", ")}, and for {wit} in {prog.wit-dirs.join(", ")}",
                 );
-                diagnostics.report(prog.context, d);
+                diagnostics.report(prog.context, problem);
                 return;
             }
         } else {
@@ -367,34 +367,34 @@ module packages {
                 diagnostics.error-at(at, "{dir} is package {target.id}, not {id}"),
             );
         }
-        for i in 0..r.names.len() {
-            let m = r.names[i];
-            if !target.modules.has(m) {
+        for index in 0..request.names.len() {
+            let module-name = request.names[index];
+            if !target.modules.has(module-name) {
                 diagnostics.report(
                     prog.context,
-                    diagnostics.error-at(at, "package {target.id} has no module {m}"),
+                    diagnostics.error-at(at, "package {target.id} has no module {module-name}"),
                 );
             }
             // (a private module: its own package's, never another's to include)
-            if target.private-modules.has(m) && target.prefix != sc.pkg.prefix {
-                let d = diagnostics.error(
-                    r.span,
-                    "module {m} is private to package {target.id}",
+            if target.private-modules.has(module-name) && target.prefix != sc.pkg.prefix {
+                let problem = diagnostics.error(
+                    request.span,
+                    "module {module-name} is private to package {target.id}",
                     "",
                 );
                 diagnostics.note(
-                    d,
-                    "declared @(private) at {where(prog, target.private-modules[m].span)}",
+                    problem,
+                    "declared @(private) at {where(prog, target.private-modules[module-name].span)}",
                 );
-                diagnostics.report(prog.context, d);
+                diagnostics.report(prog.context, problem);
             }
-            if sc.includes.has(r.aliases[i]) {
+            if sc.includes.has(request.aliases[index]) {
                 diagnostics.report(
                     prog.context,
-                    diagnostics.error-at(at, "{r.aliases[i]} is included twice"),
+                    diagnostics.error-at(at, "{request.aliases[index]} is included twice"),
                 );
             }
-            sc.includes.set(r.aliases[i], target.prefix + m);
+            sc.includes.set(request.aliases[index], target.prefix + module-name);
         }
     }
 
@@ -408,9 +408,9 @@ module packages {
     }
 
     // a declaration's key: its package's prefix, its module's name and a dot, its name
-    item-key: func(sc: Scope, n: string) -> string {
-        if sc.module == "" { return sc.pkg.prefix + n; }
-        sc.pkg.prefix + sc.module + "." + n
+    item-key: func(sc: Scope, name: string) -> string {
+        if sc.module == "" { return sc.pkg.prefix + name; }
+        sc.pkg.prefix + sc.module + "." + name
     }
 
     // every declaration named by its key, and what not everyone may name (a private declaration,
@@ -426,28 +426,28 @@ module packages {
         let root = prog.root;
         let tests: list<Func> = [];
         let kept: list<Decl> = [];
-        for d in prog.decls {
-            match d {
-                func-decl(f) => {
-                    if f.scope.pkg.dir == tested {
-                        if f.is-test { tests.push(f); }
-                        if f.name == "main" && f.scope.module == "" { continue; }
+        for declaration in prog.decls {
+            match declaration {
+                func-decl(function) => {
+                    if function.scope.pkg.dir == tested {
+                        if function.is-test { tests.push(function); }
+                        if function.name == "main" && function.scope.module == "" { continue; }
                     }
                 }
                 _ => {}
             }
-            kept.push(d);
+            kept.push(declaration);
         }
         prog.decls = kept;
         // (as the package's own files name each: module.name, or name)
-        let names = tests.map({ f -> if f.scope.module == "" { f.name } else { "{f.scope.module}.{f.name}" } });
+        let names = tests.map({ function -> if function.scope.module == "" { function.name } else { "{function.scope.module}.{function.name}" } });
         let lines = if prog.context.test-exports { exported-runner(prog, tests, names) } else { process-runner(tests, names) };
         let base = if wait diagnostics.is-source-dir(prog.context, root.dir) { root.dir } else { dir-name(root.dir) };
         let path = "{base}/yelc-test-runner.yel";
         prog.context.overlays.set(path, lines.join("\n"));
         let source = wait diagnostics.read-source(prog.context, path);
-        let p = lower.reader(prog.context, source);
-        p.scope = {
+        let reading = lower.reader(prog.context, source);
+        reading.scope = {
             pkg: root,
             module: "",
             file: path,
@@ -456,8 +456,8 @@ module packages {
             requests: [],
             private: "",
         };
-        lower.declarations(p, prog.decls);
-        for r in p.scope.requests { wait include(prog, root, p.scope, r); }
+        lower.declarations(reading, prog.decls);
+        for request in reading.scope.requests { wait include(prog, root, reading.scope, request); }
     }
 
     // the runner as a program: main runs each test the arguments name (all, for none) in a child
@@ -501,8 +501,8 @@ module packages {
     // call, and a fresh instance runs the next: tools/test-component.sh). The package's other
     // modules are its own, not exports
     exported-runner: func(prog: Program, tests: list<Func>, names: list<string>) -> list<string> {
-        for d in prog.decls {
-            let sc = declared-scope(d);
+        for declaration in prog.decls {
+            let sc = declared-scope(declaration);
             if sc.pkg.dir == prog.root.dir && sc.module != "" && sc.private == "" { sc.private = "package"; }
         }
         let quoted = names.map({ named -> "\"{named}\"" });
@@ -554,8 +554,8 @@ module packages {
     }
 
     // the file of a test's snapshots: snapshots/<file>.snap beside its file
-    snapshot-file: func(f: Func) -> string {
-        let file = f.scope.file;
+    snapshot-file: func(function: Func) -> string {
+        let file = function.scope.file;
         let slash = file.find-last("/").unwrap-or(-1);
         let base = file.substring(slash + 1, file.len());
         let stem = if base.ends-with(".yel") { base.substring(0, base.len() - 4) } else { base };
@@ -563,17 +563,17 @@ module packages {
     }
 
     // where a declaration is declared
-    declared-scope: func(d: Decl) -> Scope {
-        match d {
-            func-decl(x) => x.scope,
-            extern-decl(x) => x.scope,
-            record-decl(x) => x.scope,
-            variant-decl(x) => x.scope,
-            flags-decl(x) => x.scope,
-            resource-decl(x) => x.scope,
-            const-decl(x) => x.scope,
-            global-decl(x) => x.scope,
-            type-decl(x) => x.scope,
+    declared-scope: func(declaration: Decl) -> Scope {
+        match declaration {
+            func-decl(declared) => declared.scope,
+            extern-decl(declared) => declared.scope,
+            record-decl(declared) => declared.scope,
+            variant-decl(declared) => declared.scope,
+            flags-decl(declared) => declared.scope,
+            resource-decl(declared) => declared.scope,
+            const-decl(declared) => declared.scope,
+            global-decl(declared) => declared.scope,
+            type-decl(declared) => declared.scope,
         }
     }
 
@@ -589,49 +589,49 @@ module packages {
                 });
             }
         };
-        for d in prog.decls {
-            match d {
-                func-decl(f) => {
-                    f.name = item-key(f.scope, f.name);
-                    keep(f.name, f.scope, f.span);
+        for declaration in prog.decls {
+            match declaration {
+                func-decl(function) => {
+                    function.name = item-key(function.scope, function.name);
+                    keep(function.name, function.scope, function.span);
                 }
-                extern-decl(x) => {
-                    x.name = item-key(x.scope, x.name);
-                    keep(x.name, x.scope, x.span);
+                extern-decl(declared) => {
+                    declared.name = item-key(declared.scope, declared.name);
+                    keep(declared.name, declared.scope, declared.span);
                 }
-                record-decl(r) => {
-                    r.name = item-key(r.scope, r.name);
-                    keep(r.name, r.scope, r.span);
+                record-decl(declared) => {
+                    declared.name = item-key(declared.scope, declared.name);
+                    keep(declared.name, declared.scope, declared.span);
                 }
-                variant-decl(v) => {
-                    v.name = item-key(v.scope, v.name);
-                    keep(v.name, v.scope, v.span);
+                variant-decl(declared) => {
+                    declared.name = item-key(declared.scope, declared.name);
+                    keep(declared.name, declared.scope, declared.span);
                 }
                 flags-decl(fl) => {
                     fl.name = item-key(fl.scope, fl.name);
                     keep(fl.name, fl.scope, fl.span);
                 }
-                resource-decl(r) => {
-                    r.name = item-key(r.scope, r.name);
-                    keep(r.name, r.scope, r.span);
+                resource-decl(declared) => {
+                    declared.name = item-key(declared.scope, declared.name);
+                    keep(declared.name, declared.scope, declared.span);
                 }
-                const-decl(x) => {
-                    x.name = item-key(x.scope, x.name);
-                    keep(x.name, x.scope, x.span);
+                const-decl(declared) => {
+                    declared.name = item-key(declared.scope, declared.name);
+                    keep(declared.name, declared.scope, declared.span);
                 }
-                global-decl(x) => {
-                    x.name = item-key(x.scope, x.name);
-                    keep(x.name, x.scope, x.span);
+                global-decl(declared) => {
+                    declared.name = item-key(declared.scope, declared.name);
+                    keep(declared.name, declared.scope, declared.span);
                 }
-                type-decl(x) => {
-                    x.name = item-key(x.scope, x.name);
-                    keep(x.name, x.scope, x.span);
+                type-decl(declared) => {
+                    declared.name = item-key(declared.scope, declared.name);
+                    keep(declared.name, declared.scope, declared.span);
                 }
             }
         }
         for pkg in prog.packages.values() {
-            for m in pkg.private-modules.keys() {
-                prog.visibility.set(pkg.prefix + m, pkg.private-modules[m]);
+            for module-name in pkg.private-modules.keys() {
+                prog.visibility.set(pkg.prefix + module-name, pkg.private-modules[module-name]);
             }
         }
     }
@@ -651,13 +651,13 @@ module packages {
     wit-index: async func(prog: Program) {
         if prog.wit-read { return; }
         prog.wit-read = true;
-        for d in prog.wit-dirs {
-            if wait diagnostics.is-dir(d) {
-                for f in wait diagnostics.entries(d) {
-                    if ends-with(f, ".wit") {
+        for directory in prog.wit-dirs {
+            if wait diagnostics.is-dir(directory) {
+                for entry in wait diagnostics.entries(directory) {
+                    if ends-with(entry, ".wit") {
                         let wp = grammar.wit-file(
                             prog.context,
-                            wait diagnostics.read-source(prog.context, d + "/" + f),
+                            wait diagnostics.read-source(prog.context, directory + "/" + entry),
                         );
                         if wp.id == "" { continue; }
                         // (a package in several files, as WIT allows: each file's interfaces
@@ -706,7 +706,7 @@ module packages {
             views-dom: "",
             included: true,
         };
-        for n in wp.interfaces.keys() { pkg.modules.set(n, "extern"); }
+        for name in wp.interfaces.keys() { pkg.modules.set(name, "extern"); }
         let sc: Scope = {
             pkg: pkg,
             module: iface,
@@ -719,41 +719,41 @@ module packages {
         let span: Span = { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, };
         // each name the interface can write: its uses', then its own types
         let names: map<string, Type> = map.new();
-        for u in face.uses {
-            let src = if u.pkg == "" { wp } else { wait wit-package(prog, u.pkg, at) };
-            let skey = wait wit-interface(prog, src, u.iface, at);
-            for i in 0..u.names.len() {
-                let k = skey + "." + u.names[i];
+        for used in face.uses {
+            let src = if used.pkg == "" { wp } else { wait wit-package(prog, used.pkg, at) };
+            let skey = wait wit-interface(prog, src, used.iface, at);
+            for index in 0..used.names.len() {
+                let key = skey + "." + used.names[index];
                 // (one missing: told, and an error type in its place, so the phase goes on)
-                if prog.wit-types.has(k) {
-                    names.set(u.aliases[i], prog.wit-types[k]);
+                if prog.wit-types.has(key) {
+                    names.set(used.aliases[index], prog.wit-types[key]);
                 } else {
                     diagnostics.report(
                         prog.context,
-                        diagnostics.error-at(at, "{skey} has no type {u.names[i]}"),
+                        diagnostics.error-at(at, "{skey} has no type {used.names[index]}"),
                     );
-                    names.set(u.aliases[i], Type.error-type);
+                    names.set(used.aliases[index], Type.error-type);
                 }
             }
         }
-        for t in face.types {
-            if t.kind != "alias" { names.set(t.name, Type.named(intern(mkey + "." + t.name))); }
+        for declared in face.types {
+            if declared.kind != "alias" { names.set(declared.name, Type.named(intern(mkey + "." + declared.name))); }
         }
-        for t in face.types {
-            if t.kind == "alias" { names.set(t.name, wit-resolve(names, t.target)); }
+        for declared in face.types {
+            if declared.kind == "alias" { names.set(declared.name, wit-resolve(names, declared.target)); }
         }
         // the types that need what is not there yet are left out, and so is what needs them
         let out: list<Decl> = [];
-        for t in face.types {
-            if t.kind == "record" {
-                let types = wit-resolve-all(names, t.types);
-                if wit-missing-all(types) { names.set(t.name, Type.named(intern("!" + t.name))); }
+        for declared in face.types {
+            if declared.kind == "record" {
+                let types = wit-resolve-all(names, declared.types);
+                if wit-missing-all(types) { names.set(declared.name, Type.named(intern("!" + declared.name))); }
                 else {
                     out.push(Decl.record-decl({
                         span: span,
                         scope: sc,
-                        name: t.name,
-                        fields: t.fields,
+                        name: declared.name,
+                        fields: declared.fields,
                         field-types: types,
                         // (a WIT record is a value: copied across)
                         value: true,
@@ -761,59 +761,59 @@ module packages {
                         ignored: [],
                     }));
                 }
-            } else if t.kind == "variant" || t.kind == "enum" {
+            } else if declared.kind == "variant" || declared.kind == "enum" {
                 let cases: list<CaseDecl> = [];
                 let missing = false;
-                for k in t.cases {
-                    let pt = wit-resolve(names, k.payload);
+                for branch in declared.cases {
+                    let pt = wit-resolve(names, branch.payload);
                     if wit-missing(pt) { missing = true; }
-                    cases.push({ name: k.name, has-payload: k.has-payload, payload: pt, });
+                    cases.push({ name: branch.name, has-payload: branch.has-payload, payload: pt, });
                 }
-                if missing { names.set(t.name, Type.named(intern("!" + t.name))); }
+                if missing { names.set(declared.name, Type.named(intern("!" + declared.name))); }
                 else {
                     out.push(Decl.variant-decl({
                         span: span,
                         scope: sc,
-                        name: t.name,
+                        name: declared.name,
                         cases: cases,
                     }));
                 }
-            } else if t.kind == "flags" {
+            } else if declared.kind == "flags" {
                 out.push(Decl.flags-decl({
                     span: span,
                     scope: sc,
-                    name: t.name,
-                    flags: t.fields,
+                    name: declared.name,
+                    flags: declared.fields,
                 }));
-            } else if t.kind == "resource" {
-                out.push(Decl.resource-decl({ span: span, scope: sc, name: t.name, }));
+            } else if declared.kind == "resource" {
+                out.push(Decl.resource-decl({ span: span, scope: sc, name: declared.name, }));
             }
         }
-        for t in face.types { prog.wit-types.set(mkey + "." + t.name, names[t.name]); }
+        for declared in face.types { prog.wit-types.set(mkey + "." + declared.name, names[declared.name]); }
         let module = mkey + (if wp.version == "" { "" } else { "@" + wp.version });
-        for f in face.funcs { wit-extern(names, sc, span, module, f.name, f, [], [], out); }
-        for t in face.types {
-            if t.kind == "resource" {
-                let self = Type.named(intern(mkey + "." + t.name));
-                for f in t.funcs {
-                    let wit-name = if f.kind == "constructor" {
-                        "[constructor]{t.name}"
+        for function in face.funcs { wit-extern(names, sc, span, module, function.name, function, [], [], out); }
+        for declared in face.types {
+            if declared.kind == "resource" {
+                let self = Type.named(intern(mkey + "." + declared.name));
+                for function in declared.funcs {
+                    let wit-name = if function.kind == "constructor" {
+                        "[constructor]{declared.name}"
                     } else {
-                        "[{f.kind}]{t.name}.{f.name}"
+                        "[{function.kind}]{declared.name}.{function.name}"
                     };
-                    let params: list<string> = if f.kind == "method" { ["self",] } else { [] };
-                    let types: list<Type> = if f.kind == "method" { [self,] } else { [] };
+                    let params: list<string> = if function.kind == "method" { ["self",] } else { [] };
+                    let types: list<Type> = if function.kind == "method" { [self,] } else { [] };
                     wit-extern(names, sc, span, module, wit-name, {
-                        name: "{t.name}.{f.name}",
-                        kind: f.kind,
-                        params: f.params,
-                        types: f.types,
-                        result: f.result,
-                        is-async: f.is-async,
+                        name: "{declared.name}.{function.name}",
+                        kind: function.kind,
+                        params: function.params,
+                        types: function.types,
+                        result: function.result,
+                        is-async: function.is-async,
                     }, params, types, out,);
                 }
                 let drop: WitFunc = {
-                    name: "{t.name}.drop",
+                    name: "{declared.name}.drop",
                     kind: "method",
                     params: [],
                     types: [],
@@ -825,7 +825,7 @@ module packages {
                     sc,
                     span,
                     module,
-                    "[resource-drop]{t.name}",
+                    "[resource-drop]{declared.name}",
                     drop,
                     ["self",],
                     [self,],
@@ -833,7 +833,7 @@ module packages {
                 );
             }
         }
-        for d in out { prog.decls.push(d); }
+        for declaration in out { prog.decls.push(declaration); }
         mkey
     }
 
@@ -845,23 +845,23 @@ module packages {
         span: Span,
         module: string,
         wit-name: string,
-        f: WitFunc,
+        function: WitFunc,
         first: list<string>,
         first-types: list<Type>,
         out: list<Decl>,
     ) {
         let params: list<string> = [];
         let types: list<Type> = [];
-        for p in first { params.push(p); }
-        for t in first-types { types.push(t); }
-        for p in f.params { params.push(p); }
-        for t in wit-resolve-all(names, f.types) { types.push(t); }
-        let result = wit-resolve(names, f.result);
+        for parameter in first { params.push(parameter); }
+        for parameter-type in first-types { types.push(parameter-type); }
+        for parameter in function.params { params.push(parameter); }
+        for parameter-type in wit-resolve-all(names, function.types) { types.push(parameter-type); }
+        let result = wit-resolve(names, function.result);
         if wit-missing-all(types) || wit-missing(result) { return; }
         out.push(Decl.extern-decl({
             span: span,
             scope: sc,
-            name: f.name,
+            name: function.name,
             type-params: [],
             params: params,
             param-types: types,
@@ -871,7 +871,7 @@ module packages {
             gives: [],
             wit-module: module,
             wit-name: wit-name,
-            is-async: f.is-async,
+            is-async: function.is-async,
             defaults: params.map({ _ -> none }),
         }));
     }
@@ -891,43 +891,43 @@ module packages {
     }
 
     // a WIT type with its names as the interface's types
-    wit-resolve: func(names: map<string, Type>, t: Type) -> Type {
-        match t {
-            named(n) => if names.has(name-text(n)) {
-                names[name-text(n)]
-            } else if starts-at(name-text(n), 0, "!") || starts-at(name-text(n), 0, "~") {
-                t
+    wit-resolve: func(names: map<string, Type>, given: Type) -> Type {
+        match given {
+            named(written) => if names.has(name-text(written)) {
+                names[name-text(written)]
+            } else if starts-at(name-text(written), 0, "!") || starts-at(name-text(written), 0, "~") {
+                given
             } else {
-                Type.named(intern("!" + name-text(n)))
+                Type.named(intern("!" + name-text(written)))
             },
             // WIT's stream: its reading end
-            stream-type(x) => Type.stream-type({
-                item: wit-resolve(names, x.item),
+            stream-type(streamed) => Type.stream-type({
+                item: wit-resolve(names, streamed.item),
                 writer: false,
             }),
-            _ => map-children(t, { x -> wit-resolve(names, x) }),
+            _ => map-children(given, { child -> wit-resolve(names, child) }),
         }
     }
 
     wit-resolve-all: func(names: map<string, Type>, ts: list<Type>) -> list<Type> {
         let out: list<Type> = [];
-        for t in ts { out.push(wit-resolve(names, t)); }
+        for given in ts { out.push(wit-resolve(names, given)); }
         out
     }
 
     // whether a param's or result's type needs what is not there yet: a name not known
-    wit-missing: func(t: Type) -> bool { wit-missing-inside(t) }
+    wit-missing: func(given: Type) -> bool { wit-missing-inside(given) }
 
-    wit-missing-inside: func(t: Type) -> bool {
-        match t {
-            named(n) => starts-at(name-text(n), 0, "!") || starts-at(name-text(n), 0, "~"),
-            _ => any-child(t, wit-missing-inside),
+    wit-missing-inside: func(given: Type) -> bool {
+        match given {
+            named(written) => starts-at(name-text(written), 0, "!") || starts-at(name-text(written), 0, "~"),
+            _ => any-child(given, wit-missing-inside),
         }
     }
 
     wit-missing-all: func(ts: list<Type>) -> bool {
-        for t in ts {
-            if wit-missing(t) { return true; }
+        for given in ts {
+            if wit-missing(given) { return true; }
         }
         false
     }

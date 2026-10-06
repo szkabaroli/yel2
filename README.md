@@ -80,9 +80,11 @@ Windows is not supported yet. Every install needs a C compiler (`cc`, or `CC`), 
 ## Usage
 
 ```sh
+yelc run hello.yel [args]    # run a program, interpreted: no C made, no C compiler needed
 yelc hello.yel hello.c       # a program (a file, or a package's directory) to C
 yelc build                   # the project's build.yel: its steps (yelc build --help)
 yelc check src               # errors only, nothing made
+yelc lint src                # the project's lint.yel's rules on the package, interpreted
 yelc test src out.c          # the package's @(test) funcs as a program
 yelc --fmt src               # format in place
 ```

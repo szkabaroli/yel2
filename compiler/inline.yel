@@ -9,20 +9,20 @@ module opt {
     size: func(body: list<Node>) -> s64 { flatten(body).len() }
 
     // whether a func can reach itself through its calls
-    recursive: func(p: Facts, name: Name) -> bool {
+    recursive: func(facts: Facts, name: Name) -> bool {
         let seen: map<Name, bool> = map.new();
         let todo: list<Name> = [name,];
         let first = true;
         loop {
             if todo.len() == 0 { return false; }
-            let n = todo.pop();
-            if !first && n == name { return true; }
+            let current = todo.pop();
+            if !first && current == name { return true; }
             first = false;
-            if !seen.has(n) && p.callees.has(n) {
-                seen.set(n, true);
-                for c in p.callees[n] {
-                    if c == name { return true; }
-                    todo.push(c);
+            if !seen.has(current) && facts.callees.has(current) {
+                seen.set(current, true);
+                for callee in facts.callees[current] {
+                    if callee == name { return true; }
+                    todo.push(callee);
                 }
             }
         }
@@ -31,38 +31,38 @@ module opt {
     // the funcs a node takes as values or calls inside an expression (their C names, into out),
     // and the writers that show a value (an interpolation's, a match no arm fits: a func's C name
     // each; std's walker the backends keep as a root)
-    func-refs: func(n: Node, out: list<Name>) {
-        match n.kind {
-            func-ref(x) => out.push(x.name),
-            call(x) => if x.key != "" { out.push(x.name); },
-            interp(x) => {
-                for w in x.formatters {
-                    match w {
+    func-refs: func(node: Node, out: list<Name>) {
+        match node.kind {
+            func-ref(reference) => out.push(reference.name),
+            call(reference) => if reference.key != "" { out.push(reference.name); },
+            interp(reference) => {
+                for formatter in reference.formatters {
+                    match formatter {
                         writer(name) => out.push(intern(name)),
                         _ => {}
                     }
                 }
             }
             // (a match no arm fits shows its value by one too)
-            unreachable(x) => match x.formatter {
+            unreachable(reference) => match reference.formatter {
                 writer(name) => out.push(intern(name)),
                 _ => {}
             },
             _ => {}
         }
-        for index in 0..operand-count(n) { func-refs(operand(n, index), out); }
+        for index in 0..operand-count(node) { func-refs(operand(node, index), out); }
     }
 
     // whether a func returns a record it makes
-    returns-fresh: func(p: Facts, f: IrFunc) -> bool {
-        let gr = p.groups[f.name];
-        for n in flatten(f.body) {
-            match n.kind {
-                return(v) => {
-                    match v.kind {
-                        local(r) => {
-                            for d in gr.records {
-                                if find(gr, r) == find(gr, d) { return true; }
+    returns-fresh: func(facts: Facts, function: IrFunc) -> bool {
+        let gr = facts.groups[function.name];
+        for statement in flatten(function.body) {
+            match statement.kind {
+                return(returned) => {
+                    match returned.kind {
+                        local(local) => {
+                            for made in gr.records {
+                                if find(gr, local) == find(gr, made) { return true; }
                             }
                         }
                         _ => {}
@@ -77,27 +77,27 @@ module opt {
     // the funcs a root reaches by its calls (and the funcs they take as values), in funcs' order
     reachable: func(funcs: list<IrFunc>, roots: list<string>) -> list<IrFunc> {
         let by-name: map<Name, IrFunc> = map.new();
-        for f in funcs { by-name.set(f.name, f); }
+        for function in funcs { by-name.set(function.name, function); }
         let reached: map<Name, bool> = map.new();
         let todo: list<Name> = [];
-        for r in roots { todo.push(intern(r)); }
+        for root in roots { todo.push(intern(root)); }
         loop {
             if todo.len() == 0 { break; }
-            let n = todo.pop();
-            if !reached.has(n) && by-name.has(n) {
-                reached.set(n, true);
+            let current = todo.pop();
+            if !reached.has(current) && by-name.has(current) {
+                reached.set(current, true);
                 let out: list<Name> = [];
-                calls(by-name[n].body, out, map.new());
-                for s in flatten(by-name[n].body) { func-refs(s, out); }
-                for c in out {
-                    todo.push(c);
+                calls(by-name[current].body, out, map.new());
+                for statement in flatten(by-name[current].body) { func-refs(statement, out); }
+                for callee in out {
+                    todo.push(callee);
                     // an async func's call begun (s_<name>): its step (u_<name>)
-                    let text = name-text(c);
+                    let text = name-text(callee);
                     if starts-at(text, 0, "s_") { todo.push(intern("u_" + text.substring(2, text.len()))); }
                 }
             }
         }
-        funcs.filter({ f -> reached.has(f.name) })
+        funcs.filter({ function -> reached.has(function.name) })
     }
 
     // the program optimized (see the top of this file); roots: the funcs kept whatever calls them
@@ -105,23 +105,27 @@ module opt {
     optimize: func(
         funcs: list<IrFunc>,
         pointer-types: map<Name, bool>,
+        value-payloads: map<Name, list<Type>>,
         func-holders: map<Name, bool>,
         mode: string,
         roots: list<string>,
         wit: set<Name>,
         externs: map<string, RuntimeEffect>,
     ) -> list<IrFunc> {
-        let p: Facts = {
+        let facts: Facts = {
             funcs: map.new(),
             param-escapes: map.new(),
             param-kept-in: map.new(),
             param-gives: map.new(),
             param-writes: map.new(),
+            param-lent: map.new(),
             param-changes: map.new(),
             fresh-result: map.new(),
+            new-top: map.new(),
             wit: wit,
             externs: externs,
             pointer-types: pointer-types,
+            value-payloads: value-payloads,
             observable-types: map.new(),
             func-holders: func-holders,
             groups: map.new(),
@@ -130,58 +134,58 @@ module opt {
             mutable-locals: map.new(),
             env-escapes: map.new(),
         };
-        for f in funcs { p.funcs.set(f.name, f); }
-        param-escapes(p, funcs);
+        for function in funcs { facts.funcs.set(function.name, function); }
+        param-escapes(facts, funcs);
         let counts: map<Name, s64> = map.new();
-        for f in funcs { calls(f.body, [], counts); }
+        for function in funcs { calls(function.body, [], counts); }
         let rooted: set<Name> = set.new();
-        for r in roots { rooted.add(intern(r)); }
+        for root in roots { rooted.add(intern(root)); }
         let inline: map<Name, bool> = map.new();
-        for f in funcs {
-            let n = counts.get-or(f.name, 0);
+        for function in funcs {
+            let count = counts.get-or(function.name, 0);
             let small = if mode == "speed" { 40 } else { 0 };
-            if !rooted.has(f.name) && n > 0 && (n == 1 || size(f.body) <= small)
-                && returns-fresh(p, f) && !recursive(p, f.name) {
-                inline.set(f.name, true);
+            if !rooted.has(function.name) && count > 0 && (count == 1 || size(function.body) <= small)
+                && returns-fresh(facts, function) && !recursive(facts, function.name) {
+                inline.set(function.name, true);
             }
         }
         // callees before their callers, so what is inlined is already inlined into
         let done: map<Name, bool> = map.new();
-        for f in funcs { inline-into(p, f, inline, done); }
+        for function in funcs { inline-into(facts, function, inline, done); }
         // what is still called (from a root) is kept
         let kept = reachable(funcs, roots);
-        param-escapes(p, kept);
-        for f in kept { place-records(p, f); }
+        param-escapes(facts, kept);
+        for function in kept { place-records(facts, function); }
         kept
     }
 
-    inline-into: func(p: Facts, f: IrFunc, inline: map<Name, bool>, done: map<Name, bool>) {
-        if done.has(f.name) { return; }
-        done.set(f.name, true);
+    inline-into: func(facts: Facts, function: IrFunc, inline: map<Name, bool>, done: map<Name, bool>) {
+        if done.has(function.name) { return; }
+        done.set(function.name, true);
         let out: list<Name> = [];
-        calls(f.body, out, map.new());
-        for c in out {
-            if inline.has(c) && p.funcs.has(c) {
-                inline-into(p, p.funcs[c], inline, done);
+        calls(function.body, out, map.new());
+        for callee in out {
+            if inline.has(callee) && facts.funcs.has(callee) {
+                inline-into(facts, facts.funcs[callee], inline, done);
             }
         }
-        inline-body(p, f, f.body, inline);
+        inline-body(facts, function, function.body, inline);
     }
 
     // a body with the calls of funcs to inline spliced in, in place
-    inline-body: func(p: Facts, f: IrFunc, body: list<Node>, inline: map<Name, bool>) {
+    inline-body: func(facts: Facts, function: IrFunc, body: list<Node>, inline: map<Name, bool>) {
         let out: list<Node> = [];
-        for n in body {
-            let c = callee(n).unwrap-or(f.name);
-            if inline.has(c) && c != f.name {
-                let dest = match n.kind {
-                    assign(x) => x.dest,
+        for statement in body {
+            let target = callee(statement).unwrap-or(function.name);
+            if inline.has(target) && target != function.name {
+                let dest = match statement.kind {
+                    assign(assignment) => assignment.dest,
                     _ => -1,
                 };
-                for s in splice(p, f, p.funcs[c], value(n), dest) { out.push(s); }
+                for spliced in splice(function, facts.funcs[target], value(statement), dest) { out.push(spliced); }
             } else {
-                for index in 0..nested-count(n) { inline-body(p, f, nested-body(n, index), inline); }
-                out.push(n);
+                for index in 0..nested-count(statement) { inline-body(facts, function, nested-body(statement, index), inline); }
+                out.push(statement);
             }
         }
         replace-body(body, out);
@@ -189,19 +193,19 @@ module opt {
 
     // a call of g in f, as g's body (its params given the arguments, its returns leaving the block
     // with their value in dest)
-    splice: func(p: Facts, f: IrFunc, g: IrFunc, call-n: Node, dest: s64) -> list<Node> {
+    splice: func(function: IrFunc, inlined: IrFunc, call-n: Node, dest: s64) -> list<Node> {
         let args = match call-n.kind {
-            call(c) => c.args,
+            call(called) => called.args,
             _ => [],
         };
-        let base = f.locals.len();
-        for l in g.locals { f.locals.push({ ty: l.ty, name: l.name, binding: l.binding, }); }
-        let label = f.labels;
-        f.labels += 1 + g.labels;
+        let base = function.locals.len();
+        for local in inlined.locals { function.locals.push({ ty: local.ty, name: local.name, binding: local.binding, }); }
+        let label = function.labels;
+        function.labels += 1 + inlined.labels;
         let out: list<Node> = [];
-        for i in 0..g.params.len() { out.push(assign(base + g.params[i], args[i])); }
-        let c: Clone = { base: base, lbase: label + 1, exit: label, dest: dest, };
-        out.push(block-stmt(clone-body(c, g.body), label));
+        for index in 0..inlined.params.len() { out.push(assign(base + inlined.params[index], args[index])); }
+        let called: Clone = { base: base, lbase: label + 1, exit: label, dest: dest, };
+        out.push(block-stmt(clone-body(called, inlined.body), label));
         out
     }
 }
@@ -211,105 +215,105 @@ module opt {
 resource Clone { base: s64, lbase: s64, exit: s64, dest: s64, }
 
 module opt {
-    clone-body: func(c: Clone, body: list<Node>) -> list<Node> {
+    clone-body: func(cloning: Clone, body: list<Node>) -> list<Node> {
         let out: list<Node> = [];
-        for n in body {
-            match n.kind {
-                return(v) => {
-                    if c.dest >= 0 { out.push(assign(c.dest, clone(c, v))); }
-                    out.push(break-stmt(c.exit));
+        for statement in body {
+            match statement.kind {
+                return(returned) => {
+                    if cloning.dest >= 0 { out.push(assign(cloning.dest, clone(cloning, returned))); }
+                    out.push(break-stmt(cloning.exit));
                 }
-                _ => out.push(clone(c, n)),
+                _ => out.push(clone(cloning, statement)),
             }
         }
         out
     }
 
-    clone-label: func(c: Clone, l: s64) -> s64 { if l >= 0 { l + c.lbase } else { l } }
+    clone-label: func(cloning: Clone, label: s64) -> s64 { if label >= 0 { label + cloning.lbase } else { label } }
 
-    clone-all: func(c: Clone, ns: list<Node>) -> list<Node> {
+    clone-all: func(cloning: Clone, ns: list<Node>) -> list<Node> {
         let out: list<Node> = [];
-        for n in ns { out.push(clone(c, n)); }
+        for statement in ns { out.push(clone(cloning, statement)); }
         out
     }
 
-    clone-some: func(c: Clone, n: option<Node>) -> option<Node> {
-        match n {
-            some(x) => some(clone(c, x)),
+    clone-some: func(cloning: Clone, optional: option<Node>) -> option<Node> {
+        match optional {
+            some(node) => some(clone(cloning, node)),
             none => none,
         }
     }
 
     // a node copied: its type and effects kept
-    clone: func(c: Clone, n: Node) -> Node {
-        let k = match n.kind {
-            const(x) => n.kind,
-            local(i) => Kind.local(i + c.base),
-            assign(x) => Kind.assign({ dest: x.dest + c.base, value: clone(c, x.value), }),
-            bin(x) => Kind.bin({ op: x.op, a: clone(c, x.a), b: clone(c, x.b), }),
-            un(x) => Kind.un({ op: x.op, a: clone(c, x.a), }),
-            convert(a) => Kind.convert(clone(c, a)),
-            load(x) => Kind.load({ base: clone(c, x.base), path: x.path, arrow: x.arrow, }),
-            store(x) => Kind.store({ target: clone(c, x.target), value: clone(c, x.value), }),
-            if(x) => Kind.if({
-                test: clone(c, x.test),
-                yes: clone-body(c, x.yes),
-                no: clone-body(c, x.no),
+    clone: func(cloning: Clone, node: Node) -> Node {
+        let kind = match node.kind {
+            const(_) => node.kind,
+            local(slot) => Kind.local(slot + cloning.base),
+            assign(assignment) => Kind.assign({ dest: assignment.dest + cloning.base, value: clone(cloning, assignment.value), }),
+            bin(binary) => Kind.bin({ op: binary.op, a: clone(cloning, binary.a), b: clone(cloning, binary.b), }),
+            un(unary) => Kind.un({ op: unary.op, a: clone(cloning, unary.a), }),
+            convert(operand) => Kind.convert(clone(cloning, operand)),
+            load(load) => Kind.load({ base: clone(cloning, load.base), path: load.path, arrow: load.arrow, }),
+            store(store) => Kind.store({ target: clone(cloning, store.target), value: clone(cloning, store.value), }),
+            if(conditional) => Kind.if({
+                test: clone(cloning, conditional.test),
+                yes: clone-body(cloning, conditional.yes),
+                no: clone-body(cloning, conditional.no),
             }),
-            loop(x) => Kind.loop({
-                test: clone-some(c, x.test),
-                step: clone-some(c, x.step),
-                body: clone-body(c, x.body),
-                label: clone-label(c, x.label),
+            loop(repeat) => Kind.loop({
+                test: clone-some(cloning, repeat.test),
+                step: clone-some(cloning, repeat.step),
+                body: clone-body(cloning, repeat.body),
+                label: clone-label(cloning, repeat.label),
             }),
-            break(l) => Kind.break(clone-label(c, l)),
-            continue(l) => Kind.continue(clone-label(c, l)),
-            block(x) => Kind.block({
-                body: clone-body(c, x.body),
-                label: clone-label(c, x.label),
+            break(label) => Kind.break(clone-label(cloning, label)),
+            continue(label) => Kind.continue(clone-label(cloning, label)),
+            block(block) => Kind.block({
+                body: clone-body(cloning, block.body),
+                label: clone-label(cloning, block.label),
             }),
-            return(v) => Kind.return(clone(c, v)),
-            unreachable(x) => Kind.unreachable({ value: clone(c, x.value), formatter: x.formatter, }),
-            halt => n.kind,
+            return(returned) => Kind.return(clone(cloning, returned)),
+            unreachable(unreachable) => Kind.unreachable({ value: clone(cloning, unreachable.value), formatter: unreachable.formatter, }),
+            halt => node.kind,
             // an async func's states (it is never inlined: its own)
-            resume(k) => n.kind,
-            suspend(k) => n.kind,
-            yield(v) => Kind.yield(clone(c, v)),
-            call(x) => Kind.call({ key: x.key, c-name: x.c-name, name: x.name, args: clone-all(c, x.args), }),
-            func-ref(x) => n.kind,
-            call-ref(x) => Kind.call-ref({
-                callee: clone(c, x.callee),
-                args: clone-all(c, x.args),
+            resume(_) => node.kind,
+            suspend(_) => node.kind,
+            yield(yielded) => Kind.yield(clone(cloning, yielded)),
+            call(called) => Kind.call({ key: called.key, c-name: called.c-name, name: called.name, args: clone-all(cloning, called.args), }),
+            func-ref(_) => node.kind,
+            call-ref(reference) => Kind.call-ref({
+                callee: clone(cloning, reference.callee),
+                args: clone-all(cloning, reference.args),
             }),
-            alloc(x) => Kind.alloc({
-                ctype: x.ctype,
-                rec: x.rec,
-                is-record: x.is-record,
-                trace: x.trace,
+            alloc(alloc) => Kind.alloc({
+                ctype: alloc.ctype,
+                rec: alloc.rec,
+                is-record: alloc.is-record,
+                trace: alloc.trace,
                 stack: false,
             }),
-            make(x) => Kind.make({
-                ctype: x.ctype,
-                fields: x.fields,
-                parts: clone-all(c, x.parts),
+            make(make) => Kind.make({
+                ctype: make.ctype,
+                fields: make.fields,
+                parts: clone-all(cloning, make.parts),
             }),
-            list-get(x) => Kind.list-get({
-                fixed: x.fixed,
-                list: clone(c, x.list),
-                index: clone(c, x.index),
-                ctype: x.ctype,
+            list-get(list-get) => Kind.list-get({
+                fixed: list-get.fixed,
+                list: clone(cloning, list-get.list),
+                index: clone(cloning, list-get.index),
+                ctype: list-get.ctype,
             }),
-            interp(x) => Kind.interp({ parts: clone-all(c, x.parts), formatters: x.formatters, }),
-            deref(a) => Kind.deref(clone(c, a)),
-            address-of(a) => Kind.address-of(clone(c, a)),
-            size-of(t) => Kind.size-of(t),
-            type-arg(x) => n.kind,
-            global(x) => n.kind,
-            scan(t) => n.kind,
-            static-list(_) => n.kind,
-            descriptor(_) => n.kind,
-            element(x) => Kind.element({ base: clone(c, x.base), index: clone(c, x.index), item: x.item, }),
+            interp(interpolation) => Kind.interp({ parts: clone-all(cloning, interpolation.parts), formatters: interpolation.formatters, }),
+            deref(operand) => Kind.deref(clone(cloning, operand)),
+            address-of(operand) => Kind.address-of(clone(cloning, operand)),
+            size-of(measured) => Kind.size-of(measured),
+            type-arg(_) => node.kind,
+            global(_) => node.kind,
+            scan(_) => node.kind,
+            static-list(_) => node.kind,
+            descriptor(_) => node.kind,
+            element(element) => Kind.element({ base: clone(cloning, element.base), index: clone(cloning, element.index), item: element.item, }),
         };
-        new-node(k, n.ty, n.fx)
+        new-node(kind, node.ty, node.fx)
     }
 }

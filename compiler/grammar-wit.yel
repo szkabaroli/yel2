@@ -46,100 +46,100 @@ module grammar {
     // a WIT file's package
     wit-file: func(context: Context, source: s64) -> WitPackage {
         let file = context.sources[source].path;
-        let g = grammar(context, source);
+        let parsing = grammar(context, source);
         let pkg: WitPackage = { id: "", version: "", file: file, files: [file,], interfaces: map.new(), };
-        for step in g.pos..g.toks.len() {
-            skip-gates(g);
-            if is-kind(g, 0, TokenKind.eof) { return pkg; }
-            if at(g, "package") {
-                advance(g);
-                let full = package-id(g);
+        for step in parsing.pos..parsing.toks.len() {
+            skip-gates(parsing);
+            if is-kind(parsing, 0, TokenKind.eof) { return pkg; }
+            if at(parsing, "package") {
+                advance(parsing);
+                let full = package-id(parsing);
                 pkg.id = without-version(full);
                 if pkg.id != full {
                     pkg.version = full.substring(pkg.id.len() + 1, full.len());
                 }
-            } else if at(g, "interface") {
-                advance(g);
-                let n = wit-name(g);
-                pkg.interfaces.set(n, wit-interface(g, n));
-            } else if at(g, "world") {
-                advance(g);
-                wit-name(g);
-                skip-braces(g);
-            } else if at(g, "use") {
-                wit-use(g);
+            } else if at(parsing, "interface") {
+                advance(parsing);
+                let name = wit-name(parsing);
+                pkg.interfaces.set(name, wit-interface(parsing, name));
+            } else if at(parsing, "world") {
+                advance(parsing);
+                wit-name(parsing);
+                skip-braces(parsing);
+            } else if at(parsing, "use") {
+                wit-use(parsing);
             } else {
-                fail(g, "expected an interface or a world in WIT, found {found(g)}");
+                fail(parsing, "expected an interface or a world in WIT, found {found(parsing)}");
             }
         }
         pkg
     }
 
     // a WIT name: kebab-case, % before one that is a keyword
-    wit-name: func(g: Grammar) -> string {
-        if at(g, "%") { advance(g); }
-        name(g)
+    wit-name: func(parsing: Grammar) -> string {
+        if at(parsing, "%") { advance(parsing); }
+        name(parsing)
     }
 
     // @since(version = 0.2.0), @unstable(feature = x), @deprecated(...): gates, skipped
-    skip-gates: func(g: Grammar) {
-        for step in g.pos..g.toks.len() {
-            if !at(g, "@") { return; }
-            advance(g);
-            name(g);
-            if at(g, "(") { skip-parens(g); }
+    skip-gates: func(parsing: Grammar) {
+        for step in parsing.pos..parsing.toks.len() {
+            if !at(parsing, "@") { return; }
+            advance(parsing);
+            name(parsing);
+            if at(parsing, "(") { skip-parens(parsing); }
         }
     }
 
-    skip-parens: func(g: Grammar) {
+    skip-parens: func(parsing: Grammar) {
         let depth = 0;
-        for step in g.pos..g.toks.len() {
-            if at(g, "(") { depth += 1; }
-            if at(g, ")") {
+        for step in parsing.pos..parsing.toks.len() {
+            if at(parsing, "(") { depth += 1; }
+            if at(parsing, ")") {
                 depth -= 1;
                 if depth == 0 {
-                    advance(g);
+                    advance(parsing);
                     return;
                 }
             }
-            if is-kind(g, 0, TokenKind.eof) { fail(g, "unclosed '('"); }
-            advance(g);
+            if is-kind(parsing, 0, TokenKind.eof) { fail(parsing, "unclosed '('"); }
+            advance(parsing);
         }
     }
 
     // a { ... } skipped whole (a world, a resource's methods)
-    skip-braces: func(g: Grammar) {
+    skip-braces: func(parsing: Grammar) {
         let depth = 0;
-        for step in g.pos..g.toks.len() {
-            if at(g, "\{") { depth += 1; }
-            if at(g, "\}") {
+        for step in parsing.pos..parsing.toks.len() {
+            if at(parsing, "\{") { depth += 1; }
+            if at(parsing, "\}") {
                 depth -= 1;
                 if depth == 0 {
-                    advance(g);
+                    advance(parsing);
                     return;
                 }
             }
-            if is-kind(g, 0, TokenKind.eof) { fail(g, "unclosed '\{'"); }
-            advance(g);
+            if is-kind(parsing, 0, TokenKind.eof) { fail(parsing, "unclosed '\{'"); }
+            advance(parsing);
         }
     }
 
-    wit-interface: func(g: Grammar, n: string) -> WitInterface {
-        let face: WitInterface = { name: n, uses: [], types: [], funcs: [], };
-        expect(g, "\{");
-        for step in g.pos..g.toks.len() {
-            skip-gates(g);
-            if at(g, "\}") {
-                advance(g);
+    wit-interface: func(parsing: Grammar, name: string) -> WitInterface {
+        let face: WitInterface = { name: name, uses: [], types: [], funcs: [], };
+        expect(parsing, "\{");
+        for step in parsing.pos..parsing.toks.len() {
+            skip-gates(parsing);
+            if at(parsing, "\}") {
+                advance(parsing);
                 return face;
             }
-            if at(g, "use") { face.uses.push(wit-use(g)); }
-            else if at(g, "type") {
-                advance(g);
-                let tn = wit-name(g);
-                expect(g, "=");
-                let target = wit-type(g);
-                expect(g, ";");
+            if at(parsing, "use") { face.uses.push(wit-use(parsing)); }
+            else if at(parsing, "type") {
+                advance(parsing);
+                let tn = wit-name(parsing);
+                expect(parsing, "=");
+                let target = wit-type(parsing);
+                expect(parsing, ";");
                 face.types.push({
                     name: tn,
                     kind: "alias",
@@ -149,13 +149,13 @@ module grammar {
                     target: target,
                     funcs: [],
                 });
-            } else if at(g, "record") {
-                advance(g);
-                let tn = wit-name(g);
-                expect(g, "\{");
+            } else if at(parsing, "record") {
+                advance(parsing);
+                let tn = wit-name(parsing);
+                expect(parsing, "\{");
                 let fields: list<string> = [];
                 let types: list<Type> = [];
-                wit-fields(g, "\}", fields, types);
+                wit-fields(parsing, "\}", fields, types);
                 face.types.push({
                     name: tn,
                     kind: "record",
@@ -165,13 +165,13 @@ module grammar {
                     target: Type.unit-type,
                     funcs: [],
                 });
-            } else if at(g, "variant") || at(g, "enum") {
-                let kind: wit-type-kind = if at(g, "variant") { "variant" } else { "enum" };
-                advance(g);
-                let tn = wit-name(g);
-                expect(g, "\{");
+            } else if at(parsing, "variant") || at(parsing, "enum") {
+                let kind: wit-type-kind = if at(parsing, "variant") { "variant" } else { "enum" };
+                advance(parsing);
+                let tn = wit-name(parsing);
+                expect(parsing, "\{");
                 let cases: list<CaseDecl> = [];
-                wit-cases(g, cases);
+                wit-cases(parsing, cases);
                 face.types.push({
                     name: tn,
                     kind: kind,
@@ -181,12 +181,12 @@ module grammar {
                     target: Type.unit-type,
                     funcs: [],
                 });
-            } else if at(g, "flags") {
-                advance(g);
-                let tn = wit-name(g);
-                expect(g, "\{");
+            } else if at(parsing, "flags") {
+                advance(parsing);
+                let tn = wit-name(parsing);
+                expect(parsing, "\{");
                 let flags: list<string> = [];
-                wit-flags(g, flags);
+                wit-flags(parsing, flags);
                 face.types.push({
                     name: tn,
                     kind: "flags",
@@ -196,11 +196,11 @@ module grammar {
                     target: Type.unit-type,
                     funcs: [],
                 });
-            } else if at(g, "resource") {
-                advance(g);
-                let tn = wit-name(g);
+            } else if at(parsing, "resource") {
+                advance(parsing);
+                let tn = wit-name(parsing);
                 let funcs: list<WitFunc> = [];
-                if at(g, ";") { advance(g); } else { wit-resource(g, tn, funcs); }
+                if at(parsing, ";") { advance(parsing); } else { wit-resource(parsing, tn, funcs); }
                 face.types.push({
                     name: tn,
                     kind: "resource",
@@ -211,60 +211,60 @@ module grammar {
                     funcs: funcs,
                 });
             } else {
-                let fname = wit-name(g);
-                expect(g, ":");
-                face.funcs.push(wit-func(g, fname, "func"));
+                let fname = wit-name(parsing);
+                expect(parsing, ":");
+                face.funcs.push(wit-func(parsing, fname, "func"));
             }
         }
         face
     }
 
     // a func's type after its name and colon, to its ;: [static] [async] func(params) [-> result]
-    wit-func: func(g: Grammar, n: string, kind: wit-func-kind) -> WitFunc {
-        let k = kind;
-        if at(g, "static") {
-            advance(g);
-            k = "static";
+    wit-func: func(parsing: Grammar, name: string, kind: wit-func-kind) -> WitFunc {
+        let resolved = kind;
+        if at(parsing, "static") {
+            advance(parsing);
+            resolved = "static";
         }
         // an async func (WASI 0.3): a call waits (yel's async)
-        let is-async = at(g, "async");
-        if is-async { advance(g); }
-        expect(g, "func");
-        expect(g, "(");
+        let is-async = at(parsing, "async");
+        if is-async { advance(parsing); }
+        expect(parsing, "func");
+        expect(parsing, "(");
         let params: list<string> = [];
         let types: list<Type> = [];
-        wit-fields(g, ")", params, types);
+        wit-fields(parsing, ")", params, types);
         let result = Type.unit-type;
-        if at(g, "->") {
-            advance(g);
-            result = wit-type(g);
+        if at(parsing, "->") {
+            advance(parsing);
+            result = wit-type(parsing);
         }
-        expect(g, ";");
-        { name: n, kind: k, params: params, types: types, result: result, is-async: is-async, }
+        expect(parsing, ";");
+        { name: name, kind: resolved, params: params, types: types, result: result, is-async: is-async, }
     }
 
     // a resource's { ... }: its constructor, methods and static funcs
-    wit-resource: func(g: Grammar, r: string, funcs: list<WitFunc>) {
-        expect(g, "\{");
-        for step in g.pos..g.toks.len() {
-            skip-gates(g);
-            if at(g, "\}") {
-                advance(g);
+    wit-resource: func(parsing: Grammar, owner: string, funcs: list<WitFunc>) {
+        expect(parsing, "\{");
+        for step in parsing.pos..parsing.toks.len() {
+            skip-gates(parsing);
+            if at(parsing, "\}") {
+                advance(parsing);
                 return;
             }
-            if at(g, "constructor") {
-                advance(g);
-                expect(g, "(");
+            if at(parsing, "constructor") {
+                advance(parsing);
+                expect(parsing, "(");
                 let params: list<string> = [];
                 let types: list<Type> = [];
-                wit-fields(g, ")", params, types);
+                wit-fields(parsing, ")", params, types);
                 // a constructor may fail: its result is then written
-                let result = Type.named(intern(r));
-                if at(g, "->") {
-                    advance(g);
-                    result = wit-type(g);
+                let result = Type.named(intern(owner));
+                if at(parsing, "->") {
+                    advance(parsing);
+                    result = wit-type(parsing);
                 }
-                expect(g, ";");
+                expect(parsing, ";");
                 funcs.push({
                     name: "new",
                     kind: "constructor",
@@ -274,179 +274,179 @@ module grammar {
                     is-async: false,
                 });
             } else {
-                let fname = wit-name(g);
-                expect(g, ":");
-                funcs.push(wit-func(g, fname, "method"));
+                let fname = wit-name(parsing);
+                expect(parsing, ":");
+                funcs.push(wit-func(parsing, fname, "method"));
             }
         }
     }
 
     // name: type pairs up to close (a record's fields, a func's params), close taken
-    wit-fields: func(g: Grammar, close: string, names: list<string>, types: list<Type>) {
-        for s in g.pos..g.toks.len() {
-            skip-gates(g);
-            if at(g, close) {
-                advance(g);
+    wit-fields: func(parsing: Grammar, close: string, names: list<string>, types: list<Type>) {
+        for step in parsing.pos..parsing.toks.len() {
+            skip-gates(parsing);
+            if at(parsing, close) {
+                advance(parsing);
                 return;
             }
-            names.push(wit-name(g));
-            expect(g, ":");
-            types.push(wit-type(g));
-            if !at(g, close) { expect(g, ","); }
+            names.push(wit-name(parsing));
+            expect(parsing, ":");
+            types.push(wit-type(parsing));
+            if !at(parsing, close) { expect(parsing, ","); }
         }
     }
 
-    wit-cases: func(g: Grammar, cases: list<CaseDecl>) {
-        for s in g.pos..g.toks.len() {
-            skip-gates(g);
-            if at(g, "\}") {
-                advance(g);
+    wit-cases: func(parsing: Grammar, cases: list<CaseDecl>) {
+        for step in parsing.pos..parsing.toks.len() {
+            skip-gates(parsing);
+            if at(parsing, "\}") {
+                advance(parsing);
                 return;
             }
-            let c = wit-name(g);
+            let case-name = wit-name(parsing);
             let has = false;
             let payload = Type.unit-type;
-            if at(g, "(") {
-                advance(g);
-                payload = wit-type(g);
-                expect(g, ")");
+            if at(parsing, "(") {
+                advance(parsing);
+                payload = wit-type(parsing);
+                expect(parsing, ")");
                 has = true;
             }
-            cases.push({ name: c, has-payload: has, payload: payload, });
-            if !at(g, "\}") { expect(g, ","); }
+            cases.push({ name: case-name, has-payload: has, payload: payload, });
+            if !at(parsing, "\}") { expect(parsing, ","); }
         }
     }
 
-    wit-flags: func(g: Grammar, flags: list<string>) {
-        for s in g.pos..g.toks.len() {
-            skip-gates(g);
-            if at(g, "\}") {
-                advance(g);
+    wit-flags: func(parsing: Grammar, flags: list<string>) {
+        for step in parsing.pos..parsing.toks.len() {
+            skip-gates(parsing);
+            if at(parsing, "\}") {
+                advance(parsing);
                 return;
             }
-            flags.push(wit-name(g));
-            if !at(g, "\}") { expect(g, ","); }
+            flags.push(wit-name(parsing));
+            if !at(parsing, "\}") { expect(parsing, ","); }
         }
     }
 
     // use ns:name/iface@version.{a, b as c}; or use iface.{a};
-    wit-use: func(g: Grammar) -> WitUse {
-        expect(g, "use");
-        let first = wit-name(g);
+    wit-use: func(parsing: Grammar) -> WitUse {
+        expect(parsing, "use");
+        let first = wit-name(parsing);
         let pkg = "";
         let iface = first;
-        if at(g, ":") {
-            advance(g);
-            pkg = first + ":" + wit-name(g);
-            expect(g, "/");
-            iface = wit-name(g);
-            if at(g, "@") { skip-version(g); }
+        if at(parsing, ":") {
+            advance(parsing);
+            pkg = first + ":" + wit-name(parsing);
+            expect(parsing, "/");
+            iface = wit-name(parsing);
+            if at(parsing, "@") { skip-version(parsing); }
         }
-        expect(g, ".");
-        expect(g, "\{");
+        expect(parsing, ".");
+        expect(parsing, "\{");
         let names: list<string> = [];
         let aliases: list<string> = [];
-        wit-use-names(g, names, aliases);
-        expect(g, ";");
+        wit-use-names(parsing, names, aliases);
+        expect(parsing, ";");
         { pkg: pkg, iface: iface, names: names, aliases: aliases, }
     }
 
     // @version, up to the . before {
-    skip-version: func(g: Grammar) {
-        advance(g);
-        for s in g.pos..g.toks.len() {
-            if at(g, ".") && at-off(g, "\{", 1) { return; }
-            advance(g);
+    skip-version: func(parsing: Grammar) {
+        advance(parsing);
+        for step in parsing.pos..parsing.toks.len() {
+            if at(parsing, ".") && at-off(parsing, "\{", 1) { return; }
+            advance(parsing);
         }
     }
 
     // a use's names (a as b) up to its }, taken
-    wit-use-names: func(g: Grammar, names: list<string>, aliases: list<string>) {
-        for s in g.pos..g.toks.len() {
-            if at(g, "\}") {
-                advance(g);
+    wit-use-names: func(parsing: Grammar, names: list<string>, aliases: list<string>) {
+        for step in parsing.pos..parsing.toks.len() {
+            if at(parsing, "\}") {
+                advance(parsing);
                 return;
             }
-            let n = wit-name(g);
-            let alias = n;
-            if at(g, "as") {
-                advance(g);
-                alias = wit-name(g);
+            let name = wit-name(parsing);
+            let alias = name;
+            if at(parsing, "as") {
+                advance(parsing);
+                alias = wit-name(parsing);
             }
-            names.push(n);
+            names.push(name);
             aliases.push(alias);
-            if !at(g, "\}") { expect(g, ","); }
+            if !at(parsing, "\}") { expect(parsing, ","); }
         }
     }
 
     // a WIT type, as a yel type: a name stays a name (the packages module resolves it); own<r> and
     // borrow<r> are r (a handle both)
-    wit-type: func(g: Grammar) -> Type {
-        let n = wit-name(g);
-        if n == "list" || n == "option" {
-            expect(g, "<");
-            let inner = wit-type(g);
+    wit-type: func(parsing: Grammar) -> Type {
+        let name = wit-name(parsing);
+        if name == "list" || name == "option" {
+            expect(parsing, "<");
+            let inner = wit-type(parsing);
             // list<T, N>: fixed-length
-            if n == "list" && at(g, ",") {
-                advance(g);
-                let len = fixed-len(g, text(g));
-                advance(g);
-                expect(g, ">");
+            if name == "list" && at(parsing, ",") {
+                advance(parsing);
+                let len = fixed-len(parsing, text(parsing));
+                advance(parsing);
+                expect(parsing, ">");
                 return Type.fixed-list({ item: inner, len: len, });
             }
-            expect(g, ">");
-            return if n == "list" { Type.list-type(inner) } else { Type.option-type(inner) };
+            expect(parsing, ">");
+            return if name == "list" { Type.list-type(inner) } else { Type.option-type(inner) };
         }
-        if n == "tuple" {
-            expect(g, "<");
+        if name == "tuple" {
+            expect(parsing, "<");
             let items: list<Type> = [];
-            for s in g.pos..g.toks.len() {
-                if at(g, ">") {
-                    advance(g);
+            for step in parsing.pos..parsing.toks.len() {
+                if at(parsing, ">") {
+                    advance(parsing);
                     return Type.tuple-type(items);
                 }
-                items.push(wit-type(g));
-                if !at(g, ">") { expect(g, ","); }
+                items.push(wit-type(parsing));
+                if !at(parsing, ">") { expect(parsing, ","); }
             }
         }
-        if n == "result" {
+        if name == "result" {
             let ok = Type.unit-type;
             let err = Type.unit-type;
-            if at(g, "<") {
-                advance(g);
-                if at(g, "_") { advance(g); } else { ok = wit-type(g); }
-                if at(g, ",") {
-                    advance(g);
-                    err = wit-type(g);
+            if at(parsing, "<") {
+                advance(parsing);
+                if at(parsing, "_") { advance(parsing); } else { ok = wit-type(parsing); }
+                if at(parsing, ",") {
+                    advance(parsing);
+                    err = wit-type(parsing);
                 }
-                expect(g, ">");
+                expect(parsing, ">");
             }
             return Type.result-type({ ok: ok, err: err, });
         }
         // a stream or a future (WASI 0.3): yel's (of unit where it has no item)
-        if n == "stream" || n == "future" {
+        if name == "stream" || name == "future" {
             let item = Type.unit-type;
-            if at(g, "<") {
-                advance(g);
-                if at(g, "_") { advance(g); } else { item = wit-type(g); }
-                expect(g, ">");
+            if at(parsing, "<") {
+                advance(parsing);
+                if at(parsing, "_") { advance(parsing); } else { item = wit-type(parsing); }
+                expect(parsing, ">");
             }
-            if n == "future" { return Type.future-type(item); }
+            if name == "future" { return Type.future-type(item); }
             return Type.stream-type({ item: item, writer: false, });
         }
-        if n == "borrow" || n == "own" {
-            expect(g, "<");
-            let r = wit-name(g);
-            expect(g, ">");
-            return Type.named(intern(r));
+        if name == "borrow" || name == "own" {
+            expect(parsing, "<");
+            let handle = wit-name(parsing);
+            expect(parsing, ">");
+            return Type.named(intern(handle));
         }
-        if n == "float32" { return Type.num("f32"); }
-        if n == "float64" { return Type.num("f64"); }
-        let num = lower.num-name(n);
-        if num != "" && n != "int" && n != "float" { return Type.num(num); }
-        if n == "bool" { return Type.bool-type; }
-        if n == "char" { return Type.char-type; }
-        if n == "string" { return Type.string-type; }
-        Type.named(intern(n))
+        if name == "float32" { return Type.num("f32"); }
+        if name == "float64" { return Type.num("f64"); }
+        let num = lower.num-name(name);
+        if num != "" && name != "int" && name != "float" { return Type.num(num); }
+        if name == "bool" { return Type.bool-type; }
+        if name == "char" { return Type.char-type; }
+        if name == "string" { return Type.string-type; }
+        Type.named(intern(name))
     }
 }

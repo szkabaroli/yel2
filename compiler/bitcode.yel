@@ -158,64 +158,64 @@ module bitcode {
     writer: func() -> BitWriter { { out: [], word: 0, used: 0, width: 2, starts: [], widths: [], } }
 
     // value, in bits bits (at most 32)
-    emit: func(w: BitWriter, value: u64, bits: s64) {
-        w.word = w.word | (value << (w.used as u64));
-        w.used += bits;
+    emit: func(bitstream: BitWriter, value: u64, bits: s64) {
+        bitstream.word = bitstream.word | (value << (bitstream.used as u64));
+        bitstream.used += bits;
         loop {
-            if w.used < 32 { break; }
-            for index in 0..4 { w.out.push(((w.word >> ((index * 8) as u64)) & 255) as u8); }
-            w.word = w.word >> 32;
-            w.used -= 32;
+            if bitstream.used < 32 { break; }
+            for index in 0..4 { bitstream.out.push(((bitstream.word >> ((index * 8) as u64)) & 255) as u8); }
+            bitstream.word = bitstream.word >> 32;
+            bitstream.used -= 32;
         }
     }
 
     // value as a VBR of bits bits: bits - 1 of it in each chunk, the top bit saying another follows
-    emit-vbr: func(w: BitWriter, value: u64, bits: s64) {
+    emit-vbr: func(bitstream: BitWriter, value: u64, bits: s64) {
         let rest = value;
         let top: u64 = 1 << ((bits - 1) as u64);
         loop {
             if rest < top {
-                emit(w, rest, bits);
+                emit(bitstream, rest, bits);
                 return;
             }
-            emit(w, (rest & (top - 1)) | top, bits);
+            emit(bitstream, (rest & (top - 1)) | top, bits);
             rest = rest >> ((bits - 1) as u64);
         }
     }
 
     // the next bit at a word's start
-    align: func(w: BitWriter) {
-        if w.used > 0 { emit(w, 0, 32 - w.used); }
+    align: func(bitstream: BitWriter) {
+        if bitstream.used > 0 { emit(bitstream, 0, 32 - bitstream.used); }
     }
 
     // a block opened: its id, and the abbreviation width inside it
-    enter-block: func(w: BitWriter, id: s64, width: s64) {
-        emit(w, 1, w.width);
-        emit-vbr(w, id as u64, 8);
-        emit-vbr(w, width as u64, 4);
-        align(w);
-        w.starts.push(w.out.len());
-        emit(w, 0, 32);
-        w.widths.push(w.width);
-        w.width = width;
+    enter-block: func(bitstream: BitWriter, id: s64, width: s64) {
+        emit(bitstream, 1, bitstream.width);
+        emit-vbr(bitstream, id as u64, 8);
+        emit-vbr(bitstream, width as u64, 4);
+        align(bitstream);
+        bitstream.starts.push(bitstream.out.len());
+        emit(bitstream, 0, 32);
+        bitstream.widths.push(bitstream.width);
+        bitstream.width = width;
     }
 
     // the block closed: its length (in words, after its length word) filled in
-    end-block: func(w: BitWriter) {
-        emit(w, 0, w.width);
-        align(w);
-        let start = w.starts.pop();
-        let words = (w.out.len() - start - 4) / 4;
-        for index in 0..4 { w.out[start + index] = ((words >> (index * 8)) & 255) as u8; }
-        w.width = w.widths.pop();
+    end-block: func(bitstream: BitWriter) {
+        emit(bitstream, 0, bitstream.width);
+        align(bitstream);
+        let start = bitstream.starts.pop();
+        let words = (bitstream.out.len() - start - 4) / 4;
+        for index in 0..4 { bitstream.out[start + index] = ((words >> (index * 8)) & 255) as u8; }
+        bitstream.width = bitstream.widths.pop();
     }
 
     // a record: its code and its operands, each a 6-bit VBR
-    emit-record: func(w: BitWriter, code: s64, operands: list<u64>) {
-        emit(w, 3, w.width);
-        emit-vbr(w, code as u64, 6);
-        emit-vbr(w, operands.len() as u64, 6);
-        for operand in operands { emit-vbr(w, operand, 6); }
+    emit-record: func(bitstream: BitWriter, code: s64, operands: list<u64>) {
+        emit(bitstream, 3, bitstream.width);
+        emit-vbr(bitstream, code as u64, 6);
+        emit-vbr(bitstream, operands.len() as u64, 6);
+        for operand in operands { emit-vbr(bitstream, operand, 6); }
     }
 
     // a string's bytes as operands
@@ -243,126 +243,126 @@ module bitcode {
     }
 
     // a type's id: its record's, made once
-    type-id: func(m: BcModule, code: s64, operands: list<u64>) -> s64 {
+    type-id: func(compilation: BcModule, code: s64, operands: list<u64>) -> s64 {
         let key = "{code}:{operands:?}";
-        let at = m.type-keys.index-of(key);
+        let at = compilation.type-keys.index-of(key);
         if at >= 0 { return at; }
-        m.type-keys.push(key);
-        m.type-codes.push(code);
-        m.type-operands.push(operands);
-        m.type-keys.len() - 1
+        compilation.type-keys.push(key);
+        compilation.type-codes.push(code);
+        compilation.type-operands.push(operands);
+        compilation.type-keys.len() - 1
     }
 
-    void-type: func(m: BcModule) -> s64 { type-id(m, 2, []) }
+    void-type: func(compilation: BcModule) -> s64 { type-id(compilation, 2, []) }
 
-    int-type: func(m: BcModule, bits: s64) -> s64 { type-id(m, 7, [bits as u64,]) }
+    int-type: func(compilation: BcModule, bits: s64) -> s64 { type-id(compilation, 7, [bits as u64,]) }
 
-    pointer-type: func(m: BcModule) -> s64 { type-id(m, 25, [0,]) }
+    pointer-type: func(compilation: BcModule) -> s64 { type-id(compilation, 25, [0,]) }
 
     // float (32) or double (64)
-    float-type: func(m: BcModule, bits: s64) -> s64 { type-id(m, if bits == 32 { 3 } else { 4 }, []) }
+    float-type: func(compilation: BcModule, bits: s64) -> s64 { type-id(compilation, if bits == 32 { 3 } else { 4 }, []) }
 
-    array-type: func(m: BcModule, count: s64, item: s64) -> s64 { type-id(m, 11, [count as u64, item as u64,]) }
+    array-type: func(compilation: BcModule, count: s64, item: s64) -> s64 { type-id(compilation, 11, [count as u64, item as u64,]) }
 
     // a vector of count items (<2 x float>: one register's lanes)
-    vector-type: func(m: BcModule, count: s64, item: s64) -> s64 { type-id(m, 12, [count as u64, item as u64,]) }
+    vector-type: func(compilation: BcModule, count: s64, item: s64) -> s64 { type-id(compilation, 12, [count as u64, item as u64,]) }
 
     // a struct of fields packed (each at the next byte: padding its own fields)
-    packed-struct-type: func(m: BcModule, fields: list<s64>) -> s64 {
+    packed-struct-type: func(compilation: BcModule, fields: list<s64>) -> s64 {
         let operands: list<u64> = [1,];
-        for f in fields { operands.push(f as u64); }
-        type-id(m, 18, operands)
+        for field in fields { operands.push(field as u64); }
+        type-id(compilation, 18, operands)
     }
 
     // a struct of fields (not packed: each aligned as C's)
-    struct-type: func(m: BcModule, fields: list<s64>) -> s64 {
+    struct-type: func(compilation: BcModule, fields: list<s64>) -> s64 {
         let operands: list<u64> = [0,];
-        for f in fields { operands.push(f as u64); }
-        type-id(m, 18, operands)
+        for field in fields { operands.push(field as u64); }
+        type-id(compilation, 18, operands)
     }
 
-    func-type: func(m: BcModule, result: s64, params: list<s64>) -> s64 {
+    func-type: func(compilation: BcModule, result: s64, params: list<s64>) -> s64 {
         let operands: list<u64> = [0, result as u64,];
-        for p in params { operands.push(p as u64); }
-        type-id(m, 21, operands)
+        for parameter in params { operands.push(parameter as u64); }
+        type-id(compilation, 21, operands)
     }
 
     // a func added: its index (its value, after the globals')
-    add-func: func(m: BcModule, name: string, ty: s64, params: s64, defined: bool, internal: bool) -> s64 {
-        m.funcs.push({
+    add-func: func(compilation: BcModule, name: string, ty: s64, params: s64, defined: bool, internal: bool) -> s64 {
+        compilation.funcs.push({
             name: name, ty: ty, defined: defined, internal: internal, params: params, attributes: 0, param-attributes: [], function-attributes: [],
             const-types: [], const-values: [], const-kinds: [], blocks: [[],], values: 0, subprogram: none, line: 0,
             col: 0, variables: [],
         });
-        m.funcs.len() - 1
+        compilation.funcs.len() - 1
     }
 
     // the func of that name, declared where it is not there yet (the runtime's, libc's)
-    declared: func(m: BcModule, name: string, ty: s64, params: s64) -> s64 {
-        for index in 0..m.funcs.len() {
-            if m.funcs[index].name == name {
+    declared: func(compilation: BcModule, name: string, ty: s64, params: s64) -> s64 {
+        for index in 0..compilation.funcs.len() {
+            if compilation.funcs[index].name == name {
                 // one function, one type: calls made by another would read their values wrong
-                if m.funcs[index].ty != ty { panic("bitcode: {name} declared as two function types"); }
+                if compilation.funcs[index].ty != ty { panic("bitcode: {name} declared as two function types"); }
                 return index;
             }
         }
-        add-func(m, name, ty, params, false, false)
+        add-func(compilation, name, ty, params, false, false)
     }
 
     // ---- attributes
 
     // a set of params' attributes, made once: its number (for a func's or a call's record; 0 for none)
-    attribute-set: func(m: BcModule, params: list<BcParamAttributes>) -> u64 {
+    attribute-set: func(compilation: BcModule, params: list<BcParamAttributes>) -> u64 {
         let ids: list<u64> = [];
-        for p in params {
-            if p.attributes.len() == 0 { continue; }
+        for parameter in params {
+            if parameter.attributes.len() == 0 { continue; }
             // (a function's own: index 0xFFFFFFFF)
-            let group: list<u64> = [if p.index < 0 { 4294967295 } else { p.index as u64 },];
-            for a in p.attributes { group.push(a); }
+            let group: list<u64> = [if parameter.index < 0 { 4294967295 } else { parameter.index as u64 },];
+            for attribute in parameter.attributes { group.push(attribute); }
             let key = "{group:?}";
-            let at = m.group-keys.index-of(key);
+            let at = compilation.group-keys.index-of(key);
             if at < 0 {
-                m.group-keys.push(key);
-                m.groups.push(group);
-                at = m.group-keys.len() - 1;
+                compilation.group-keys.push(key);
+                compilation.groups.push(group);
+                at = compilation.group-keys.len() - 1;
             }
             ids.push((at + 1) as u64);
         }
         if ids.len() == 0 { return 0; }
         let key = "{ids:?}";
-        let at = m.set-keys.index-of(key);
+        let at = compilation.set-keys.index-of(key);
         if at < 0 {
-            m.set-keys.push(key);
-            m.sets.push(ids);
-            at = m.set-keys.len() - 1;
+            compilation.set-keys.push(key);
+            compilation.sets.push(ids);
+            at = compilation.set-keys.len() - 1;
         }
         (at + 1) as u64
     }
 
     // a func's params' attributes (its set kept: a call's record names it too): the set's number
-    set-attributes: func(m: BcModule, at: s64, params: list<BcParamAttributes>) -> u64 {
-        m.funcs[at].param-attributes = params;
-        m.funcs[at].attributes = attribute-set(m, params);
-        m.funcs[at].attributes
+    set-attributes: func(compilation: BcModule, at: s64, params: list<BcParamAttributes>) -> u64 {
+        compilation.funcs[at].param-attributes = params;
+        compilation.funcs[at].attributes = attribute-set(compilation, params);
+        compilation.funcs[at].attributes
     }
 
     // attributes of a func's own (each as its group has it), added to what its set has
-    add-function-attributes: func(m: BcModule, at: s64, attributes: list<u64>) {
-        for a in attributes { m.funcs[at].function-attributes.push(a); }
+    add-function-attributes: func(compilation: BcModule, at: s64, attributes: list<u64>) {
+        for attribute in attributes { compilation.funcs[at].function-attributes.push(attribute); }
     }
 
     // a func's set with its own attributes merged in (into its one function group: index -1)
-    merge-function-attributes: func(m: BcModule, at: s64) {
-        let f = m.funcs[at];
-        if f.function-attributes.len() == 0 { return; }
+    merge-function-attributes: func(compilation: BcModule, at: s64) {
+        let function = compilation.funcs[at];
+        if function.function-attributes.len() == 0 { return; }
         let own: list<u64> = [];
         let params: list<BcParamAttributes> = [];
-        for p in f.param-attributes {
-            if p.index < 0 { for a in p.attributes { own.push(a); } } else { params.push(p); }
+        for parameter in function.param-attributes {
+            if parameter.index < 0 { for attribute in parameter.attributes { own.push(attribute); } } else { params.push(parameter); }
         }
-        for a in f.function-attributes { own.push(a); }
+        for attribute in function.function-attributes { own.push(attribute); }
         params.push({ index: -1, attributes: own, });
-        m.funcs[at].attributes = attribute-set(m, params);
+        compilation.funcs[at].attributes = attribute-set(compilation, params);
     }
 
     // a func that never unwinds (yel has no exceptions; C built without them: all of it), that
@@ -394,9 +394,9 @@ module bitcode {
     // as wasm-import-module = "wasi:cli/environment@0.3.0"
     string-attribute: func(key: string, value: string) -> list<u64> {
         let out: list<u64> = [4,];
-        for c in chars(key) { out.push(c); }
+        for character in chars(key) { out.push(character); }
         out.push(0);
-        for c in chars(value) { out.push(c); }
+        for character in chars(value) { out.push(character); }
         out.push(0);
         out
     }
@@ -408,55 +408,55 @@ module bitcode {
     signext: func() -> list<u64> { [0, 24,] }
 
     // a constant global of bytes: its index
-    add-bytes: func(m: BcModule, name: string, bytes: string) -> s64 {
-        m.globals.push({ name: name, ty: array-type(m, bytes.len(), int-type(m, 8)), bytes: bytes, terminated: false, external: false, align: 1, elements: [], writable: false, });
-        m.globals.len() - 1
+    add-bytes: func(compilation: BcModule, name: string, bytes: string) -> s64 {
+        compilation.globals.push({ name: name, ty: array-type(compilation, bytes.len(), int-type(compilation, 8)), bytes: bytes, terminated: false, external: false, align: 1, elements: [], writable: false, });
+        compilation.globals.len() - 1
     }
 
     // a constant global of bytes aligned to align (as a record has it): its index
-    add-aligned-bytes: func(m: BcModule, name: string, bytes: string, align: u64) -> s64 {
-        let at = add-bytes(m, name, bytes);
-        m.globals[at].align = align;
+    add-aligned-bytes: func(compilation: BcModule, name: string, bytes: string, align: u64) -> s64 {
+        let at = add-bytes(compilation, name, bytes);
+        compilation.globals[at].align = align;
         at
     }
 
     // a global the runtime defines (y_top), of type ty, declared where it is not there yet: its index
-    external-global: func(m: BcModule, name: string, ty: s64) -> s64 {
-        for index in 0..m.globals.len() {
-            if m.globals[index].name == name { return index; }
+    external-global: func(compilation: BcModule, name: string, ty: s64) -> s64 {
+        for index in 0..compilation.globals.len() {
+            if compilation.globals[index].name == name { return index; }
         }
-        m.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: true, align: 0, elements: [], writable: false, });
-        m.globals.len() - 1
+        compilation.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: true, align: 0, elements: [], writable: false, });
+        compilation.globals.len() - 1
     }
 
     // a constant global of a C string (its bytes, then a NUL): its index
-    add-c-string: func(m: BcModule, name: string, text: string) -> s64 {
-        m.globals.push({ name: name, ty: array-type(m, text.len() + 1, int-type(m, 8)), bytes: text, terminated: true, external: false, align: 1, elements: [], writable: false, });
-        m.globals.len() - 1
+    add-c-string: func(compilation: BcModule, name: string, text: string) -> s64 {
+        compilation.globals.push({ name: name, ty: array-type(compilation, text.len() + 1, int-type(compilation, 8)), bytes: text, terminated: true, external: false, align: 1, elements: [], writable: false, });
+        compilation.globals.len() - 1
     }
 
     // a constant global of type ty (a struct or an array) made of elements, aligned to align (as a
     // record has it): its index
     // a variable of type ty, zero to start with (its module's own: internal): its index
-    add-variable: func(m: BcModule, name: string, ty: s64, align: u64) -> s64 {
-        m.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: false, align: align, elements: [], writable: true, });
-        m.globals.len() - 1
+    add-variable: func(compilation: BcModule, name: string, ty: s64, align: u64) -> s64 {
+        compilation.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: false, align: align, elements: [], writable: true, });
+        compilation.globals.len() - 1
     }
 
-    add-aggregate: func(m: BcModule, name: string, ty: s64, elements: list<BcElement>, align: u64) -> s64 {
-        m.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: false, align: align, elements: elements, writable: false, });
-        m.globals.len() - 1
+    add-aggregate: func(compilation: BcModule, name: string, ty: s64, elements: list<BcElement>, align: u64) -> s64 {
+        compilation.globals.push({ name: name, ty: ty, bytes: "", terminated: false, external: false, align: align, elements: elements, writable: false, });
+        compilation.globals.len() - 1
     }
 
     // the module's constants: an initialized global's (its bytes; an aggregate's elements but the
     // globals' addresses, then the aggregate): how many
-    constant-count: func(m: BcModule) -> s64 {
+    constant-count: func(compilation: BcModule) -> s64 {
         let count = 0;
-        for g in m.globals {
-            if !g.external { count += 1 + g.elements.filter({ e -> e.kind != 2 && e.kind != 3 }).len(); }
+        for global in compilation.globals {
+            if !global.external { count += 1 + global.elements.filter({ element -> element.kind != 2 && element.kind != 3 }).len(); }
         }
         // (and with debug info, the module flags' four i32s)
-        if m.debug { count += flag-values().len(); }
+        if compilation.debug { count += flag-values().len(); }
         count
     }
 
@@ -464,24 +464,24 @@ module bitcode {
 
     // debug info made for the module: what made it (the compile unit's producer); the i32 its
     // module flags hold made a type now (before the types are written)
-    debug-info: func(m: BcModule, producer: string) {
-        m.debug = true;
-        m.producer = producer;
-        let _ = int-type(m, 32);
+    debug-info: func(compilation: BcModule, producer: string) {
+        compilation.debug = true;
+        compilation.producer = producer;
+        let _ = int-type(compilation, 32);
     }
 
     // a source file's index among the module's (each a DIFile), added the first time
-    file-index: func(m: BcModule, path: string) -> s64 {
-        let at = m.files.index-of(path);
+    file-index: func(compilation: BcModule, path: string) -> s64 {
+        let at = compilation.files.index-of(path);
         if at >= 0 { return at; }
-        m.files.push(path);
-        m.files.len() - 1
+        compilation.files.push(path);
+        compilation.files.len() - 1
     }
 
     // a debug type added: its index
-    debug-type: func(m: BcModule, kind: s64, name: string, size: s64, encoding: s64, base: s64, offset: s64, members: list<s64>) -> s64 {
-        m.debug-types.push({ kind: kind, name: name, size: size, encoding: encoding, base: base, offset: offset, members: members, });
-        m.debug-types.len() - 1
+    debug-type: func(compilation: BcModule, kind: s64, name: string, size: s64, encoding: s64, base: s64, offset: s64, members: list<s64>) -> s64 {
+        compilation.debug-types.push({ kind: kind, name: name, size: size, encoding: encoding, base: base, offset: offset, members: members, });
+        compilation.debug-types.len() - 1
     }
 
     // the module flags' values (i32s, as module constants): Dwarf Version's behavior (7: max) and
@@ -490,48 +490,48 @@ module bitcode {
     flag-values: func() -> list<u64> { [7, 5, 2, 3,] }
 
     // a func's integer constant (bits: its value's, in the type's width): its value
-    integer: func(f: BcFunc, ty: s64, bits: u64) -> BcValue {
-        constant(f, ty, bits, 0)
+    integer: func(function: BcFunc, ty: s64, bits: u64) -> BcValue {
+        constant(function, ty, bits, 0)
     }
 
-    null: func(f: BcFunc, ty: s64) -> BcValue { constant(f, ty, 0, 1) }
+    null: func(function: BcFunc, ty: s64) -> BcValue { constant(function, ty, 0, 1) }
 
     // a float's constant (f32 or f64 ty: bits, its IEEE bits in that width)
-    float: func(f: BcFunc, ty: s64, bits: u64) -> BcValue { constant(f, ty, bits, 3) }
+    float: func(function: BcFunc, ty: s64, bits: u64) -> BcValue { constant(function, ty, bits, 3) }
 
     // an undefined value of a type (an aggregate's start, its fields inserted after)
-    undefined: func(f: BcFunc, ty: s64) -> BcValue { constant(f, ty, 0, 2) }
+    undefined: func(function: BcFunc, ty: s64) -> BcValue { constant(function, ty, 0, 2) }
 
     // a constant of the func, made once
-    constant: func(f: BcFunc, ty: s64, bits: u64, kind: s64) -> BcValue {
-        for index in 0..f.const-types.len() {
-            if f.const-types[index] == ty && f.const-values[index] == bits && f.const-kinds[index] == kind {
+    constant: func(function: BcFunc, ty: s64, bits: u64, kind: s64) -> BcValue {
+        for index in 0..function.const-types.len() {
+            if function.const-types[index] == ty && function.const-values[index] == bits && function.const-kinds[index] == kind {
                 return BcValue.constant(index);
             }
         }
-        f.const-types.push(ty);
-        f.const-values.push(bits);
-        f.const-kinds.push(kind);
-        BcValue.constant(f.const-types.len() - 1)
+        function.const-types.push(ty);
+        function.const-values.push(bits);
+        function.const-kinds.push(kind);
+        BcValue.constant(function.const-types.len() - 1)
     }
 
     // a block of f: its index
-    new-block: func(f: BcFunc) -> s64 {
-        f.blocks.push([]);
-        f.blocks.len() - 1
+    new-block: func(function: BcFunc) -> s64 {
+        function.blocks.push([]);
+        function.blocks.len() - 1
     }
 
     // an instruction at block's end: the value it gives (none for one that gives none)
-    add-inst: func(f: BcFunc, block: s64, code: s64, operands: list<BcOperand>, gives: bool) -> option<BcValue> {
-        f.blocks[block].push({ code: code, operands: operands, gives: gives, made: if gives { f.values } else { -1 }, line: f.line, col: f.col, });
+    add-inst: func(function: BcFunc, block: s64, code: s64, operands: list<BcOperand>, gives: bool) -> option<BcValue> {
+        function.blocks[block].push({ code: code, operands: operands, gives: gives, made: if gives { function.values } else { -1 }, line: function.line, col: function.col, });
         if !gives { return none; }
-        f.values += 1;
-        some(BcValue.instruction(f.values - 1))
+        function.values += 1;
+        some(BcValue.instruction(function.values - 1))
     }
 
     // whether a block ends (its last instruction a terminator: ret, br, unreachable)
-    ended: func(f: BcFunc, block: s64) -> bool {
-        let insts = f.blocks[block];
+    ended: func(function: BcFunc, block: s64) -> bool {
+        let insts = function.blocks[block];
         if insts.len() == 0 { return false; }
         let code = insts[insts.len() - 1].code;
         code == 10 || code == 11 || code == 15
@@ -539,145 +539,145 @@ module bitcode {
 
     // ---- writing it
 
-    write: func(m: BcModule) -> string {
-        let w = writer();
+    write: func(compilation: BcModule) -> string {
+        let bitstream = writer();
         // the wrapper's magic: BC 0xC0DE
-        emit(w, 66, 8);
-        emit(w, 67, 8);
-        emit(w, 0, 4);
-        emit(w, 12, 4);
-        emit(w, 14, 4);
-        emit(w, 13, 4);
+        emit(bitstream, 66, 8);
+        emit(bitstream, 67, 8);
+        emit(bitstream, 0, 4);
+        emit(bitstream, 12, 4);
+        emit(bitstream, 14, 4);
+        emit(bitstream, 13, 4);
         // MODULE_BLOCK; VERSION 1: value ids relative to the instruction
-        enter-block(w, 8, 3);
-        emit-record(w, 1, [1,]);
-        enter-block(w, 17, 4);
-        emit-record(w, 1, [m.type-keys.len() as u64,]);
-        for index in 0..m.type-keys.len() { emit-record(w, m.type-codes[index], m.type-operands[index]); }
-        end-block(w);
+        enter-block(bitstream, 8, 3);
+        emit-record(bitstream, 1, [1,]);
+        enter-block(bitstream, 17, 4);
+        emit-record(bitstream, 1, [compilation.type-keys.len() as u64,]);
+        for index in 0..compilation.type-keys.len() { emit-record(bitstream, compilation.type-codes[index], compilation.type-operands[index]); }
+        end-block(bitstream);
         // PARAMATTR_GROUP_BLOCK (its ENTRY: the group's number, then its param's index and
         // attributes), then PARAMATTR_BLOCK (each set's ENTRY: its groups); each func's own
         // attributes merged into its set first
-        for at in 0..m.funcs.len() { merge-function-attributes(m, at); }
-        if m.groups.len() > 0 {
-            enter-block(w, 10, 3);
-            for index in 0..m.groups.len() {
+        for at in 0..compilation.funcs.len() { merge-function-attributes(compilation, at); }
+        if compilation.groups.len() > 0 {
+            enter-block(bitstream, 10, 3);
+            for index in 0..compilation.groups.len() {
                 let entry: list<u64> = [(index + 1) as u64,];
-                for x in m.groups[index] { entry.push(x); }
-                emit-record(w, 3, entry);
+                for attribute in compilation.groups[index] { entry.push(attribute); }
+                emit-record(bitstream, 3, entry);
             }
-            end-block(w);
-            enter-block(w, 9, 3);
-            for set in m.sets { emit-record(w, 2, set); }
-            end-block(w);
+            end-block(bitstream);
+            enter-block(bitstream, 9, 3);
+            for set in compilation.sets { emit-record(bitstream, 2, set); }
+            end-block(bitstream);
         }
-        if m.triple != "" { emit-record(w, 2, chars(m.triple)); }
+        if compilation.triple != "" { emit-record(bitstream, 2, chars(compilation.triple)); }
         // GLOBALVAR: its type (explicit: bit 1 of the next), constant (bit 0), its initializer (the
         // module constant after the globals and funcs, + 1; 0 for none), linkage (private 9, external
         // 0), alignment
-        let globals = m.globals.len();
-        let funcs = m.funcs.len();
+        let globals = compilation.globals.len();
+        let funcs = compilation.funcs.len();
         // each initializer's value: the module's constants come after its globals and funcs
         let initializers: list<s64> = [];
         let next = globals + funcs;
-        for g in m.globals {
-            if g.external {
+        for global in compilation.globals {
+            if global.external {
                 initializers.push(-1);
             } else {
-                next += g.elements.filter({ e -> e.kind != 2 && e.kind != 3 }).len();
+                next += global.elements.filter({ element -> element.kind != 2 && element.kind != 3 }).len();
                 initializers.push(next);
                 next += 1;
             }
         }
         for index in 0..globals {
-            let g = m.globals[index];
-            if g.external {
-                emit-record(w, 7, [g.ty as u64, 2, 0, 0, g.align, 0,]);
+            let global = compilation.globals[index];
+            if global.external {
+                emit-record(bitstream, 7, [global.ty as u64, 2, 0, 0, global.align, 0,]);
             } else {
                 // (a variable: internal, 3; not constant)
-                if g.writable { emit-record(w, 7, [g.ty as u64, 2, (initializers[index] + 1) as u64, 3, g.align, 0,]); }
-                else { emit-record(w, 7, [g.ty as u64, 3, (initializers[index] + 1) as u64, 9, g.align, 0,]); }
+                if global.writable { emit-record(bitstream, 7, [global.ty as u64, 2, (initializers[index] + 1) as u64, 3, global.align, 0,]); }
+                else { emit-record(bitstream, 7, [global.ty as u64, 3, (initializers[index] + 1) as u64, 9, global.align, 0,]); }
             }
         }
         // FUNCTION: type, calling convention, a declaration only, linkage (internal 3, external
         // 0), attribute set, alignment, section, visibility, gc, unnamed_addr
-        for f in m.funcs {
-            emit-record(w, 8, [f.ty as u64, 0, if f.defined { 0 } else { 1 }, if f.internal { 3 } else { 0 }, f.attributes, 0, 0, 0, 0, 0,]);
+        for function in compilation.funcs {
+            emit-record(bitstream, 8, [function.ty as u64, 0, if function.defined { 0 } else { 1 }, if function.internal { 3 } else { 0 }, function.attributes, 0, 0, 0, 0, 0,]);
         }
         // the module's constants: each initialized global's bytes (STRING, or CSTRING: its NUL
         // implied), or its aggregate (each element but a global's address, then AGGREGATE)
-        if constant-count(m) > 0 {
-            enter-block(w, 11, 4);
+        if constant-count(compilation) > 0 {
+            enter-block(bitstream, 11, 4);
             let at = globals + funcs;
-            for g in m.globals {
-                if g.external { continue; }
-                if g.elements.len() > 0 {
+            for global in compilation.globals {
+                if global.external { continue; }
+                if global.elements.len() > 0 {
                     let ids: list<u64> = [];
-                    for e in g.elements {
-                        if e.kind == 2 {
-                            ids.push(e.value);
-                        } else if e.kind == 3 {
+                    for element in global.elements {
+                        if element.kind == 2 {
+                            ids.push(element.value);
+                        } else if element.kind == 3 {
                             // (a func's value: after the globals')
-                            ids.push(globals as u64 + e.value);
+                            ids.push(globals as u64 + element.value);
                         } else {
-                            emit-record(w, 1, [e.ty as u64,]);
-                            if e.kind == 1 { emit-record(w, 2, []); } else { emit-record(w, 4, [signed(e.value),]); }
+                            emit-record(bitstream, 1, [element.ty as u64,]);
+                            if element.kind == 1 { emit-record(bitstream, 2, []); } else { emit-record(bitstream, 4, [signed(element.value),]); }
                             ids.push(at as u64);
                             at += 1;
                         }
                     }
-                    emit-record(w, 1, [g.ty as u64,]);
-                    emit-record(w, 7, ids);
+                    emit-record(bitstream, 1, [global.ty as u64,]);
+                    emit-record(bitstream, 7, ids);
                     at += 1;
                     continue;
                 }
                 at += 1;
-                emit-record(w, 1, [g.ty as u64,]);
+                emit-record(bitstream, 1, [global.ty as u64,]);
                 // STRING (an empty one: NULL, the zero value; a STRING of none is no record)
-                if g.terminated { emit-record(w, 9, chars(g.bytes)); }
-                else if g.bytes.len() == 0 { emit-record(w, 2, []); }
-                else { emit-record(w, 8, chars(g.bytes)); }
+                if global.terminated { emit-record(bitstream, 9, chars(global.bytes)); }
+                else if global.bytes.len() == 0 { emit-record(bitstream, 2, []); }
+                else { emit-record(bitstream, 8, chars(global.bytes)); }
             }
             // the module flags' values, after the initializers
-            if m.debug {
-                emit-record(w, 1, [int-type(m, 32) as u64,]);
-                for value in flag-values() { emit-record(w, 4, [signed(value),]); }
+            if compilation.debug {
+                emit-record(bitstream, 1, [int-type(compilation, 32) as u64,]);
+                for value in flag-values() { emit-record(bitstream, 4, [signed(value),]); }
             }
-            end-block(w);
+            end-block(bitstream);
         }
         // debug info: METADATA_KIND (dbg, kind 0: what a func's subprogram is attached as), then
         // the module's metadata (each func's subprogram's id, -1 for none)
         let ids: BcDebugIds = { subprograms: [], variables: [], locations: [], expression: 0, count: 0, };
-        if m.debug {
-            enter-block(w, 22, 3);
+        if compilation.debug {
+            enter-block(bitstream, 22, 3);
             let kind: list<u64> = [0,];
-            for c in chars("dbg") { kind.push(c); }
-            emit-record(w, 6, kind);
-            end-block(w);
-            ids = write-metadata(w, m);
+            for character in chars("dbg") { kind.push(character); }
+            emit-record(bitstream, 6, kind);
+            end-block(bitstream);
+            ids = write-metadata(bitstream, compilation);
         }
         // VALUE_SYMTAB: the names of the globals and the funcs
-        enter-block(w, 14, 4);
+        enter-block(bitstream, 14, 4);
         for index in 0..globals {
             let entry: list<u64> = [index as u64,];
-            for c in chars(m.globals[index].name) { entry.push(c); }
-            emit-record(w, 1, entry);
+            for character in chars(compilation.globals[index].name) { entry.push(character); }
+            emit-record(bitstream, 1, entry);
         }
         for index in 0..funcs {
             let entry: list<u64> = [(globals + index) as u64,];
-            for c in chars(m.funcs[index].name) { entry.push(c); }
-            emit-record(w, 1, entry);
+            for character in chars(compilation.funcs[index].name) { entry.push(character); }
+            emit-record(bitstream, 1, entry);
         }
-        end-block(w);
+        end-block(bitstream);
         // each body, in the funcs' order
-        for index in 0..m.funcs.len() {
-            let f = m.funcs[index];
-            if f.defined { write-func(w, m, f, ids, if m.debug { index } else { -1 }); }
+        for index in 0..compilation.funcs.len() {
+            let function = compilation.funcs[index];
+            if function.defined { write-func(bitstream, compilation, function, ids, if compilation.debug { index } else { -1 }); }
         }
-        end-block(w);
-        align(w);
-        let out = buffer(w.out.len());
-        for byte in w.out { out.push-byte(byte as s64); }
+        end-block(bitstream);
+        align(bitstream);
+        let out = buffer(bitstream.out.len());
+        for byte in bitstream.out { out.push-byte(byte as s64); }
         out.to-string()
     }
 
@@ -686,37 +686,37 @@ module bitcode {
     // that give one)
     // (at: its index among the module's funcs, for its debug info's ids; -1 for none: then no
     // instruction has a location, and no local is declared)
-    write-func: func(w: BitWriter, m: BcModule, f: BcFunc, ids: BcDebugIds, at: s64) {
+    write-func: func(bitstream: BitWriter, compilation: BcModule, function: BcFunc, ids: BcDebugIds, at: s64) {
         let subprogram = if at >= 0 { ids.subprograms[at] } else { -1 };
         // the module's values: its globals, its funcs, and the globals' initializers
-        let base = m.globals.len() + m.funcs.len() + constant-count(m);
+        let base = compilation.globals.len() + compilation.funcs.len() + constant-count(compilation);
         let params = base;
-        let constants = params + f.params;
-        let first = constants + f.const-types.len();
-        enter-block(w, 12, 4);
-        emit-record(w, 1, [f.blocks.len() as u64,]);
-        if f.const-types.len() > 0 {
-            enter-block(w, 11, 4);
+        let constants = params + function.params;
+        let first = constants + function.const-types.len();
+        enter-block(bitstream, 12, 4);
+        emit-record(bitstream, 1, [function.blocks.len() as u64,]);
+        if function.const-types.len() > 0 {
+            enter-block(bitstream, 11, 4);
             let current = -1;
-            for index in 0..f.const-types.len() {
-                if f.const-types[index] != current {
-                    current = f.const-types[index];
-                    emit-record(w, 1, [current as u64,]);
+            for index in 0..function.const-types.len() {
+                if function.const-types[index] != current {
+                    current = function.const-types[index];
+                    emit-record(bitstream, 1, [current as u64,]);
                 }
                 // NULL 2, UNDEF 3, INTEGER 4, FLOAT 6
-                if f.const-kinds[index] == 1 { emit-record(w, 2, []); }
-                else if f.const-kinds[index] == 2 { emit-record(w, 3, []); }
-                else if f.const-kinds[index] == 3 { emit-record(w, 6, [f.const-values[index],]); }
-                else { emit-record(w, 4, [signed(f.const-values[index]),]); }
+                if function.const-kinds[index] == 1 { emit-record(bitstream, 2, []); }
+                else if function.const-kinds[index] == 2 { emit-record(bitstream, 3, []); }
+                else if function.const-kinds[index] == 3 { emit-record(bitstream, 6, [function.const-values[index],]); }
+                else { emit-record(bitstream, 4, [signed(function.const-values[index]),]); }
             }
-            end-block(w);
+            end-block(bitstream);
         }
         // each value's number in the blocks' order (a block filled after a later one: the code after
         // a loop): what the reader counts by
         let written: list<s64> = [];
-        for k in 0..f.values { written.push(0); }
+        for slot in 0..function.values { written.push(0); }
         let counted = first;
-        for block in f.blocks {
+        for block in function.blocks {
             for inst in block {
                 if inst.gives {
                     written[inst.made] = counted;
@@ -726,43 +726,43 @@ module bitcode {
         }
         // its variables' slots, as function-local metadata (VALUE: the slot's type, a pointer, and
         // its value), numbered after the module's metadata
-        let declared = subprogram >= 0 && f.variables.len() > 0;
+        let declared = subprogram >= 0 && function.variables.len() > 0;
         if declared {
-            enter-block(w, 15, 3);
-            for variable in f.variables {
-                emit-record(w, 2, [pointer-type(m) as u64, absolute-id(m, variable.slot, params, constants, written) as u64,]);
+            enter-block(bitstream, 15, 3);
+            for variable in function.variables {
+                emit-record(bitstream, 2, [pointer-type(compilation) as u64, absolute-id(compilation, variable.slot, params, constants, written) as u64,]);
             }
-            end-block(w);
+            end-block(bitstream);
         }
         let number = first;
         // the last location written (DEBUG_LOC_AGAIN gives an instruction it again)
         let last-line = 0;
         let last-col = 0;
-        for block-index in 0..f.blocks.len() {
-            let block = f.blocks[block-index];
+        for block-index in 0..function.blocks.len() {
+            let block = function.blocks[block-index];
             for inst in block {
                 let operands: list<u64> = [];
-                for o in inst.operands {
-                    operands.push(match o {
-                        raw(x) => x,
-                        value(v) => {
-                            let at = absolute-id(m, v, params, constants, written);
+                for operand in inst.operands {
+                    operands.push(match operand {
+                        raw(literal) => literal,
+                        value(referenced) => {
+                            let at = absolute-id(compilation, referenced, params, constants, written);
                             // a value from further on would need its type written too
-                            if at >= number { panic("bitcode: a value used before it is made (in {f.name})"); }
+                            if at >= number { panic("bitcode: a value used before it is made (in {function.name})"); }
                             (number - at) as u64
                         }
-                        absolute(v) => absolute-id(m, v, params, constants, written) as u64,
+                        absolute(referenced) => absolute-id(compilation, referenced, params, constants, written) as u64,
                     });
                 }
-                emit-record(w, inst.code, operands);
+                emit-record(bitstream, inst.code, operands);
                 if inst.gives { number += 1; }
                 // its location: DEBUG_LOC (line, column, scope, inlined-at, implicit, and the key
                 // instructions' atom group and rank), or DEBUG_LOC_AGAIN for the last one again
                 if subprogram >= 0 && inst.line > 0 {
                     if inst.line == last-line && inst.col == last-col {
-                        emit-record(w, 33, []);
+                        emit-record(bitstream, 33, []);
                     } else {
-                        emit-record(w, 35, [inst.line as u64, inst.col as u64, (subprogram + 1) as u64, 0, 0, 0, 0,]);
+                        emit-record(bitstream, 35, [inst.line as u64, inst.col as u64, (subprogram + 1) as u64, 0, 0, 0, 0,]);
                         last-line = inst.line;
                         last-col = inst.col;
                     }
@@ -772,8 +772,8 @@ module bitcode {
             // goes before the instruction read last: DEBUG_RECORD_DECLARE, its location, its
             // variable, its expression, its slot's metadata, each by its id as it is)
             if declared && block-index == 0 {
-                for index in 0..f.variables.len() {
-                    emit-record(w, 62, [
+                for index in 0..function.variables.len() {
+                    emit-record(bitstream, 62, [
                         ids.locations[at][index] as u64,
                         ids.variables[at][index] as u64,
                         ids.expression as u64,
@@ -784,11 +784,11 @@ module bitcode {
         }
         // its subprogram, attached to it (METADATA_ATTACHMENT: kind dbg, the node)
         if subprogram >= 0 {
-            enter-block(w, 16, 3);
-            emit-record(w, 11, [0, subprogram as u64,]);
-            end-block(w);
+            enter-block(bitstream, 16, 3);
+            emit-record(bitstream, 11, [0, subprogram as u64,]);
+            end-block(bitstream);
         }
-        end-block(w);
+        end-block(bitstream);
     }
 
     // the module's metadata (METADATA_BLOCK), each record's id the next (a string's, a value's, a
@@ -796,19 +796,19 @@ module bitcode {
     // in a NAMED_NODE: the module flags (Dwarf Version, Debug Info Version: llvm.module.flags), the
     // files, the compile unit (llvm.dbg.cu), each func's subprogram, the empty expression, the
     // debug types, and each func's variables (and the places they are declared). Their ids
-    write-metadata: func(w: BitWriter, m: BcModule) -> BcDebugIds {
-        enter-block(w, 15, 4);
-        let md: BcMetadata = { w: w, next: 0, strings: map.new(), };
+    write-metadata: func(bitstream: BitWriter, compilation: BcModule) -> BcDebugIds {
+        enter-block(bitstream, 15, 4);
+        let md: BcMetadata = { w: bitstream, next: 0, strings: map.new(), };
         // the flags' values: module constants after the globals' initializers
-        let i32 = int-type(m, 32) as u64;
-        let first = (m.globals.len() + m.funcs.len() + constant-count(m) - flag-values().len()) as u64;
+        let i32 = int-type(compilation, 32) as u64;
+        let first = (compilation.globals.len() + compilation.funcs.len() + constant-count(compilation) - flag-values().len()) as u64;
         let values: list<s64> = [];
         for index in 0..flag-values().len() { values.push(md-record(md, 2, [i32, first + index as u64,])); }
         let dwarf = md-record(md, 3, [ref(values[0]), ref(md-string(md, "Dwarf Version")), ref(values[1]),]);
         let version = md-record(md, 3, [ref(values[2]), ref(md-string(md, "Debug Info Version")), ref(values[3]),]);
         // FILE: distinct, its name, its directory, no checksum
         let files: list<s64> = [];
-        for path in m.files {
+        for path in compilation.files {
             let slash = path.find-last("/").unwrap-or(-1);
             let name = path.substring(slash + 1, path.len());
             let directory = if slash > 0 { path.substring(0, slash) } else { "/" };
@@ -819,7 +819,7 @@ module bitcode {
         // its file, producer, not optimized, no flags, runtime version, split file, emission
         // FullDebug, then none of its lists, and split debug inlining (as LLVM's default)
         let unit = md-record(md, 20, [
-            1, 29, main-file, ref(md-string(md, m.producer)), 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            1, 29, main-file, ref(md-string(md, compilation.producer)), 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
             0, 0,
         ]);
         // a subprogram's type: no types told (SUBROUTINE_TYPE: no old type refs, no flags, the
@@ -827,8 +827,8 @@ module bitcode {
         let none-list = md-record(md, 3, []);
         let signature = md-record(md, 19, [2, 0, ref(none-list), 0,]);
         let subprograms: list<s64> = [];
-        for f in m.funcs {
-            match f.subprogram {
+        for function in compilation.funcs {
+            match function.subprogram {
                 some(sp) => {
                     // SUBPROGRAM: distinct with its unit and flags (7), scope (its file), name,
                     // linkage name, file, line, type, scope line, no containing type, flags
@@ -848,36 +848,36 @@ module bitcode {
         // the debug types: each one's id known before any is written (a record's field may point
         // at the record: a reference forward), a struct's the second of its two
         // (their names written first: a string written among them would move the ids)
-        for t in m.debug-types {
-            if t.kind != 1 { let _ = md-string(md, t.name); }
+        for debug-type in compilation.debug-types {
+            if debug-type.kind != 1 { let _ = md-string(md, debug-type.name); }
         }
         let type-ids: list<s64> = [];
         let at = md.next;
-        for t in m.debug-types {
-            if t.kind == 3 { at += 1; }
+        for debug-type in compilation.debug-types {
+            if debug-type.kind == 3 { at += 1; }
             type-ids.push(at);
             at += 1;
         }
         let type-ref = { index: s64 -> if index < 0 { 0 } else { ref(type-ids[index]) } };
-        for t in m.debug-types {
-            if t.kind == 0 {
+        for debug-type in compilation.debug-types {
+            if debug-type.kind == 0 {
                 // BASIC_TYPE: DW_TAG_base_type, its name, size, no alignment, its encoding
-                let _ = md-record(md, 15, [0, 36, ref(md-string(md, t.name)), t.size as u64, 0, t.encoding as u64, 0, 0, 0,]);
-            } else if t.kind == 1 {
+                let _ = md-record(md, 15, [0, 36, ref(md-string(md, debug-type.name)), debug-type.size as u64, 0, debug-type.encoding as u64, 0, 0, 0,]);
+            } else if debug-type.kind == 1 {
                 // DERIVED_TYPE: DW_TAG_pointer_type, to its base
-                let _ = md-record(md, 17, [0, 15, 0, 0, 0, 0, type-ref(t.base), t.size as u64, 0, 0, 0, 0, 0, 0, 0,]);
-            } else if t.kind == 2 {
+                let _ = md-record(md, 17, [0, 15, 0, 0, 0, 0, type-ref(debug-type.base), debug-type.size as u64, 0, 0, 0, 0, 0, 0, 0,]);
+            } else if debug-type.kind == 2 {
                 // DERIVED_TYPE: DW_TAG_member, its name, base, size and offset
                 let _ = md-record(md, 17, [
-                    0, 13, ref(md-string(md, t.name)), 0, 0, 0, type-ref(t.base), t.size as u64, 0, t.offset as u64, 0, 0, 0, 0, 0,
+                    0, 13, ref(md-string(md, debug-type.name)), 0, 0, 0, type-ref(debug-type.base), debug-type.size as u64, 0, debug-type.offset as u64, 0, 0, 0, 0, 0,
                 ]);
             } else {
                 // its members' node, then COMPOSITE_TYPE: DW_TAG_structure_type, its name, size,
                 // members, and no enum kind (-1 as a u32)
-                let members = md-record(md, 3, t.members.map({ member -> type-ref(member) }));
-                let name = ref(md-string(md, t.name));
+                let members = md-record(md, 3, debug-type.members.map({ member -> type-ref(member) }));
+                let name = ref(md-string(md, debug-type.name));
                 let _ = md-record(md, 18, [
-                    2, 19, name, 0, 0, 0, 0, t.size as u64, 0, 0, 0, ref(members), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    2, 19, name, 0, 0, 0, 0, debug-type.size as u64, 0, 0, 0, ref(members), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                     4294967295, 0,
                 ]);
             }
@@ -887,18 +887,18 @@ module bitcode {
         // is declared (its scope by its id as it is)
         let variables: list<list<s64>> = [];
         let locations: list<list<s64>> = [];
-        for index in 0..m.funcs.len() {
-            let f = m.funcs[index];
+        for index in 0..compilation.funcs.len() {
+            let function = compilation.funcs[index];
             let vars: list<s64> = [];
             let places: list<s64> = [];
-            match f.subprogram {
+            match function.subprogram {
                 some(sp) => {
-                    for v in f.variables {
+                    for variable in function.variables {
                         vars.push(md-record(md, 28, [
-                            2, ref(subprograms[index]), ref(md-string(md, v.name)), ref(files[sp.file]), v.line as u64, type-ref(v.ty),
-                            v.arg as u64, 0, 0, 0,
+                            2, ref(subprograms[index]), ref(md-string(md, variable.name)), ref(files[sp.file]), variable.line as u64, type-ref(variable.ty),
+                            variable.arg as u64, 0, 0, 0,
                         ]));
-                        places.push(md-record(md, 7, [0, v.line as u64, v.col as u64, subprograms[index] as u64, 0, 0, 0, 0,]));
+                        places.push(md-record(md, 7, [0, variable.line as u64, variable.col as u64, subprograms[index] as u64, 0, 0, 0, 0,]));
                     }
                 }
                 none => {}
@@ -908,7 +908,7 @@ module bitcode {
         }
         named(md, "llvm.module.flags", [dwarf as u64, version as u64,]);
         named(md, "llvm.dbg.cu", [unit as u64,]);
-        end-block(w);
+        end-block(bitstream);
         { subprograms: subprograms, variables: variables, locations: locations, expression: expression, count: md.next, }
     }
 
@@ -939,10 +939,10 @@ module bitcode {
         emit-record(md.w, 10, nodes);
     }
 
-    absolute-id: func(m: BcModule, v: BcValue, params: s64, constants: s64, written: list<s64>) -> s64 {
-        match v {
+    absolute-id: func(compilation: BcModule, value: BcValue, params: s64, constants: s64, written: list<s64>) -> s64 {
+        match value {
             global(index) => index,
-            function(index) => m.globals.len() + index,
+            function(index) => compilation.globals.len() + index,
             param(index) => params + index,
             constant(index) => constants + index,
             instruction(index) => written[index],

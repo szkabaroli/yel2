@@ -50,7 +50,7 @@ module check {
         // (errors of what names name are all a check finds: the IR's checks run on no program in
         // error, so they are told now. Else nothing yet: what the IR's checks find is told with
         // them, so a readonly or move error never goes and comes back between the two)
-        if checks.any({ c -> c.problems.len() > 0 }) {
+        if checks.any({ outcome -> outcome.problems.len() > 0 }) {
             wait publish(state, inputs, checks);
             return;
         }

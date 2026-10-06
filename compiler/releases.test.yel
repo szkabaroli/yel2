@@ -16,29 +16,29 @@ module lowering {
 
     // the func written as name (its key)
     func-named: func(lowered: Lowered, name: string) -> IrFunc {
-        for f in lowered.funcs { if f.key == name { return f; } }
+        for function in lowered.funcs { if function.key == name { return function; } }
         expect.fail("no func {name} in the program")
     }
 
-    // the local of f a binding named name has
-    local-named: func(f: IrFunc, name: string) -> s64 {
-        for index in 0..f.locals.len() {
-            if f.locals[index].name == name && f.locals[index].binding.is-some() { return index; }
+    // the local of the func a binding named name has
+    local-named: func(function: IrFunc, name: string) -> s64 {
+        for index in 0..function.locals.len() {
+            if function.locals[index].name == name && function.locals[index].binding.is-some() { return index; }
         }
-        expect.fail("no local {name} in {f.key}")
+        expect.fail("no local {name} in {function.key}")
     }
 
-    // the names of the locals f lets go, each where it does (in order, a name again for each place;
+    // the names of the locals the func lets go, each where it does (in order, a name again for each place;
     // a close the func writes itself among them)
-    released: func(f: IrFunc) -> list<string> {
+    released: func(function: IrFunc) -> list<string> {
         let out: list<string> = [];
-        for n in flatten(f.body) {
-            match n.kind {
-                call(c) => {
-                    if c.c-name == "yel_stream_release" || c.c-name == "yel_writer_close" || c.c-name == "yel_future_release" {
-                        for a in c.args {
-                            match a.kind {
-                                local(index) => { out.push(f.locals[index].name); }
+        for node in flatten(function.body) {
+            match node.kind {
+                call(called) => {
+                    if called.c-name == "yel_stream_release" || called.c-name == "yel_writer_close" || called.c-name == "yel_future_release" {
+                        for argument in called.args {
+                            match argument.kind {
+                                local(index) => { out.push(function.locals[index].name); }
                                 _ => {}
                             }
                         }
@@ -85,10 +85,10 @@ module releases-tests {
                 wait task;
             }
         ");
-        let f = lowering.func-named(lowered, "ignore");
-        expect.equal(lowering.released(f), ["input",]);
-        match f.body[0].kind {
-            call(c) => expect.equal(c.c-name, "yel_stream_release"),
+        let function = lowering.func-named(lowered, "ignore");
+        expect.equal(lowering.released(function), ["input",]);
+        match function.body[0].kind {
+            call(called) => expect.equal(called.c-name, "yel_stream_release"),
             _ => expect.fail("the release is not the first statement"),
         }
     }

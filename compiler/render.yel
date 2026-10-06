@@ -21,105 +21,105 @@ resource Render {
 
 module gen {
     // a local's C name: v<n>_<name>, or t<n> for a temporary
-    local-c: func(f: IrFunc, i: s64) -> string {
+    local-c: func(function: IrFunc, local: s64) -> string {
         // an async func's locals: in its frame (they last while it waits)
-        if f.async { return "fr->l{i}"; }
-        let n = f.locals[i].name;
-        if n == "" { "t{i}" } else { "v{i}_{mangle(n)}" }
+        if function.async { return "fr->l{local}"; }
+        let name = function.locals[local].name;
+        if name == "" { "t{local}" } else { "v{local}_{mangle(name)}" }
     }
 
-    line: func(r: Render, s: string) { r.lines.push(s); }
+    line: func(rendering: Render, content: string) { rendering.lines.push(content); }
 
     // a local just assigned: its pointers into its slots
-    root: func(r: Render, i: s64) {
-        let first = r.slot-at[i];
+    root: func(rendering: Render, local: s64) {
+        let first = rendering.slot-at[local];
         if first < 0 { return; }
-        let paths = r.paths[i];
-        for k in 0..paths.len() { line(r, "ys[{first + k}] = (void *)({paths[k]});"); }
+        let paths = rendering.paths[local];
+        for position in 0..paths.len() { line(rendering, "ys[{first + position}] = (void *)({paths[position]});"); }
     }
 
     // the local a store's target is in, where it is in the local's own value (a fixed list's item,
     // a value's field, at any depth), not through a pointer
-    place-local: func(n: Node) -> option<s64> {
-        match n.kind {
-            local(i) => some(i),
-            list-get(t) => if t.fixed { place-local(t.list) } else { none },
-            load(t) => if t.arrow { none } else { place-local(t.base) },
+    place-local: func(node: Node) -> option<s64> {
+        match node.kind {
+            local(slot) => some(slot),
+            list-get(listed) => if listed.fixed { place-local(listed.list) } else { none },
+            load(loaded) => if loaded.arrow { none } else { place-local(loaded.base) },
             _ => none,
         }
     }
 
     // ================================================================ values
 
-    render-expr: func(r: Render, n: Node) -> string {
-        let g = r.g;
-        match n.kind {
-            const(c) => constant-c(g, c, n.ty),
-            scan(t) => scan-fn(g, t),
-            static-list(x) => if x.flat { "((void *){x.c-name}_items)" } else { "(&{x.c-name})" },
-            descriptor(x) => "(&{x.c-name})",
-            global(k) => global-c(k),
-            local(i) => r.names[i],
-            bin(x) => "({render-expr(r, x.a)} {x.op} {render-expr(r, x.b)})",
-            un(x) => "({x.op}{render-expr(r, x.a)})",
-            convert(a) => "(({c-type(g, n.ty)}){render-expr(r, a)})",
-            load(x) => "{operand-c(r, x.base)}{if x.arrow { "->" } else { "." }}{x.path.join(".")}",
-            func-ref(x) => x.c,
-            call-ref(x) => {
+    render-expr: func(rendering: Render, node: Node) -> string {
+        let generator = rendering.g;
+        match node.kind {
+            const(constant) => constant-c(generator, constant, node.ty),
+            scan(scanned) => scan-fn(generator, scanned),
+            static-list(listed) => if listed.flat { "((void *){listed.c-name}_items)" } else { "(&{listed.c-name})" },
+            descriptor(described) => "(&{described.c-name})",
+            global(key) => global-c(key),
+            local(slot) => rendering.names[slot],
+            bin(binary) => "({render-expr(rendering, binary.a)} {binary.op} {render-expr(rendering, binary.b)})",
+            un(unary) => "({unary.op}{render-expr(rendering, unary.a)})",
+            convert(inner) => "(({c-type(generator, node.ty)}){render-expr(rendering, inner)})",
+            load(loaded) => "{operand-c(rendering, loaded.base)}{if loaded.arrow { "->" } else { "." }}{loaded.path.join(".")}",
+            func-ref(referenced) => referenced.c,
+            call-ref(called) => {
                 let args: list<string> = [];
-                for a in x.args { args.push(top-expr(r, a)); }
+                for argument in called.args { args.push(top-expr(rendering, argument)); }
                 // a func value: its C function, given its environment first
-                let f = operand-c(r, x.callee);
-                let env = [f + ".env",];
-                for a in args { env.push(a); }
-                "{f}.fn({env.join(", ")})"
+                let callee = operand-c(rendering, called.callee);
+                let env = [callee + ".env",];
+                for argument in args { env.push(argument); }
+                "{callee}.fn({env.join(", ")})"
             }
-            call(x) => {
+            call(called) => {
                 let args: list<string> = [];
-                for a in x.args {
-                    match a.kind {
-                        type-arg(arg) => { for part in type-arg-c(g, x.c-name, args.len(), arg) { args.push(part); } }
-                        _ => args.push(top-expr(r, a)),
+                for argument in called.args {
+                    match argument.kind {
+                        type-arg(arg) => { for part in type-arg-c(generator, called.c-name, args.len(), arg) { args.push(part); } }
+                        _ => args.push(top-expr(rendering, argument)),
                     }
                 }
-                if find-byte(x.c-name, 36) != none || x.c-name.byte-at(0) == 40 { return expand(x.c-name, args); }
-                "{x.c-name}({args.join(", ")})"
+                if find-byte(called.c-name, 36) != none || called.c-name.byte-at(0) == 40 { return expand(called.c-name, args); }
+                "{called.c-name}({args.join(", ")})"
             }
-            make(x) => {
+            make(made) => {
                 let parts: list<string> = [];
-                for k in 0..x.parts.len() {
-                    let v = top-expr(r, x.parts[k]);
-                    parts.push(if x.fields[k] == "" { v } else { ".{x.fields[k]} = {v}" });
+                for position in 0..made.parts.len() {
+                    let value = top-expr(rendering, made.parts[position]);
+                    parts.push(if made.fields[position] == "" { value } else { ".{made.fields[position]} = {value}" });
                 }
-                c"(({x.ctype}){ {parts.join(", ")} })"
+                c"(({made.ctype}){ {parts.join(", ")} })"
             }
-            deref(a) => "(*({c-type(g, n.ty)} *)({render-expr(r, a)}))",
-            address-of(a) => "(&{operand-c(r, a)})",
-            size-of(x) => "sizeof({c-type(g, x)})",
-            element(x) => "(&(({c-type(g, x.item)} *)({render-expr(r, x.base)}))[{top-expr(r, x.index)}])",
-            list-get(x) => if x.fixed {
-                "{operand-c(r, x.list)}.items[{top-expr(r, x.index)}]"
+            deref(address) => "(*({c-type(generator, node.ty)} *)({render-expr(rendering, address)}))",
+            address-of(place) => "(&{operand-c(rendering, place)})",
+            size-of(sized) => "sizeof({c-type(generator, sized)})",
+            element(indexed) => "(&(({c-type(generator, indexed.item)} *)({render-expr(rendering, indexed.base)}))[{top-expr(rendering, indexed.index)}])",
+            list-get(read) => if read.fixed {
+                "{operand-c(rendering, read.list)}.items[{top-expr(rendering, read.index)}]"
             } else {
-                "(({x.ctype} *){operand-c(r, x.list)}->items)[{top-expr(r, x.index)}]"
+                "(({read.ctype} *){operand-c(rendering, read.list)}->items)[{top-expr(rendering, read.index)}]"
             },
             // a loop's step
-            assign(x) => "{r.names[x.dest]} = {top-expr(r, x.value)}",
-            _ => panic("{r.f.c-name}: a statement where a value was expected"),
+            assign(assignment) => "{rendering.names[assignment.dest]} = {top-expr(rendering, assignment.value)}",
+            _ => panic("{rendering.f.c-name}: a statement where a value was expected"),
         }
     }
 
     // C that writes value's text at the buffer yb's end: by its writer (std's format.write-*), or
     // by std's value.render over its type's descriptor, the value held where it can point at it
     // (the interpolation holds the collector)
-    format-line: func(r: Render, formatter: Formatter, value: Node) -> string {
+    format-line: func(rendering: Render, formatter: Formatter, value: Node) -> string {
         let shown = match formatter {
-            writer(name) => { return "{name}(yb, {top-expr(r, value)});"; }
-            render(x) => x,
+            writer(name) => { return "{name}(yb, {top-expr(rendering, value)});"; }
+            render(rendered) => rendered,
         };
-        let walker = r.g.funcs[gen.render-key()].c-name;
-        let push = r.g.funcs["yel:std/buffer.push"].c-name;
-        let held = "{c-type(r.g, value.ty)} y_v = {top-expr(r, value)};";
-        let call = "{walker}((int64_t)(uintptr_t)&{type-desc(r.g, shown.held)}, (int64_t)(uintptr_t)&y_v, {shown.display})";
+        let walker = rendering.g.funcs[gen.render-key()].c-name;
+        let push = rendering.g.funcs["yel:std/buffer.push"].c-name;
+        let held = "{c-type(rendering.g, value.ty)} y_v = {top-expr(rendering, value)};";
+        let call = "{walker}((int64_t)(uintptr_t)&{type-desc(rendering.g, shown.held)}, (int64_t)(uintptr_t)&y_v, {shown.display})";
         c"{ {held} {push}(yb, {call}); }"
     }
 
@@ -127,65 +127,65 @@ module gen {
     // type, and its scan (a template's only where it reads it, else 0) and a template's
     // descriptor, and a key's hash and equality. Made as codegen makes the call (the helpers it
     // names with it), written again by render
-    type-arg-c: func(g: Gen, c-name: string, slot: s64, x: TypeArg) -> list<string> {
-        let out = [c-type(g, x.ty),];
+    type-arg-c: func(generator: Gen, c-name: string, slot: s64, argument: TypeArg) -> list<string> {
+        let out = [c-type(generator, argument.ty),];
         if !is-template(c-name) {
-            out.push(scan-fn(g, x.ty));
+            out.push(scan-fn(generator, argument.ty));
         } else {
-            out.push(if mentions(c-name, slot + 2) { scan-fn(g, x.ty) } else { "0" });
-            out.push(if mentions(c-name, slot + 3) { "&" + type-desc(g, x.ty) } else { "0" });
+            out.push(if mentions(c-name, slot + 2) { scan-fn(generator, argument.ty) } else { "0" });
+            out.push(if mentions(c-name, slot + 3) { "&" + type-desc(generator, argument.ty) } else { "0" });
         }
-        if x.key {
-            out.push(key-hash-fn(g, x.ty));
-            out.push(key-eq-fn(g, x.ty));
+        if argument.key {
+            out.push(key-hash-fn(generator, argument.ty));
+            out.push(key-eq-fn(generator, argument.ty));
         }
         out
     }
 
     // a constant's C, as a value of type t
-    constant-c: func(g: Gen, c: Constant, t: Type) -> string {
-        match c {
-            int(v) => int-c(g, v, t),
-            float(v) => float-c(v, t),
-            bool(b) => if b { "true" } else { "false" },
+    constant-c: func(generator: Gen, constant: Constant, wanted: Type) -> string {
+        match constant {
+            int(value) => int-c(generator, value, wanted),
+            float(value) => float-c(value, wanted),
+            bool(value) => if value { "true" } else { "false" },
             unit => "0",
             null => "NULL",
-            text(s) => literal(g, s),
-            case-value(x) => "(&{singleton(x.owner, x.name)})",
-            zero => c"(({c-type(g, t)}){ 0 })",
+            text(content) => literal(generator, content),
+            case-value(valued) => "(&{singleton(valued.owner, valued.name)})",
+            zero => c"(({c-type(generator, wanted)}){ 0 })",
         }
     }
 
     // an integer's C: an int32_t's as a number, a char's as UINT32_C, others cast to their type
     // (a negative one by its bits, the cast wrapping it)
-    int-c: func(g: Gen, v: u64, t: Type) -> string {
-        let ct = c-type(g, t);
-        if ct == "bool" { return if v == 0 { "false" } else { "true" }; }
-        match resolve(t) {
-            char-type => { return "UINT32_C({v})"; }
+    int-c: func(generator: Gen, value: u64, wanted: Type) -> string {
+        let ct = c-type(generator, wanted);
+        if ct == "bool" { return if value == 0 { "false" } else { "true" }; }
+        match resolve(wanted) {
+            char-type => { return "UINT32_C({value})"; }
             _ => {}
         }
-        let negative = (v as s64) < 0;
-        if ct == "int32_t" && !negative && v < 2147483648 { return "{v}"; }
-        if negative { return "(({ct})(int64_t)UINT64_C({v}))"; }
-        if v < 1000000000 { "(({ct}){v})" } else { "(({ct})UINT64_C({v}))" }
+        let negative = (value as s64) < 0;
+        if ct == "int32_t" && !negative && value < 2147483648 { return "{value}"; }
+        if negative { return "(({ct})(int64_t)UINT64_C({value}))"; }
+        if value < 1000000000 { "(({ct}){value})" } else { "(({ct})UINT64_C({value}))" }
     }
 
     // a float's C: exactly, as a hexadecimal float (an f32's cast from it), or NAN or INFINITY
-    float-c: func(v: f64, t: Type) -> string {
-        let single = match resolve(t) {
-            num(n) => n == "f32",
+    float-c: func(value: f64, wanted: Type) -> string {
+        let single = match resolve(wanted) {
+            num(name) => name == "f32",
             _ => false,
         };
-        let bits = f64-bits(v);
+        let bits = f64-bits(value);
         let sign = if (bits >> 63) != 0 { "-" } else { "" };
         let exponent = ((bits >> 52) & 2047) as s64;
         let fraction = bits & 4503599627370495;
         let digits = "0123456789abcdef";
         let hex: list<string> = [];
-        for k in 0..13 {
-            let d = ((fraction >> (((12 - k) * 4) as u64)) & 15) as s64;
-            hex.push(digits.substring(d, d + 1));
+        for position in 0..13 {
+            let digit = ((fraction >> (((12 - position) * 4) as u64)) & 15) as s64;
+            hex.push(digits.substring(digit, digit + 1));
         }
         let written = if exponent == 2047 {
             if fraction != 0 { "NAN" } else { "({sign}INFINITY)" }
@@ -212,33 +212,33 @@ module gen {
 
     // a value where any expression fits (at the comma's precedence): an operator's outer
     // parentheses dropped
-    top-expr: func(r: Render, n: Node) -> string {
-        match n.kind {
-            bin(x) => "{render-expr(r, x.a)} {x.op} {render-expr(r, x.b)}",
-            un(x) => "{x.op}{render-expr(r, x.a)}",
-            _ => render-expr(r, n),
+    top-expr: func(rendering: Render, node: Node) -> string {
+        match node.kind {
+            bin(binary) => "{render-expr(rendering, binary.a)} {binary.op} {render-expr(rendering, binary.b)}",
+            un(unary) => "{unary.op}{render-expr(rendering, unary.a)}",
+            _ => render-expr(rendering, node),
         }
     }
 
     // a node as the base of -> or .: in parentheses unless a local
-    operand-c: func(r: Render, n: Node) -> string {
-        match n.kind {
-            local(i) => r.names[i],
-            _ => "({render-expr(r, n)})",
+    operand-c: func(rendering: Render, node: Node) -> string {
+        match node.kind {
+            local(slot) => rendering.names[slot],
+            _ => "({render-expr(rendering, node)})",
         }
     }
 
     // ================================================================ statements
 
     // a body, cut at its first terminator (what follows never runs)
-    render-stmts: func(r: Render, body: list<Node>) {
-        for n in body {
-            render-stmt(r, n);
-            let ends = match n.kind {
-                return(v) => true,
-                break(l) => true,
-                continue(l) => true,
-                unreachable(x) => true,
+    render-stmts: func(rendering: Render, body: list<Node>) {
+        for node in body {
+            render-stmt(rendering, node);
+            let ends = match node.kind {
+                return(_) => true,
+                break(_) => true,
+                continue(_) => true,
+                unreachable(_) => true,
                 halt => true,
                 _ => false,
             };
@@ -246,141 +246,140 @@ module gen {
         }
     }
 
-    render-stmt: func(r: Render, n: Node) {
-        let g = r.g;
-        match n.kind {
-            assign(x) => {
-                let d = r.names[x.dest];
-                match x.value.kind {
-                    alloc(a) => {
-                        if a.stack { line(r, "{d} = &yr{x.dest};"); }
-                        else { line(r, "{d} = y_new(sizeof({a.ctype}), {a.trace});"); }
+    render-stmt: func(rendering: Render, node: Node) {
+        match node.kind {
+            assign(assignment) => {
+                let destination = rendering.names[assignment.dest];
+                match assignment.value.kind {
+                    alloc(allocation) => {
+                        if allocation.stack { line(rendering, "{destination} = &yr{assignment.dest};"); }
+                        else { line(rendering, "{destination} = y_new(sizeof({allocation.ctype}), {allocation.trace});"); }
                     }
                     // std's writers fill a buffer (nothing collected meanwhile: the buffer is held
                     // only here)
-                    interp(s) => {
+                    interp(joined) => {
                         // (no hold where the collector runs only between turns)
-                        line(r, c"{");
-                        if !r.g.context.turns { line(r, "y_gc_hold++;"); }
-                        line(r, "ybuffer *yb = yel_buffer_new(16);");
-                        for k in 0..s.parts.len() {
-                            line(r, format-line(r, s.formatters[k], s.parts[k]));
+                        line(rendering, c"{");
+                        if !rendering.g.context.turns { line(rendering, "y_gc_hold++;"); }
+                        line(rendering, "ybuffer *yb = yel_buffer_new(16);");
+                        for position in 0..joined.parts.len() {
+                            line(rendering, format-line(rendering, joined.formatters[position], joined.parts[position]));
                         }
-                        line(r, "{d} = yel_buffer_string(yb);");
-                        if !r.g.context.turns { line(r, "y_gc_hold--;"); }
-                        line(r, c"}");
+                        line(rendering, "{destination} = yel_buffer_string(yb);");
+                        if !rendering.g.context.turns { line(rendering, "y_gc_hold--;"); }
+                        line(rendering, c"}");
                     }
-                    _ => line(r, "{d} = {top-expr(r, x.value)};"),
+                    _ => line(rendering, "{destination} = {top-expr(rendering, assignment.value)};"),
                 }
-                root(r, x.dest);
+                root(rendering, assignment.dest);
             }
-            store(x) => {
-                line(r, "{render-expr(r, x.target)} = {top-expr(r, x.value)};");
+            store(stored) => {
+                line(rendering, "{render-expr(rendering, stored.target)} = {top-expr(rendering, stored.value)};");
                 // an item set in a local's fixed-length list, a field of a local's value: the local's
                 // slots again
-                match place-local(x.target) {
-                    some(i) => root(r, i),
+                match place-local(stored.target) {
+                    some(slot) => root(rendering, slot),
                     none => {}
                 }
             }
             // an intrinsic's value not used: a cast says so (C warns of an unused comma)
-            call(x) => line(r, if find-byte(x.c-name, 36) != none || x.c-name.byte-at(0) == 40 { "(void){render-expr(r, n)};" } else { "{render-expr(r, n)};" }),
-            call-ref(x) => line(r, "{render-expr(r, n)};"),
-            if(x) => {
-                if x.yes.len() == 0 && x.no.len() == 0 { return; }
-                line(r, c"if ({top-expr(r, x.test)}) {");
-                render-stmts(r, x.yes);
-                if x.no.len() > 0 {
-                    line(r, c"} else {");
-                    render-stmts(r, x.no);
+            call(called) => line(rendering, if find-byte(called.c-name, 36) != none || called.c-name.byte-at(0) == 40 { "(void){render-expr(rendering, node)};" } else { "{render-expr(rendering, node)};" }),
+            call-ref(_) => line(rendering, "{render-expr(rendering, node)};"),
+            if(branch) => {
+                if branch.yes.len() == 0 && branch.no.len() == 0 { return; }
+                line(rendering, c"if ({top-expr(rendering, branch.test)}) {");
+                render-stmts(rendering, branch.yes);
+                if branch.no.len() > 0 {
+                    line(rendering, c"} else {");
+                    render-stmts(rendering, branch.no);
                 }
-                line(r, c"}");
+                line(rendering, c"}");
             }
-            loop(x) => {
-                let test = match x.test {
-                    some(t) => top-expr(r, t),
+            loop(looping) => {
+                let test = match looping.test {
+                    some(tested) => top-expr(rendering, tested),
                     none => "",
                 };
-                match x.step {
-                    some(s) => line(r, c"for (; {test}; {render-expr(r, s)}) {"),
-                    none => line(r, c"while ({if test == "" { "1" } else { test }}) {"),
+                match looping.step {
+                    some(stepped) => line(rendering, c"for (; {test}; {render-expr(rendering, stepped)}) {"),
+                    none => line(rendering, c"while ({if test == "" { "1" } else { test }}) {"),
                 }
-                r.loops.push(x.label);
-                render-stmts(r, x.body);
-                if x.label >= 0 && r.used-labels.has("{x.label}_c") {
-                    line(r, "yl{x.label}_c:;");
+                rendering.loops.push(looping.label);
+                render-stmts(rendering, looping.body);
+                if looping.label >= 0 && rendering.used-labels.has("{looping.label}_c") {
+                    line(rendering, "yl{looping.label}_c:;");
                 }
-                r.loops.pop();
-                line(r, c"}");
-                if x.label >= 0 && r.used-labels.has("{x.label}_b") {
-                    line(r, "yl{x.label}_b:;");
+                rendering.loops.pop();
+                line(rendering, c"}");
+                if looping.label >= 0 && rendering.used-labels.has("{looping.label}_b") {
+                    line(rendering, "yl{looping.label}_b:;");
                 }
             }
             break(label) => {
-                if label < 0 || innermost(r, label) { line(r, "break;"); }
+                if label < 0 || innermost(rendering, label) { line(rendering, "break;"); }
                 else {
-                    r.used-labels.set("{label}_b", true);
-                    line(r, "goto yl{label}_b;");
+                    rendering.used-labels.set("{label}_b", true);
+                    line(rendering, "goto yl{label}_b;");
                 }
             }
             continue(label) => {
-                if label < 0 || innermost(r, label) { line(r, "continue;"); }
+                if label < 0 || innermost(rendering, label) { line(rendering, "continue;"); }
                 else {
-                    r.used-labels.set("{label}_c", true);
-                    line(r, "goto yl{label}_c;");
+                    rendering.used-labels.set("{label}_c", true);
+                    line(rendering, "goto yl{label}_c;");
                 }
             }
-            block(x) => {
-                if x.body.len() == 0 && x.label < 0 { return; }
-                line(r, c"{");
-                render-stmts(r, x.body);
-                line(r, c"}");
-                if x.label >= 0 && r.used-labels.has("{x.label}_b") {
-                    line(r, "yl{x.label}_b:;");
+            block(grouped) => {
+                if grouped.body.len() == 0 && grouped.label < 0 { return; }
+                line(rendering, c"{");
+                render-stmts(rendering, grouped.body);
+                line(rendering, c"}");
+                if grouped.label >= 0 && rendering.used-labels.has("{grouped.label}_b") {
+                    line(rendering, "yl{grouped.label}_b:;");
                 }
             }
-            return(v) => {
+            return(value) => {
                 // an async func's: its result kept in its frame, and done
                 // a generator's: done, its last value read (none here)
-                if r.f.generator {
-                    line(r, "fr->h.done = 1;");
-                    line(r, "return 1;");
+                if rendering.f.generator {
+                    line(rendering, "fr->h.done = 1;");
+                    line(rendering, "return 1;");
                     return;
                 }
-                if r.f.async {
-                    line(r, "fr->result = {top-expr(r, v)};");
-                    line(r, "fr->h.done = 1;");
-                    line(r, "return 1;");
+                if rendering.f.async {
+                    line(rendering, "fr->result = {top-expr(rendering, value)};");
+                    line(rendering, "fr->h.done = 1;");
+                    line(rendering, "return 1;");
                     return;
                 }
-                if r.framed { line(r, "y_top = yf.prev;"); }
+                if rendering.framed { line(rendering, "y_top = yf.prev;"); }
                 // a helper's () result: C's void
-                if r.f.void-result { line(r, "return;"); } else { line(r, "return {top-expr(r, v)};"); }
+                if rendering.f.void-result { line(rendering, "return;"); } else { line(rendering, "return {top-expr(rendering, value)};"); }
             }
             // where an async func goes on when stepped again, and its leaving (that state kept)
-            resume(k) => line(r, "ya{k}:;"),
-            yield(v) => line(r, "fr->result = {top-expr(r, v)};"),
-            suspend(k) => {
-                line(r, "fr->h.state = {k};");
-                line(r, "return 0;");
+            resume(state) => line(rendering, "ya{state}:;"),
+            yield(value) => line(rendering, "fr->result = {top-expr(rendering, value)};"),
+            suspend(state) => {
+                line(rendering, "fr->h.state = {state};");
+                line(rendering, "return 0;");
             }
-            unreachable(x) => {
-                line(r, c"{");
-                line(r, "y_gc_hold++;");
-                line(r, "ybuffer *yb = yel_buffer_new(16);");
-                line(r, format-line(r, x.formatter, x.value));
-                line(r, "yel_no_match(yel_buffer_string(yb));");
-                line(r, c"}");
+            unreachable(unreached) => {
+                line(rendering, c"{");
+                line(rendering, "y_gc_hold++;");
+                line(rendering, "ybuffer *yb = yel_buffer_new(16);");
+                line(rendering, format-line(rendering, unreached.formatter, unreached.value));
+                line(rendering, "yel_no_match(yel_buffer_string(yb));");
+                line(rendering, c"}");
             }
-            halt => line(r, "__builtin_unreachable();"),
+            halt => line(rendering, "__builtin_unreachable();"),
             // a pure value whose value is not used does nothing
             _ => {}
         }
     }
 
     // whether label is the innermost loop's
-    innermost: func(r: Render, label: s64) -> bool {
-        r.loops.len() > 0 && r.loops[r.loops.len() - 1] == label
+    innermost: func(rendering: Render, label: s64) -> bool {
+        rendering.loops.len() > 0 && rendering.loops[rendering.loops.len() - 1] == label
     }
 
     // ================================================================ a func
@@ -390,73 +389,87 @@ module gen {
     // local, so they last while it waits; traced by the collector), its start (s_<name>: a frame
     // made, its arguments in it) and its step (the C func: back to the state it left, on until it
     // waits again, 0, or is done, 1)
-    render-async: func(r: Render, f: IrFunc, out: list<string>) {
-        let g = r.g;
+    render-async: func(rendering: Render, function: IrFunc, out: list<string>) {
+        let generator = rendering.g;
         // named by its step's C name (a generic func's instances each their own)
-        let q = "Q" + f.c-name.substring(1, f.c-name.len());
+        let frame-name = "Q" + function.c-name.substring(1, function.c-name.len());
         // its locals: fields of the frame (the frame is traced: no slots)
-        for i in 0..f.locals.len() {
-            r.names.push(local-c(f, i));
-            r.paths.push([]);
-            r.slot-at.push(-1);
+        for local in 0..function.locals.len() {
+            rendering.names.push(local-c(function, local));
+            rendering.paths.push([]);
+            rendering.slot-at.push(-1);
         }
-        let fields = ["y_async h;", "{c-type(g, f.result)} result;",];
-        for i in 0..f.locals.len() { fields.push("{c-type(g, f.locals[i].ty)} l{i};"); }
-        g.value-decls.push(c"typedef struct { {fields.join(" ")} } {q};");
+        let fields = ["y_async h;", "{c-type(generator, function.result)} result;",];
+        for local in 0..function.locals.len() { fields.push("{c-type(generator, function.locals[local].ty)} l{local};"); }
+        generator.value-decls.push(c"typedef struct { {fields.join(" ")} } {frame-name};");
         // the frame's trace: every pointer in it
-        let trace = "y_trace_" + q;
-        g.helper-protos.push("static void {trace}(void *obj);");
-        g.helper-bodies.push(c"static void {trace}(void *obj) {");
-        g.helper-bodies.push("\t{q} *fr = obj;");
-        for p in ptr-paths(g, f.result, "fr->result") { g.helper-bodies.push("\ty_mark({p});"); }
-        for i in 0..f.locals.len() {
-            for p in ptr-paths(g, f.locals[i].ty, "fr->l{i}") {
-                g.helper-bodies.push("\ty_mark({p});");
+        let trace = "y_trace_" + frame-name;
+        generator.helper-protos.push("static void {trace}(void *obj);");
+        generator.helper-bodies.push(c"static void {trace}(void *obj) {");
+        generator.helper-bodies.push("\t{frame-name} *fr = obj;");
+        for path in ptr-paths(generator, function.result, "fr->result") { generator.helper-bodies.push("\ty_mark({path});"); }
+        for local in 0..function.locals.len() {
+            for path in ptr-paths(generator, function.locals[local].ty, "fr->l{local}") {
+                generator.helper-bodies.push("\ty_mark({path});");
             }
         }
-        g.helper-bodies.push(c"}");
-        g.helper-bodies.push("");
+        generator.helper-bodies.push(c"}");
+        generator.helper-bodies.push("");
         // the start: a frame, its parameters set
         let params: list<string> = [];
-        for k in 0..f.params.len() { params.push("{c-type(g, f.locals[f.params[k]].ty)} a{k}"); }
+        for position in 0..function.params.len() { params.push("{c-type(generator, function.locals[function.params[position]].ty)} a{position}"); }
         let ps = if params.len() == 0 { "void" } else { params.join(", ") };
-        let start = "static y_async *s{f.c-name.substring(1, f.c-name.len())}({ps})";
-        g.protos.push(start + ";");
+        let start = "static y_async *s{function.c-name.substring(1, function.c-name.len())}({ps})";
+        generator.protos.push(start + ";");
         out.push(start + c" {");
-        out.push("\t{q} *fr = y_new(sizeof({q}), {trace});");
-        out.push("\tfr->h.step = {f.c-name};");
+        // its parameters rooted while the frame is made: the caller hands them over (a yel func's
+        // call), and a collection in y_new would free them before the frame holds them
+        let held: list<string> = [];
+        if !generator.context.turns {
+            for position in 0..function.params.len() {
+                for path in ptr-paths(generator, function.locals[function.params[position]].ty, "a{position}") { held.push("(void *)({path})"); }
+            }
+        }
+        if held.len() > 0 {
+            out.push(c"\tvoid *ys[{held.len()}] = { {held.join(", ")} };");
+            out.push(c"\ty_frame yf = { y_top, {held.len()}, ys, 0, NULL };");
+            out.push("\ty_top = &yf;");
+        }
+        out.push("\t{frame-name} *fr = y_new(sizeof({frame-name}), {trace});");
+        if held.len() > 0 { out.push("\ty_top = yf.prev;"); }
+        out.push("\tfr->h.step = {function.c-name};");
         // (its name: what YEL_ASYNC_TRACE tells its tasks by, std's without its package)
-        let named = if f.key.starts-with("yel:std/") { f.key.substring(8, f.key.len()) } else { f.key };
+        let named = if function.key.starts-with("yel:std/") { function.key.substring(8, function.key.len()) } else { function.key };
         out.push("\tfr->h.name = \"{named}\";");
-        if f.release { out.push("\tfr->h.release = y_async_release_by_step;"); }
-        for k in 0..f.params.len() { out.push("\tfr->l{f.params[k]} = a{k};"); }
+        if function.release { out.push("\tfr->h.release = y_async_release_by_step;"); }
+        for position in 0..function.params.len() { out.push("\tfr->l{function.params[position]} = a{position};"); }
         out.push("\treturn (y_async *)fr;");
         out.push(c"}");
         out.push("");
         // the step: back to where it waited (each wait's state a label), then on
-        line(r, "{q} *fr = y_self;");
+        line(rendering, "{frame-name} *fr = y_self;");
         // each state's place (its resume: a wait's, a release's)
         let states: list<s64> = [];
-        for n in flatten(f.body) {
-            match n.kind {
-                resume(k) => states.push(k),
+        for node in flatten(function.body) {
+            match node.kind {
+                resume(state) => states.push(state),
                 _ => {}
             }
         }
         if states.len() > 0 {
-            line(r, c"switch (fr->h.state) {");
-            for k in states { line(r, "case {k}: goto ya{k};"); }
-            line(r, c"}");
+            line(rendering, c"switch (fr->h.state) {");
+            for state in states { line(rendering, "case {state}: goto ya{state};"); }
+            line(rendering, c"}");
         }
-        render-stmts(r, f.body);
-        let signature = "static int32_t {f.c-name}(void *y_self)";
-        emit-func(g, signature, r.lines, out);
+        render-stmts(rendering, function.body);
+        let signature = "static int32_t {function.c-name}(void *y_self)";
+        emit-func(generator, signature, rendering.lines, out);
     }
 
-    render-func: func(g: Gen, f: IrFunc, out: list<string>) {
-        let r: Render = {
-            g: g,
-            f: f,
+    render-func: func(generator: Gen, function: IrFunc, out: list<string>) {
+        let rendering: Render = {
+            g: generator,
+            f: function,
             lines: [],
             names: [],
             paths: [],
@@ -467,43 +480,43 @@ module gen {
             used-labels: map.new(),
         };
         // an async func: a frame, a start and a step (its own rendering)
-        if f.async {
-            render-async(r, f, out);
+        if function.async {
+            render-async(rendering, function, out);
             return;
         }
         // every rooted local holding pointers has slots, one for each
-        for i in 0..f.locals.len() {
-            let name = local-c(f, i);
-            let paths = ptr-paths(g, f.locals[i].ty, name);
-            r.names.push(name);
-            r.paths.push(paths);
-            let rooted = !g.context.turns && (f.rooted.len() == 0 || f.rooted[i]);
+        for local in 0..function.locals.len() {
+            let name = local-c(function, local);
+            let paths = ptr-paths(generator, function.locals[local].ty, name);
+            rendering.names.push(name);
+            rendering.paths.push(paths);
+            let rooted = !generator.context.turns && (function.rooted.len() == 0 || function.rooted[local]);
             if paths.len() > 0 && rooted {
-                r.slot-at.push(r.slots);
-                r.slots += paths.len();
+                rendering.slot-at.push(rendering.slots);
+                rendering.slots += paths.len();
             } else {
-                r.slot-at.push(-1);
+                rendering.slot-at.push(-1);
             }
         }
         // a closure's C function takes the environment it was made in first
-        let params: list<string> = if f.closure { ["void *y_env",] } else { [] };
+        let params: list<string> = if function.closure { ["void *y_env",] } else { [] };
         let is-param: list<bool> = [];
-        for i in 0..f.locals.len() { is-param.push(false); }
-        for p in f.params {
-            params.push("{c-type(g, f.locals[p].ty)} {local-c(f, p)}");
-            is-param[p] = true;
+        for local in 0..function.locals.len() { is-param.push(false); }
+        for parameter in function.params {
+            params.push("{c-type(generator, function.locals[parameter].ty)} {local-c(function, parameter)}");
+            is-param[parameter] = true;
         }
         // the records kept on the stack: their storage, and (those holding pointers) the frame's
         // list of them, traced as the collector's roots
         let objs: list<string> = [];
-        for n in flatten(f.body) {
-            match n.kind {
-                assign(x) => {
-                    match x.value.kind {
-                        alloc(a) => {
-                            if a.stack {
-                                line(r, c"{a.ctype} yr{x.dest} = { 0 };");
-                                if a.trace != "NULL" && !g.context.turns { objs.push(c"{ &yr{x.dest}, {a.trace} }"); }
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assignment) => {
+                    match assignment.value.kind {
+                        alloc(allocation) => {
+                            if allocation.stack {
+                                line(rendering, c"{allocation.ctype} yr{assignment.dest} = { 0 };");
+                                if allocation.trace != "NULL" && !generator.context.turns { objs.push(c"{ &yr{assignment.dest}, {allocation.trace} }"); }
                             }
                         }
                         _ => {}
@@ -513,47 +526,47 @@ module gen {
             }
         }
         // the frame: the collector's roots
-        r.framed = r.slots > 0 || objs.len() > 0;
-        if r.framed {
-            if r.slots > 0 { line(r, c"void *ys[{r.slots}] = { 0 };"); }
-            if objs.len() > 0 { line(r, c"y_stack_obj yo[{objs.len()}] = { {objs.join(", ")} };"); }
-            let ys = if r.slots > 0 { "ys" } else { "NULL" };
+        rendering.framed = rendering.slots > 0 || objs.len() > 0;
+        if rendering.framed {
+            if rendering.slots > 0 { line(rendering, c"void *ys[{rendering.slots}] = { 0 };"); }
+            if objs.len() > 0 { line(rendering, c"y_stack_obj yo[{objs.len()}] = { {objs.join(", ")} };"); }
+            let ys = if rendering.slots > 0 { "ys" } else { "NULL" };
             let yo = if objs.len() > 0 { "yo" } else { "NULL" };
-            line(r, c"y_frame yf = { y_top, {r.slots}, {ys}, {objs.len()}, {yo} };");
-            line(r, "y_top = &yf;");
+            line(rendering, c"y_frame yf = { y_top, {rendering.slots}, {ys}, {objs.len()}, {yo} };");
+            line(rendering, "y_top = &yf;");
         }
-        for i in 0..f.locals.len() {
-            if !is-param[i] { line(r, c"{c-type(g, f.locals[i].ty)} {local-c(f, i)} = { 0 };"); }
+        for local in 0..function.locals.len() {
+            if !is-param[local] { line(rendering, c"{c-type(generator, function.locals[local].ty)} {local-c(function, local)} = { 0 };"); }
         }
-        for p in f.params { root(r, p); }
-        if f.env-param >= 0 {
-            line(r, "{r.names[f.env-param]} = y_env;");
-            root(r, f.env-param);
+        for parameter in function.params { root(rendering, parameter); }
+        if function.env-param >= 0 {
+            line(rendering, "{rendering.names[function.env-param]} = y_env;");
+            root(rendering, function.env-param);
         }
-        render-stmts(r, f.body);
+        render-stmts(rendering, function.body);
         // a body that gets to its end (a helper's: a trace, a lowering) pops its frame there too
-        let ends = f.body.len() > 0 && match f.body[f.body.len() - 1].kind {
-            return(v) => true,
+        let ends = function.body.len() > 0 && match function.body[function.body.len() - 1].kind {
+            return(_) => true,
             halt => true,
             _ => false,
         };
-        if r.framed && !ends { line(r, "y_top = yf.prev;"); }
+        if rendering.framed && !ends { line(rendering, "y_top = yf.prev;"); }
         let ps = if params.len() == 0 { "void" } else { params.join(", ") };
-        let result = if f.void-result { "void" } else { c-type(g, f.result) };
+        let result = if function.void-result { "void" } else { c-type(generator, function.result) };
         // a component's export: the host's to call, by its name
-        if f.export-name != "" {
-            out.push("Y_EXPORT(\"{c-escape(f.export-name)}\")");
-            emit-func(g, "{result} {f.c-name}({ps})", r.lines, out);
+        if function.export-name != "" {
+            out.push("Y_EXPORT(\"{c-escape(function.export-name)}\")");
+            emit-func(generator, "{result} {function.c-name}({ps})", rendering.lines, out);
             return;
         }
-        let signature = "static {result} {f.c-name}({ps})";
-        emit-func(g, signature, r.lines, out);
+        let signature = "static {result} {function.c-name}({ps})";
+        emit-func(generator, signature, rendering.lines, out);
     }
 
     // a function's prototype and its body, indented by brace: a line that closes one goes out
     // first, one that opens one goes in after
-    emit-func: func(g: Gen, signature: string, lines: list<string>, out: list<string>) {
-        g.protos.push(signature + ";");
+    emit-func: func(generator: Gen, signature: string, lines: list<string>, out: list<string>) {
+        generator.protos.push(signature + ";");
         out.push(signature + c" {");
         let depth = 1;
         let tabs = [from-byte(9),];

@@ -27,27 +27,27 @@ module flow {
     // it may write that can hold it (push(xs: list<T>, v: T): v in xs); and what the types cannot
     // say, @c(keeps = "p", gives = "q"). A WIT func's (the host's): what it is given is copied
     // across, what it gives back is new
-    derive: func(x: Extern) -> RuntimeEffect {
+    derive: func(declaration: Extern) -> RuntimeEffect {
         let none-of: list<s64> = [];
-        if x.wit-module != "" { return effect(none-of, none-of, none-of); }
+        if declaration.wit-module != "" { return effect(none-of, none-of, none-of); }
         let writes: list<s64> = [];
         let keeps: list<s64> = [];
         let gives: list<s64> = [];
         let kept-in: list<list<s64>> = [];
-        let tps = x.type-params;
-        let result = type-parts(x.result, tps);
-        for i in 0..x.params.len() {
-            let t = x.param-types[i];
-            let mine = type-parts(t, tps);
-            if may-write(t, tps) { writes.push(i); }
-            if shares(result, mine) || contains(x.gives, x.params[i]) { gives.push(i); }
+        let tps = declaration.type-params;
+        let result = type-parts(declaration.result, tps);
+        for index in 0..declaration.params.len() {
+            let parameter-type = declaration.param-types[index];
+            let mine = type-parts(parameter-type, tps);
+            if may-write(parameter-type, tps) { writes.push(index); }
+            if shares(result, mine) || contains(declaration.gives, declaration.params[index]) { gives.push(index); }
             // @c(keeps = …): kept anywhere; else kept only in another parameter it may write that
             // can hold it (set-value(m, entry, value): value, in m)
-            if contains(x.keeps, x.params[i]) { keeps.push(i); }
+            if contains(declaration.keeps, declaration.params[index]) { keeps.push(index); }
             let holders: list<s64> = [];
-            for j in 0..x.params.len() {
-                if j != i && may-write(x.param-types[j], tps) && shares(type-parts(x.param-types[j], tps), mine) {
-                    holders.push(j);
+            for other in 0..declaration.params.len() {
+                if other != index && may-write(declaration.param-types[other], tps) && shares(type-parts(declaration.param-types[other], tps), mine) {
+                    holders.push(other);
                 }
             }
             kept-in.push(holders);
@@ -58,9 +58,9 @@ module flow {
     // every extern's, by its C name
     extern-effects: func(decls: list<Decl>) -> map<string, RuntimeEffect> {
         let out: map<string, RuntimeEffect> = map.new();
-        for d in decls {
-            match d {
-                extern-decl(x) => { if x.c-name != "" { out.set(x.c-name, derive(x)); } }
+        for declaration in decls {
+            match declaration {
+                extern-decl(extern) => { if extern.c-name != "" { out.set(extern.c-name, derive(extern)); } }
                 _ => {}
             }
         }
@@ -96,32 +96,32 @@ module flow {
     // the parts of a type that are values of their own (a list, a map, a buffer, a stream (either
     // end), a future, a seq, a declared type, a type parameter: what another value may share), by
     // how they show
-    type-parts: func(t: Type, tps: list<string>) -> list<string> {
+    type-parts: func(whole: Type, tps: list<string>) -> list<string> {
         let out: list<string> = [];
-        add-parts(t, tps, out);
+        add-parts(whole, tps, out);
         out
     }
 
     add-parts: func(t0: Type, tps: list<string>, out: list<string>) {
-        let t = resolve(t0);
-        match t {
-            list-type(x) => out.push(show-type(t)),
-            map-type(x) => out.push(show-type(t)),
-            future-type(x) => out.push(show-type(t)),
-            seq-type(x) => out.push(show-type(t)),
-            stream-type(x) => out.push("stream<{show-type(x.item)}>"),
+        let resolved = resolve(t0);
+        match resolved {
+            list-type(_) => out.push(show-type(resolved)),
+            map-type(_) => out.push(show-type(resolved)),
+            future-type(_) => out.push(show-type(resolved)),
+            seq-type(_) => out.push(show-type(resolved)),
+            stream-type(streaming) => out.push("stream<{show-type(streaming.item)}>"),
             buffer-type => out.push("buffer"),
             // a type parameter's (the extern's own, named as written)
-            named(n) => out.push(if contains(tps, name-text(n)) { "param " + name-text(n) } else { name-text(n) }),
-            param(n) => out.push("param " + n),
+            named(name) => out.push(if contains(tps, name-text(name)) { "param " + name-text(name) } else { name-text(name) }),
+            param(name) => out.push("param " + name),
             _ => {}
         }
-        for index in 0..child-count(t) { add-parts(child(t, index), tps, out); }
+        for index in 0..child-count(resolved) { add-parts(child(resolved, index), tps, out); }
     }
 
-    shares: func(a: list<string>, b: list<string>) -> bool {
-        for x in a {
-            if contains(b, x) { return true; }
+    shares: func(one: list<string>, other: list<string>) -> bool {
+        for item in one {
+            if contains(other, item) { return true; }
         }
         false
     }
@@ -129,21 +129,21 @@ module flow {
     // whether a value of the type may be written through it: a mutable value's (a list, a map, a
     // buffer, a stream, a future, a seq, a declared type), not written & readonly
     may-write: func(t0: Type, tps: list<string>) -> bool {
-        let t = resolve(t0);
-        match t {
-            readonly-type(x) => false,
-            list-type(x) => true,
-            map-type(x) => true,
+        let resolved = resolve(t0);
+        match resolved {
+            readonly-type(_) => false,
+            list-type(_) => true,
+            map-type(_) => true,
             buffer-type => true,
-            stream-type(x) => true,
-            future-type(x) => true,
-            seq-type(x) => true,
+            stream-type(_) => true,
+            future-type(_) => true,
+            seq-type(_) => true,
             // a type parameter's: nothing is done to a value of it
-            named(n) => !contains(tps, name-text(n)),
-            option-type(x) => any-child(t, { y -> may-write(y, tps) }),
-            result-type(r) => any-child(t, { y -> may-write(y, tps) }),
-            tuple-type(xs) => any-child(t, { y -> may-write(y, tps) }),
-            anon-record(r) => any-child(t, { y -> may-write(y, tps) }),
+            named(name) => !contains(tps, name-text(name)),
+            option-type(_) => any-child(resolved, { part -> may-write(part, tps) }),
+            result-type(_) => any-child(resolved, { part -> may-write(part, tps) }),
+            tuple-type(_) => any-child(resolved, { part -> may-write(part, tps) }),
+            anon-record(_) => any-child(resolved, { part -> may-write(part, tps) }),
             _ => false,
         }
     }
@@ -153,17 +153,17 @@ module flow {
     }
 
     // whether it writes, keeps or gives back argument i
-    writes: func(e: RuntimeEffect, i: s64) -> bool { contains(e.writes, i) }
+    writes: func(effect: RuntimeEffect, index: s64) -> bool { contains(effect.writes, index) }
 
-    keeps: func(e: RuntimeEffect, i: s64) -> bool { e.keeps-all || contains(e.keeps, i) }
+    keeps: func(effect: RuntimeEffect, index: s64) -> bool { effect.keeps-all || contains(effect.keeps, index) }
 
     // the other parameters it keeps argument i in (only: else keeps says it escapes)
-    kept-in: func(e: RuntimeEffect, i: s64) -> list<s64> { if i < e.kept-in.len() { e.kept-in[i] } else { [] } }
+    kept-in: func(effect: RuntimeEffect, index: s64) -> list<s64> { if index < effect.kept-in.len() { effect.kept-in[index] } else { [] } }
 
-    gives: func(e: RuntimeEffect, i: s64) -> bool { e.gives-all || contains(e.gives, i) }
+    gives: func(effect: RuntimeEffect, index: s64) -> bool { effect.gives-all || contains(effect.gives, index) }
 
     // whether what it gives back is new (none of its arguments)
-    is-new: func(e: RuntimeEffect) -> bool { !e.gives-all && e.gives.len() == 0 }
+    is-new: func(effect: RuntimeEffect) -> bool { !effect.gives-all && effect.gives.len() == 0 }
 
     // a fixpoint over funcs (by key): each stepped (step: whether what is known of it changed) until
     // none changes, one stepped again only when one it calls (callees) did. What a step finds must
@@ -172,7 +172,7 @@ module flow {
     // (but where they call each other)
     callees-first: func(keys: list<Name>, callees: map<Name, list<Name>>) -> list<Name> {
         let known: set<Name> = set.new();
-        for k in keys { known.add(k); }
+        for key in keys { known.add(key); }
         let seen: set<Name> = set.new();
         let order: list<Name> = [];
         // the walk's stack: each func, and how many of its callees are walked
@@ -188,11 +188,11 @@ module flow {
                 let top = stack.len() - 1;
                 let calls = callees.get-or(stack[top], []);
                 if next[top] < calls.len() {
-                    let c = calls[next[top]];
+                    let callee = calls[next[top]];
                     next[top] = next[top] + 1;
-                    if known.has(c) && !seen.has(c) {
-                        seen.add(c);
-                        stack.push(c);
+                    if known.has(callee) && !seen.has(callee) {
+                        seen.add(callee);
+                        stack.push(callee);
                         next.push(0);
                     }
                     continue;
@@ -206,11 +206,11 @@ module flow {
 
     fixpoint: func(keys: list<Name>, callees: map<Name, list<Name>>, step: func(Name) -> bool) {
         let callers: map<Name, list<Name>> = map.new();
-        for k in keys { callers.set(k, []); }
-        for k in keys {
-            if callees.has(k) {
-                for c in callees[k] {
-                    if callers.has(c) { callers[c].push(k); }
+        for key in keys { callers.set(key, []); }
+        for key in keys {
+            if callees.has(key) {
+                for callee in callees[key] {
+                    if callers.has(callee) { callers[callee].push(key); }
                 }
             }
         }
@@ -219,20 +219,20 @@ module flow {
         // callees before their callers (pop takes from the end: the order reversed), so most are
         // read once, what they call already known
         let order = callees-first(keys, callees);
-        for i in 0..order.len() {
-            let k = order[order.len() - 1 - i];
-            todo.push(k);
-            queued.add(k);
+        for position in 0..order.len() {
+            let key = order[order.len() - 1 - position];
+            todo.push(key);
+            queued.add(key);
         }
         loop {
             if todo.len() == 0 { return; }
-            let k = todo.pop();
-            queued.remove(k);
-            if step(k) {
-                for c in callers[k] {
-                    if !queued.has(c) {
-                        todo.push(c);
-                        queued.add(c);
+            let key = todo.pop();
+            queued.remove(key);
+            if step(key) {
+                for caller in callers[key] {
+                    if !queued.has(caller) {
+                        todo.push(caller);
+                        queued.add(caller);
                     }
                 }
             }

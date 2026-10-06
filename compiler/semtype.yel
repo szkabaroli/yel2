@@ -70,94 +70,94 @@ module semtype {
 
     all-values: func() -> ValueSet { { co: true, vals: [], } }
 
-    one-value: func(k: string) -> ValueSet { { co: false, vals: [k,], } }
+    one-value: func(key: string) -> ValueSet { { co: false, vals: [key,], } }
 
     // the values of a type as the checker settled it
-    translate: func(d: Symbols, t0: Type) -> SemType {
-        let t = settled(t0);
-        let s = nothing();
-        match t {
-            num(n) => {
-                if is-int(n) { s.ints = [{ kind: n, ranges: domain(n), },]; }
-                else { s.nums = [{ kind: n, set: all-values(), },]; }
+    translate: func(symbols: Symbols, t0: Type) -> SemType {
+        let given = settled(t0);
+        let meaning = nothing();
+        match given {
+            num(name) => {
+                if is-int(name) { meaning.ints = [{ kind: name, ranges: domain(name), },]; }
+                else { meaning.nums = [{ kind: name, set: all-values(), },]; }
             }
-            bool-type => { s.bools = 3; }
-            char-type => { s.ints = [{ kind: "char", ranges: domain("char"), },]; }
+            bool-type => { meaning.bools = 3; }
+            char-type => { meaning.ints = [{ kind: "char", ranges: domain("char"), },]; }
             // lo..=hi: its values of its base type
-            range-type(r) => {
-                let kind = int-kind(r.base);
-                let v: list<Interval> = [
-                    { lo: key-value(kind, r.lo), hi: key-value(kind, r.hi), },
+            range-type(range) => {
+                let kind = int-kind(range.base);
+                let intervals: list<Interval> = [
+                    { lo: key-value(kind, range.lo), hi: key-value(kind, range.hi), },
                 ];
-                s.ints = [{ kind: kind, ranges: ranges-and(v, domain(kind)), },];
+                meaning.ints = [{ kind: kind, ranges: ranges-and(intervals, domain(kind)), },];
             }
-            string-type => { s.strings = all-values(); }
-            unit-type => { s.units = true; }
+            string-type => { meaning.strings = all-values(); }
+            unit-type => { meaning.units = true; }
             // never: no value is one (the empty set)
             never-type => {}
-            option-type(x) => {
-                s.products = [
+            option-type(inner) => {
+                meaning.products = [
                     conj(atom("none", "", [])),
-                    conj(atom("some", "", [translate(d, x),])),
+                    conj(atom("some", "", [translate(symbols, inner),])),
                 ];
             }
-            result-type(r) => {
-                s.products = [
-                    conj(atom("ok", "", side(d, r.ok))),
-                    conj(atom("err", "", side(d, r.err))),
+            result-type(outcome) => {
+                meaning.products = [
+                    conj(atom("ok", "", side(symbols, outcome.ok))),
+                    conj(atom("err", "", side(symbols, outcome.err))),
                 ];
             }
             tuple-type(xs) => {
                 let fields: list<SemType> = [];
-                for x in xs { fields.push(translate(d, x)); }
-                s.products = [conj(atom("tuple/{xs.len()}", "", fields)),];
+                for item in xs { fields.push(translate(symbols, item)); }
+                meaning.products = [conj(atom("tuple/{xs.len()}", "", fields)),];
             }
             union-type(xs) => {
-                for x in xs { s = union(s, translate(d, x)); }
+                for member in xs { meaning = union(meaning, translate(symbols, member)); }
             }
-            anon-record(r) => {
+            anon-record(anonymous) => {
                 let fields: list<SemType> = [];
-                for x in r.types { fields.push(translate(d, x)); }
-                s.products = [conj(atom(anon-tag(r.fields), "", fields)),];
+                for item in anonymous.types { fields.push(translate(symbols, item)); }
+                meaning.products = [conj(atom(anon-tag(anonymous.fields), "", fields)),];
             }
             // readonly: a list's items covariant (no one writes them through it), as long as they
             // are held one way (its tag, the items' representation); anything else by identity
-            readonly-type(x) => {
-                match resolve(x) {
-                    list-type(y) => {
-                        let tag = "readonly-list:" + show-type(represented(y));
-                        s.products = [conj(atom(tag, "", [translate(d, y),])),];
+            readonly-type(wrapped) => {
+                match resolve(wrapped) {
+                    list-type(item) => {
+                        let tag = "readonly-list:" + show-type(represented(item));
+                        meaning.products = [conj(atom(tag, "", [translate(symbols, item),])),];
                     }
-                    _ => { s.opaque = one-value(show-type(t)); }
+                    _ => { meaning.opaque = one-value(show-type(given)); }
                 }
             }
-            singleton(x) => {
-                match x.base {
-                    bool-type => { s.bools = if x.key == "true" { 1 } else { 2 }; }
-                    _ => { s = literal(x.base, x.key); }
+            singleton(single) => {
+                match single.base {
+                    bool-type => { meaning.bools = if single.key == "true" { 1 } else { 2 }; }
+                    _ => { meaning = literal(single.base, single.key); }
                 }
             }
-            named(n) => {
-                if d.records.has(n) || d.variants.has(n) { s.refs = [name-text(n),]; }
-                else { s.opaque = one-value(name-text(n)); }
+            named(name) => {
+                if symbols.records.has(name) || symbols.variants.has(name) { meaning.refs = [name-text(name),]; }
+                else { meaning.opaque = one-value(name-text(name)); }
             }
             // a type of its own: none of its values is another type's
-            distinct-type(x) => { s.opaque = one-value("distinct " + x.name); }
-            _ => { s.opaque = one-value(show-type(t)); }
+            distinct-type(distinct) => { meaning.opaque = one-value("distinct " + distinct.name); }
+            _ => { meaning.opaque = one-value(show-type(given)); }
         }
-        s
+        meaning
     }
 
     // a type, a literal's left open taken as C takes it (an integer's s32, a float's f32)
     settled: func(t0: Type) -> Type {
-        let t = resolve(t0);
-        match t {
-            var(v) => {
-                if v.kind == 1 { return Type.num("s32"); }
-                if v.kind == 2 { return Type.num("f32"); }
-                t
+        let resolved = resolve(t0);
+        match resolved {
+            var(variable) => {
+                if variable.kind == 1 { return Type.num("s32"); }
+                if variable.kind == 2 { return Type.num("f32"); }
+                resolved
             }
-            _ => t,
+            _ => resolved,
         }
     }
 
@@ -165,10 +165,10 @@ module semtype {
     anon-tag: func(fields: list<string>) -> string { "\{" + fields.join(",") + "\}" }
 
     // a result's side: its payload's values, or no field when it carries nothing
-    side: func(d: Symbols, t: Type) -> list<SemType> {
-        match resolve(t) {
+    side: func(symbols: Symbols, given: Type) -> list<SemType> {
+        match resolve(given) {
             unit-type => [],
-            _ => [translate(d, t),],
+            _ => [translate(symbols, given),],
         }
     }
 
@@ -176,136 +176,136 @@ module semtype {
         { tag: tag, owner: owner, fields: fields, }
     }
 
-    conj: func(a: Atom) -> Conj { { pos: [a,], neg: [], } }
+    conj: func(positive: Atom) -> Conj { { pos: [positive,], neg: [], } }
 
     // the products of a tag (a case of an option, a result or a variant; a tuple; a record)
     product: func(tag: string, owner: string, fields: list<SemType>) -> SemType {
-        let s = nothing();
-        s.products = [conj(atom(tag, owner, fields)),];
-        s
+        let meaning = nothing();
+        meaning.products = [conj(atom(tag, owner, fields)),];
+        meaning
     }
 
     // the bools: 1 true, 2 false
     bools: func(bits: s64) -> SemType {
-        let s = nothing();
-        s.bools = bits;
-        s
+        let meaning = nothing();
+        meaning.bools = bits;
+        meaning
     }
 
     // one value of a type whose values are keyed (a number's, a char's, a string's)
-    literal: func(t: Type, k: string) -> SemType {
-        let s = nothing();
-        match representation(settled(t)) {
-            num(n) => {
-                if is-int(n) {
-                    let v = key-value(n, k);
-                    s.ints = [{ kind: n, ranges: [{ lo: v, hi: v, },], },];
+    literal: func(given: Type, key: string) -> SemType {
+        let meaning = nothing();
+        match representation(settled(given)) {
+            num(name) => {
+                if is-int(name) {
+                    let value = key-value(name, key);
+                    meaning.ints = [{ kind: name, ranges: [{ lo: value, hi: value, },], },];
                 } else {
-                    s.nums = [{ kind: n, set: one-value(k), },];
+                    meaning.nums = [{ kind: name, set: one-value(key), },];
                 }
             }
             char-type => {
-                let v = key-value("char", k);
-                s.ints = [{ kind: "char", ranges: [{ lo: v, hi: v, },], },];
+                let value = key-value("char", key);
+                meaning.ints = [{ kind: "char", ranges: [{ lo: value, hi: value, },], },];
             }
-            string-type => { s.strings = one-value(k); }
+            string-type => { meaning.strings = one-value(key); }
             _ => {}
         }
-        s
+        meaning
     }
 
     // a declared type's values, opened one level: a record's one product, a variant's cases
-    open-ref: func(d: Symbols, n: string) -> list<Conj> {
-        let type-name = intern(n);
+    open-ref: func(symbols: Symbols, name: string) -> list<Conj> {
+        let type-name = intern(name);
         let out: list<Conj> = [];
-        if d.records.has(type-name) {
+        if symbols.records.has(type-name) {
             let fields: list<SemType> = [];
-            for t in d.records[type-name].field-types { fields.push(translate(d, t)); }
-            out.push(conj(atom(n, n, fields)));
+            for field in symbols.records[type-name].field-types { fields.push(translate(symbols, field)); }
+            out.push(conj(atom(name, name, fields)));
             return out;
         }
-        for k in d.variants[type-name].cases {
+        for case in symbols.variants[type-name].cases {
             let fields: list<SemType> = [];
             // a payload of () carries nothing: no field, as a case declared without one (and as its
             // pattern has: checker.case-type)
-            let carries = k.has-payload && match resolve(k.payload) {
+            let carries = case.has-payload && match resolve(case.payload) {
                 unit-type => false,
                 _ => true,
             };
-            if carries { fields.push(translate(d, k.payload)); }
-            out.push(conj(atom(n + "." + k.name, n, fields)));
+            if carries { fields.push(translate(symbols, case.payload)); }
+            out.push(conj(atom(name + "." + case.name, name, fields)));
         }
         out
     }
 
     // ================================================================ value sets
 
-    vs-union: func(a: ValueSet, b: ValueSet) -> ValueSet {
-        if a.co && b.co { return { co: true, vals: keys-and(a.vals, b.vals), }; }
-        if a.co { return { co: true, vals: keys-but(a.vals, b.vals), }; }
-        if b.co { return { co: true, vals: keys-but(b.vals, a.vals), }; }
-        { co: false, vals: keys-or(a.vals, b.vals), }
+    vs-union: func(left: ValueSet, right: ValueSet) -> ValueSet {
+        if left.co && right.co { return { co: true, vals: keys-and(left.vals, right.vals), }; }
+        if left.co { return { co: true, vals: keys-but(left.vals, right.vals), }; }
+        if right.co { return { co: true, vals: keys-but(right.vals, left.vals), }; }
+        { co: false, vals: keys-or(left.vals, right.vals), }
     }
 
-    vs-inter: func(a: ValueSet, b: ValueSet) -> ValueSet {
-        if a.co && b.co { return { co: true, vals: keys-or(a.vals, b.vals), }; }
-        if a.co { return { co: false, vals: keys-but(b.vals, a.vals), }; }
-        if b.co { return { co: false, vals: keys-but(a.vals, b.vals), }; }
-        { co: false, vals: keys-and(a.vals, b.vals), }
+    vs-inter: func(left: ValueSet, right: ValueSet) -> ValueSet {
+        if left.co && right.co { return { co: true, vals: keys-or(left.vals, right.vals), }; }
+        if left.co { return { co: false, vals: keys-but(right.vals, left.vals), }; }
+        if right.co { return { co: false, vals: keys-but(left.vals, right.vals), }; }
+        { co: false, vals: keys-and(left.vals, right.vals), }
     }
 
-    vs-diff: func(a: ValueSet, b: ValueSet) -> ValueSet {
-        vs-inter(a, { co: !b.co, vals: b.vals, })
+    vs-diff: func(left: ValueSet, right: ValueSet) -> ValueSet {
+        vs-inter(left, { co: !right.co, vals: right.vals, })
     }
 
-    vs-empty: func(a: ValueSet) -> bool { !a.co && a.vals.len() == 0 }
+    vs-empty: func(values: ValueSet) -> bool { !values.co && values.vals.len() == 0 }
 
-    keys-or: func(a: list<string>, b: list<string>) -> list<string> {
+    keys-or: func(left: list<string>, right: list<string>) -> list<string> {
         let out: list<string> = [];
-        for k in a { out.push(k); }
-        for k in b {
-            if !contains(a, k) { out.push(k); }
+        for key in left { out.push(key); }
+        for key in right {
+            if !contains(left, key) { out.push(key); }
         }
         out
     }
 
-    keys-and: func(a: list<string>, b: list<string>) -> list<string> {
+    keys-and: func(left: list<string>, right: list<string>) -> list<string> {
         let out: list<string> = [];
-        for k in a {
-            if contains(b, k) { out.push(k); }
+        for key in left {
+            if contains(right, key) { out.push(key); }
         }
         out
     }
 
-    keys-but: func(a: list<string>, b: list<string>) -> list<string> {
+    keys-but: func(left: list<string>, right: list<string>) -> list<string> {
         let out: list<string> = [];
-        for k in a {
-            if !contains(b, k) { out.push(k); }
+        for key in left {
+            if !contains(right, key) { out.push(key); }
         }
         out
     }
 
     nums-with: func(
-        a: list<NumSet>,
-        b: list<NumSet>,
+        left: list<NumSet>,
+        right: list<NumSet>,
         how: func(ValueSet, ValueSet) -> ValueSet,
     ) -> list<NumSet> {
         let out: list<NumSet> = [];
         let kinds: list<string> = [];
-        for x in a { kinds.push(x.kind); }
-        for x in b {
-            if !contains(kinds, x.kind) { kinds.push(x.kind); }
+        for entry in left { kinds.push(entry.kind); }
+        for entry in right {
+            if !contains(kinds, entry.kind) { kinds.push(entry.kind); }
         }
-        for k in kinds {
-            let set = how(num-set(a, k), num-set(b, k));
-            if !vs-empty(set) { out.push({ kind: k, set: set, }); }
+        for kind in kinds {
+            let set = how(num-set(left, kind), num-set(right, kind));
+            if !vs-empty(set) { out.push({ kind: kind, set: set, }); }
         }
         out
     }
 
     num-set: func(xs: list<NumSet>, kind: string) -> ValueSet {
-        for x in xs {
-            if x.kind == kind { return x.set; }
+        for entry in xs {
+            if entry.kind == kind { return entry.set; }
         }
         no-values()
     }
@@ -313,27 +313,27 @@ module semtype {
     // ================================================================ integers and chars
 
     // the values of t (an integer or char type) from lo to hi (one before hi: not inclusive)
-    range: func(t: Type, lo: string, hi: string, inclusive: bool) -> SemType {
-        let kind = int-kind(representation(settled(t)));
-        let l = key-value(kind, lo);
-        let h = key-value(kind, hi);
-        let s = nothing();
+    range: func(given: Type, lo: string, hi: string, inclusive: bool) -> SemType {
+        let kind = int-kind(representation(settled(given)));
+        let low = key-value(kind, lo);
+        let high = key-value(kind, hi);
+        let meaning = nothing();
         // hi..hi of the kind's least: no value (h - 1 would wrap to its greatest)
         if !inclusive {
-            if h == -9223372036854775807 as s64 - 1 { return s; }
-            h = h - 1;
+            if high == -9223372036854775807 as s64 - 1 { return meaning; }
+            high = high - 1;
         }
-        if l <= h {
-            let v: list<Interval> = [{ lo: l, hi: h, },];
-            s.ints = [{ kind: kind, ranges: ranges-and(v, domain(kind)), },];
+        if low <= high {
+            let intervals: list<Interval> = [{ lo: low, hi: high, },];
+            meaning.ints = [{ kind: kind, ranges: ranges-and(intervals, domain(kind)), },];
         }
-        s
+        meaning
     }
 
     // the integer kind (or char) of a type
-    int-kind: func(t: Type) -> string {
-        match resolve(t) {
-            num(n) => n,
+    int-kind: func(given: Type) -> string {
+        match resolve(given) {
+            num(name) => name,
             char-type => "char",
             _ => "s32",
         }
@@ -355,78 +355,78 @@ module semtype {
     }
 
     // a literal's key (decimal, - before a negative) as the kind's value (a u64's moved down)
-    key-value: func(kind: string, k: string) -> s64 {
-        let neg = k.len() > 0 && k.byte-at(0) == 45;
+    key-value: func(kind: string, key: string) -> s64 {
+        let neg = key.len() > 0 && key.byte-at(0) == 45;
         let mag: u64 = 0;
-        for i in (if neg { 1 } else { 0 })..k.len() { mag = mag * 10 + (k.byte-at(i) - 48) as u64; }
+        for index in (if neg { 1 } else { 0 })..key.len() { mag = mag * 10 + (key.byte-at(index) - 48) as u64; }
         if kind == "u64" { return (mag as s64) ^ (-9223372036854775807 as s64 - 1); }
-        let v = mag as s64;
-        if neg { 0 - v } else { v }
+        let value = mag as s64;
+        if neg { 0 - value } else { value }
     }
 
     // a decimal one less, exactly (as text: no width wraps it): "0" is "-1", "-5" is "-6"
-    decimal-before: func(k: string) -> string {
-        if k == "0" { return "-1"; }
-        if k.len() > 0 && k.byte-at(0) == 45 { return "-" + decimal-after(k.substring(1, k.len())); }
+    decimal-before: func(key: string) -> string {
+        if key == "0" { return "-1"; }
+        if key.len() > 0 && key.byte-at(0) == 45 { return "-" + decimal-after(key.substring(1, key.len())); }
         let digits: list<s64> = [];
-        for i in 0..k.len() { digits.push(k.byte-at(i) - 48); }
-        let i = digits.len() - 1;
+        for index in 0..key.len() { digits.push(key.byte-at(index) - 48); }
+        let index = digits.len() - 1;
         loop {
-            if i < 0 { break; }
-            if digits[i] > 0 {
-                digits[i] = digits[i] - 1;
+            if index < 0 { break; }
+            if digits[index] > 0 {
+                digits[index] = digits[index] - 1;
                 break;
             }
-            digits[i] = 9;
-            i -= 1;
+            digits[index] = 9;
+            index -= 1;
         }
         let out = "";
         let leading = true;
-        for d in digits {
-            if !(leading && d == 0) {
+        for digit in digits {
+            if !(leading && digit == 0) {
                 leading = false;
-                out = out + from-byte(48 + d);
+                out = out + from-byte(48 + digit);
             }
         }
         if out == "" { "0" } else { out }
     }
 
     // a non-negative decimal one more, exactly
-    decimal-after: func(k: string) -> string {
+    decimal-after: func(key: string) -> string {
         let digits: list<s64> = [];
-        for i in 0..k.len() { digits.push(k.byte-at(i) - 48); }
-        let i = digits.len() - 1;
+        for index in 0..key.len() { digits.push(key.byte-at(index) - 48); }
+        let index = digits.len() - 1;
         loop {
-            if i < 0 { return "1" + digits-text(digits); }
-            if digits[i] < 9 {
-                digits[i] = digits[i] + 1;
+            if index < 0 { return "1" + digits-text(digits); }
+            if digits[index] < 9 {
+                digits[index] = digits[index] + 1;
                 return digits-text(digits);
             }
-            digits[i] = 0;
-            i -= 1;
+            digits[index] = 0;
+            index -= 1;
         }
     }
 
     digits-text: func(digits: list<s64>) -> string {
         let out = "";
-        for d in digits { out = out + from-byte(48 + d); }
+        for digit in digits { out = out + from-byte(48 + digit); }
         out
     }
 
     // how two decimals compare: -1, 0 or 1, exactly
-    decimal-order: func(a: string, b: string) -> s64 {
-        let an = a.len() > 0 && a.byte-at(0) == 45;
-        let bn = b.len() > 0 && b.byte-at(0) == 45;
+    decimal-order: func(left: string, right: string) -> s64 {
+        let an = left.len() > 0 && left.byte-at(0) == 45;
+        let bn = right.len() > 0 && right.byte-at(0) == 45;
         if an && !bn { return -1; }
         if bn && !an { return 1; }
-        let x = if an { a.substring(1, a.len()) } else { a };
-        let y = if bn { b.substring(1, b.len()) } else { b };
+        let left-digits = if an { left.substring(1, left.len()) } else { left };
+        let right-digits = if bn { right.substring(1, right.len()) } else { right };
         let order = 0;
-        if x.len() != y.len() { order = if x.len() < y.len() { -1 } else { 1 }; }
+        if left-digits.len() != right-digits.len() { order = if left-digits.len() < right-digits.len() { -1 } else { 1 }; }
         else {
-            for i in 0..x.len() {
-                if order == 0 && x.byte-at(i) != y.byte-at(i) {
-                    order = if x.byte-at(i) < y.byte-at(i) { -1 } else { 1 };
+            for index in 0..left-digits.len() {
+                if order == 0 && left-digits.byte-at(index) != right-digits.byte-at(index) {
+                    order = if left-digits.byte-at(index) < right-digits.byte-at(index) { -1 } else { 1 };
                 }
             }
         }
@@ -435,108 +435,108 @@ module semtype {
 
     // the key one before a key of a kind (as a key: decimal, a u64's unsigned), or the key itself
     // at the kind's least
-    key-before: func(kind: string, k: string) -> string {
-        let v = key-value(kind, k);
-        if v == -9223372036854775807 as s64 - 1 { return k; }
-        let w = v - 1;
-        if kind == "u64" { return "{(w ^ (-9223372036854775807 as s64 - 1)) as u64}"; }
-        "{w}"
+    key-before: func(kind: string, key: string) -> string {
+        let value = key-value(kind, key);
+        if value == -9223372036854775807 as s64 - 1 { return key; }
+        let below = value - 1;
+        if kind == "u64" { return "{(below ^ (-9223372036854775807 as s64 - 1)) as u64}"; }
+        "{below}"
     }
 
     // a kind's value as a pattern shows it
-    value-text: func(kind: string, v: s64) -> string {
-        if kind == "u64" { return "{(v ^ (-9223372036854775807 as s64 - 1)) as u64}"; }
+    value-text: func(kind: string, value: s64) -> string {
+        if kind == "u64" { return "{(value ^ (-9223372036854775807 as s64 - 1)) as u64}"; }
         if kind == "char" {
-            if v > 32 && v < 127 && v != 39 && v != 92 { return "'{from-byte(v as s64)}'"; }
-            return "{v} as char";
+            if value > 32 && value < 127 && value != 39 && value != 92 { return "'{from-byte(value as s64)}'"; }
+            return "{value} as char";
         }
-        "{v}"
+        "{value}"
     }
 
     // a value of an int set: _ when it is the whole kind, else the one nearest 0 (the least for a
     // u64 or a char, whose order starts there)
-    int-sample: func(x: IntSet) -> string {
-        let all = domain(x.kind);
-        if same-ranges(x.ranges, all) { return "_"; }
-        if x.kind == "u64" || x.kind == "char" { return value-text(x.kind, x.ranges[0].lo); }
-        for r in x.ranges {
-            if r.hi >= 0 { return value-text(x.kind, if r.lo > 0 { r.lo } else { 0 }); }
+    int-sample: func(integers: IntSet) -> string {
+        let all = domain(integers.kind);
+        if same-ranges(integers.ranges, all) { return "_"; }
+        if integers.kind == "u64" || integers.kind == "char" { return value-text(integers.kind, integers.ranges[0].lo); }
+        for interval in integers.ranges {
+            if interval.hi >= 0 { return value-text(integers.kind, if interval.lo > 0 { interval.lo } else { 0 }); }
         }
-        value-text(x.kind, x.ranges[x.ranges.len() - 1].hi)
+        value-text(integers.kind, integers.ranges[integers.ranges.len() - 1].hi)
     }
 
-    same-ranges: func(a: list<Interval>, b: list<Interval>) -> bool {
-        if a.len() != b.len() { return false; }
-        for i in 0..a.len() {
-            if a[i].lo != b[i].lo || a[i].hi != b[i].hi { return false; }
+    same-ranges: func(left: list<Interval>, right: list<Interval>) -> bool {
+        if left.len() != right.len() { return false; }
+        for index in 0..left.len() {
+            if left[index].lo != right[index].lo || left[index].hi != right[index].hi { return false; }
         }
         true
     }
 
-    ints-with: func(a: list<IntSet>, b: list<IntSet>, how: string) -> list<IntSet> {
+    ints-with: func(left: list<IntSet>, right: list<IntSet>, how: string) -> list<IntSet> {
         let kinds: list<string> = [];
-        for x in a { kinds.push(x.kind); }
-        for x in b {
-            if !contains(kinds, x.kind) { kinds.push(x.kind); }
+        for entry in left { kinds.push(entry.kind); }
+        for entry in right {
+            if !contains(kinds, entry.kind) { kinds.push(entry.kind); }
         }
         let out: list<IntSet> = [];
-        for k in kinds {
-            let ra = int-ranges(a, k);
-            let rb = int-ranges(b, k);
-            let r = if how == "union" {
+        for kind in kinds {
+            let ra = int-ranges(left, kind);
+            let rb = int-ranges(right, kind);
+            let combined = if how == "union" {
                 ranges-or(ra, rb)
             } else if how == "inter" {
                 ranges-and(ra, rb)
             } else {
-                ranges-and(ra, ranges-not(rb, domain(k)))
+                ranges-and(ra, ranges-not(rb, domain(kind)))
             };
-            if r.len() > 0 { out.push({ kind: k, ranges: r, }); }
+            if combined.len() > 0 { out.push({ kind: kind, ranges: combined, }); }
         }
         out
     }
 
     int-ranges: func(xs: list<IntSet>, kind: string) -> list<Interval> {
-        for x in xs {
-            if x.kind == kind { return x.ranges; }
+        for integers in xs {
+            if integers.kind == kind { return integers.ranges; }
         }
         []
     }
 
     // ranges in order and apart: a's and b's, merged where they meet
-    ranges-or: func(a: list<Interval>, b: list<Interval>) -> list<Interval> {
+    ranges-or: func(left: list<Interval>, right: list<Interval>) -> list<Interval> {
         let all: list<Interval> = [];
-        let i = 0;
-        let j = 0;
-        for step in 0..a.len() + b.len() {
-            if j >= b.len() || i < a.len() && a[i].lo <= b[j].lo {
-                all.push(a[i]);
-                i += 1;
+        let left-index = 0;
+        let right-index = 0;
+        for step in 0..left.len() + right.len() {
+            if right-index >= right.len() || left-index < left.len() && left[left-index].lo <= right[right-index].lo {
+                all.push(left[left-index]);
+                left-index += 1;
             } else {
-                all.push(b[j]);
-                j += 1;
+                all.push(right[right-index]);
+                right-index += 1;
             }
         }
         let out: list<Interval> = [];
-        for x in all {
+        for interval in all {
             if out.len() > 0 {
                 let last = out[out.len() - 1];
                 // touching or overlapping: one range (the last's hi at the top meets anything)
-                if last.hi == 9223372036854775807 as s64 || x.lo <= last.hi + 1 {
-                    if x.hi > last.hi { out[out.len() - 1] = { lo: last.lo, hi: x.hi, }; }
+                if last.hi == 9223372036854775807 as s64 || interval.lo <= last.hi + 1 {
+                    if interval.hi > last.hi { out[out.len() - 1] = { lo: last.lo, hi: interval.hi, }; }
                     continue;
                 }
             }
-            out.push(x);
+            out.push(interval);
         }
         out
     }
 
-    ranges-and: func(a: list<Interval>, b: list<Interval>) -> list<Interval> {
+    ranges-and: func(left: list<Interval>, right: list<Interval>) -> list<Interval> {
         let out: list<Interval> = [];
-        for x in a {
-            for y in b {
-                let lo = if x.lo > y.lo { x.lo } else { y.lo };
-                let hi = if x.hi < y.hi { x.hi } else { y.hi };
+        for left-interval in left {
+            for right-interval in right {
+                let lo = if left-interval.lo > right-interval.lo { left-interval.lo } else { right-interval.lo };
+                let hi = if left-interval.hi < right-interval.hi { left-interval.hi } else { right-interval.hi };
                 if lo <= hi { out.push({ lo: lo, hi: hi, }); }
             }
         }
@@ -544,15 +544,15 @@ module semtype {
     }
 
     // a kind's values not in a
-    ranges-not: func(a: list<Interval>, all: list<Interval>) -> list<Interval> {
+    ranges-not: func(removed: list<Interval>, all: list<Interval>) -> list<Interval> {
         let out = all;
-        for x in a {
+        for removed-interval in removed {
             let next: list<Interval> = [];
-            for y in out {
-                if x.hi < y.lo || x.lo > y.hi { next.push(y); }
+            for kept-interval in out {
+                if removed-interval.hi < kept-interval.lo || removed-interval.lo > kept-interval.hi { next.push(kept-interval); }
                 else {
-                    if y.lo < x.lo { next.push({ lo: y.lo, hi: x.lo - 1, }); }
-                    if x.hi < y.hi { next.push({ lo: x.hi + 1, hi: y.hi, }); }
+                    if kept-interval.lo < removed-interval.lo { next.push({ lo: kept-interval.lo, hi: removed-interval.lo - 1, }); }
+                    if removed-interval.hi < kept-interval.hi { next.push({ lo: removed-interval.hi + 1, hi: kept-interval.hi, }); }
                 }
             }
             out = next;
@@ -562,139 +562,139 @@ module semtype {
 
     // ================================================================ set operations
 
-    union: func(a: SemType, b: SemType) -> SemType {
+    union: func(left: SemType, right: SemType) -> SemType {
         {
-            units: a.units || b.units,
-            bools: a.bools | b.bools,
-            nums: nums-with(a.nums, b.nums, vs-union),
-            ints: ints-with(a.ints, b.ints, "union"),
-            strings: vs-union(a.strings, b.strings),
-            opaque: vs-union(a.opaque, b.opaque),
-            refs: keys-or(a.refs, b.refs),
-            products: concat-conjs(a.products, b.products),
+            units: left.units || right.units,
+            bools: left.bools | right.bools,
+            nums: nums-with(left.nums, right.nums, vs-union),
+            ints: ints-with(left.ints, right.ints, "union"),
+            strings: vs-union(left.strings, right.strings),
+            opaque: vs-union(left.opaque, right.opaque),
+            refs: keys-or(left.refs, right.refs),
+            products: concat-conjs(left.products, right.products),
         }
     }
 
-    inter: func(d: Symbols, a0: SemType, b0: SemType) -> SemType {
+    inter: func(symbols: Symbols, a0: SemType, b0: SemType) -> SemType {
         // a declared type the other side restricts, opened
-        let a = opened(d, a0, b0);
-        let b = opened(d, b0, a0);
+        let left = opened(symbols, a0, b0);
+        let right = opened(symbols, b0, a0);
         let products: list<Conj> = [];
-        for x in a.products {
-            for y in b.products {
-                products.push({ pos: atoms-and(x.pos, y.pos), neg: atoms-and(x.neg, y.neg), });
+        for left-product in left.products {
+            for right-product in right.products {
+                products.push({ pos: atoms-and(left-product.pos, right-product.pos), neg: atoms-and(left-product.neg, right-product.neg), });
             }
         }
         // the products of a declared type the other side holds whole
-        for x in a.products {
-            if owned-by(x, b.refs) { products.push(x); }
+        for left-product in left.products {
+            if owned-by(left-product, right.refs) { products.push(left-product); }
         }
-        for y in b.products {
-            if owned-by(y, a.refs) { products.push(y); }
+        for right-product in right.products {
+            if owned-by(right-product, left.refs) { products.push(right-product); }
         }
         {
-            units: a.units && b.units,
-            bools: a.bools & b.bools,
-            nums: nums-with(a.nums, b.nums, vs-inter),
-            ints: ints-with(a.ints, b.ints, "inter"),
-            strings: vs-inter(a.strings, b.strings),
-            opaque: vs-inter(a.opaque, b.opaque),
-            refs: keys-and(a.refs, b.refs),
-            products: inhabited-conjs(d, products),
+            units: left.units && right.units,
+            bools: left.bools & right.bools,
+            nums: nums-with(left.nums, right.nums, vs-inter),
+            ints: ints-with(left.ints, right.ints, "inter"),
+            strings: vs-inter(left.strings, right.strings),
+            opaque: vs-inter(left.opaque, right.opaque),
+            refs: keys-and(left.refs, right.refs),
+            products: inhabited-conjs(symbols, products),
         }
     }
 
-    diff: func(d: Symbols, a0: SemType, b0: SemType) -> SemType {
-        let a = opened(d, a0, b0);
-        let b = opened(d, b0, a0);
+    diff: func(symbols: Symbols, a0: SemType, b0: SemType) -> SemType {
+        let left = opened(symbols, a0, b0);
+        let right = opened(symbols, b0, a0);
         // the products less each of b's (a conjunction's complement: one of its atoms not held),
         // and less those of a declared type b holds whole
         let rest: list<Conj> = [];
-        for x in a.products {
-            if !owned-by(x, b.refs) { rest.push(x); }
+        for left-product in left.products {
+            if !owned-by(left-product, right.refs) { rest.push(left-product); }
         }
-        for y in b.products {
+        for right-product in right.products {
             let next: list<Conj> = [];
-            for x in rest {
-                for p in y.pos { next.push({ pos: x.pos, neg: atoms-and(x.neg, [p,]), }); }
-                for n in y.neg { next.push({ pos: atoms-and(x.pos, [n,]), neg: x.neg, }); }
+            for remaining in rest {
+                for positive in right-product.pos { next.push({ pos: remaining.pos, neg: atoms-and(remaining.neg, [positive,]), }); }
+                for negative in right-product.neg { next.push({ pos: atoms-and(remaining.pos, [negative,]), neg: remaining.neg, }); }
             }
-            rest = inhabited-conjs(d, next);
+            rest = inhabited-conjs(symbols, next);
         }
         {
-            units: a.units && !b.units,
-            bools: a.bools & (3 ^ b.bools),
-            nums: nums-with(a.nums, b.nums, vs-diff),
-            ints: ints-with(a.ints, b.ints, "diff"),
-            strings: vs-diff(a.strings, b.strings),
-            opaque: vs-diff(a.opaque, b.opaque),
-            refs: keys-but(a.refs, b.refs),
+            units: left.units && !right.units,
+            bools: left.bools & (3 ^ right.bools),
+            nums: nums-with(left.nums, right.nums, vs-diff),
+            ints: ints-with(left.ints, right.ints, "diff"),
+            strings: vs-diff(left.strings, right.strings),
+            opaque: vs-diff(left.opaque, right.opaque),
+            refs: keys-but(left.refs, right.refs),
             products: rest,
         }
     }
 
     // a, its declared types the other side looks inside of (and does not hold whole) opened
-    opened: func(d: Symbols, a: SemType, other: SemType) -> SemType {
+    opened: func(symbols: Symbols, given: SemType, other: SemType) -> SemType {
         let refs: list<string> = [];
-        let products = concat-conjs(a.products, []);
-        for r in a.refs {
-            if !contains(other.refs, r) && mentions(other.products, r) {
-                for x in open-ref(d, r) { products.push(x); }
+        let products = concat-conjs(given.products, []);
+        for reference in given.refs {
+            if !contains(other.refs, reference) && mentions(other.products, reference) {
+                for conjunction in open-ref(symbols, reference) { products.push(conjunction); }
             } else {
-                refs.push(r);
+                refs.push(reference);
             }
         }
         {
-            units: a.units,
-            bools: a.bools,
-            nums: a.nums,
-            ints: a.ints,
-            strings: a.strings,
-            opaque: a.opaque,
+            units: given.units,
+            bools: given.bools,
+            nums: given.nums,
+            ints: given.ints,
+            strings: given.strings,
+            opaque: given.opaque,
             refs: refs,
             products: products,
         }
     }
 
     // whether a conjunction's products are one of the declared types refs
-    owned-by: func(x: Conj, refs: list<string>) -> bool {
-        for a in x.pos {
-            if a.owner != "" && contains(refs, a.owner) { return true; }
+    owned-by: func(conjunction: Conj, refs: list<string>) -> bool {
+        for positive in conjunction.pos {
+            if positive.owner != "" && contains(refs, positive.owner) { return true; }
         }
         false
     }
 
-    mentions: func(xs: list<Conj>, r: string) -> bool {
-        for x in xs {
-            for a in x.pos {
-                if a.owner == r { return true; }
+    mentions: func(xs: list<Conj>, reference: string) -> bool {
+        for conjunction in xs {
+            for positive in conjunction.pos {
+                if positive.owner == reference { return true; }
             }
-            for a in x.neg {
-                if a.owner == r { return true; }
+            for negative in conjunction.neg {
+                if negative.owner == reference { return true; }
             }
         }
         false
     }
 
-    atoms-and: func(a: list<Atom>, b: list<Atom>) -> list<Atom> {
+    atoms-and: func(left: list<Atom>, right: list<Atom>) -> list<Atom> {
         let out: list<Atom> = [];
-        for x in a { out.push(x); }
-        for x in b { out.push(x); }
+        for item in left { out.push(item); }
+        for item in right { out.push(item); }
         out
     }
 
-    concat-conjs: func(a: list<Conj>, b: list<Conj>) -> list<Conj> {
+    concat-conjs: func(left: list<Conj>, right: list<Conj>) -> list<Conj> {
         let out: list<Conj> = [];
-        for x in a { out.push(x); }
-        for x in b { out.push(x); }
+        for item in left { out.push(item); }
+        for item in right { out.push(item); }
         out
     }
 
-    inhabited-conjs: func(d: Symbols, xs: list<Conj>) -> list<Conj> {
+    inhabited-conjs: func(symbols: Symbols, xs: list<Conj>) -> list<Conj> {
         let out: list<Conj> = [];
-        for x in xs {
-            match conj-sample(d, x) {
-                some(s) => out.push(x),
+        for conjunction in xs {
+            match conj-sample(symbols, conjunction) {
+                some(_) => out.push(conjunction),
                 none => {}
             }
         }
@@ -703,103 +703,103 @@ module semtype {
 
     // ================================================================ emptiness, and a value
 
-    is-empty: func(d: Symbols, a: SemType) -> bool {
-        match sample(d, a) {
-            some(s) => false,
+    is-empty: func(symbols: Symbols, given: SemType) -> bool {
+        match sample(symbols, given) {
+            some(_) => false,
             none => true,
         }
     }
 
     // a value of the set, shown as a pattern (_ for any value of a part held whole); none when it
     // is empty
-    sample: func(d: Symbols, a: SemType) -> option<string> {
-        for x in a.products {
-            match conj-sample(d, x) {
-                some(s) => { return some(s); }
+    sample: func(symbols: Symbols, given: SemType) -> option<string> {
+        for conjunction in given.products {
+            match conj-sample(symbols, conjunction) {
+                some(found) => { return some(found); }
                 none => {}
             }
         }
-        if a.refs.len() > 0 { return some("_"); }
-        if a.units { return some("()"); }
-        if a.bools == 3 { return some("_"); }
-        if a.bools == 1 { return some("true"); }
-        if a.bools == 2 { return some("false"); }
-        for n in a.nums {
-            if !vs-empty(n.set) {
-                return some(key-sample(n.set, if is-int(n.kind) { "int" } else { "float" }));
+        if given.refs.len() > 0 { return some("_"); }
+        if given.units { return some("()"); }
+        if given.bools == 3 { return some("_"); }
+        if given.bools == 1 { return some("true"); }
+        if given.bools == 2 { return some("false"); }
+        for number in given.nums {
+            if !vs-empty(number.set) {
+                return some(key-sample(number.set, if is-int(number.kind) { "int" } else { "float" }));
             }
         }
-        for x in a.ints {
-            if x.ranges.len() > 0 { return some(int-sample(x)); }
+        for integers in given.ints {
+            if integers.ranges.len() > 0 { return some(int-sample(integers)); }
         }
-        if !vs-empty(a.strings) { return some(key-sample(a.strings, "string")); }
-        if !vs-empty(a.opaque) { return some("_"); }
+        if !vs-empty(given.strings) { return some(key-sample(given.strings, "string")); }
+        if !vs-empty(given.opaque) { return some("_"); }
         none
     }
 
     // a key of a set not held out of it: _ for every value
-    key-sample: func(s: ValueSet, kind: key-kind) -> string {
-        if !s.co {
-            let k = s.vals[0];
-            if kind == "char" { return "'{from-byte(decimal(k))}'"; }
-            if kind == "string" { return "\"{k}\""; }
-            return k;
+    key-sample: func(values: ValueSet, kind: key-kind) -> string {
+        if !values.co {
+            let key = values.vals[0];
+            if kind == "char" { return "'{from-byte(decimal(key))}'"; }
+            if kind == "string" { return "\"{key}\""; }
+            return key;
         }
-        if s.vals.len() == 0 { return "_"; }
-        for i in 0..s.vals.len() + 1 {
-            let k = if kind == "int" {
-                "{i}"
+        if values.vals.len() == 0 { return "_"; }
+        for index in 0..values.vals.len() + 1 {
+            let key = if kind == "int" {
+                "{index}"
             } else if kind == "float" {
-                "{i}.5"
+                "{index}.5"
             } else if kind == "char" {
-                "{97 + i}"
+                "{97 + index}"
             } else {
-                from-byte(97 + i)
+                from-byte(97 + index)
             };
-            if !contains(s.vals, k) {
-                if kind == "char" { return "'{from-byte(97 + i)}'"; }
-                if kind == "string" { return "\"{k}\""; }
-                return k;
+            if !contains(values.vals, key) {
+                if kind == "char" { return "'{from-byte(97 + index)}'"; }
+                if kind == "string" { return "\"{key}\""; }
+                return key;
             }
         }
         "_"
     }
 
     // a key's digits as a number (a char's code point)
-    decimal: func(k: string) -> s64 {
-        let v = 0;
-        for i in 0..k.len() { v = v * 10 + k.byte-at(i) - 48; }
-        v
+    decimal: func(key: string) -> s64 {
+        let value = 0;
+        for index in 0..key.len() { value = value * 10 + key.byte-at(index) - 48; }
+        value
     }
 
     // a product every pos atom holds and no neg one does, shown; none when there is none
-    conj-sample: func(d: Symbols, x: Conj) -> option<string> {
-        if x.pos.len() == 0 { return some("_"); }
-        let first = x.pos[0];
+    conj-sample: func(symbols: Symbols, conjunction: Conj) -> option<string> {
+        if conjunction.pos.len() == 0 { return some("_"); }
+        let first = conjunction.pos[0];
         let fields: list<SemType> = [];
-        for f in first.fields { fields.push(f); }
-        for k in 1..x.pos.len() {
-            let a = x.pos[k];
-            if a.tag != first.tag { return none; }
-            for i in 0..fields.len() { fields[i] = inter(d, fields[i], a.fields[i]); }
+        for field in first.fields { fields.push(field); }
+        for position in 1..conjunction.pos.len() {
+            let positive = conjunction.pos[position];
+            if positive.tag != first.tag { return none; }
+            for index in 0..fields.len() { fields[index] = inter(symbols, fields[index], positive.fields[index]); }
         }
-        for f in fields {
-            if is-empty(d, f) { return none; }
+        for field in fields {
+            if is-empty(symbols, field) { return none; }
         }
         let negs: list<Atom> = [];
-        for a in x.neg {
-            if a.tag == first.tag { negs.push(a); }
+        for negative in conjunction.neg {
+            if negative.tag == first.tag { negs.push(negative); }
         }
-        match explore(d, fields, negs, 0) {
+        match explore(symbols, fields, negs, 0) {
             some(found) => {
                 let shown: list<string> = [];
-                for f in found {
-                    match sample(d, f) {
-                        some(s) => shown.push(s),
+                for field in found {
+                    match sample(symbols, field) {
+                        some(found) => shown.push(found),
                         none => shown.push("_"),
                     }
                 }
-                some(show-product(d, first, shown))
+                some(show-product(symbols, first, shown))
             }
             none => none,
         }
@@ -808,19 +808,19 @@ module semtype {
     // fields (each inhabited) whose products none of negs from i on holds: for each of them, one
     // field outside its field's set (the standard search for a product with negations)
     explore: func(
-        d: Symbols,
+        symbols: Symbols,
         fields: list<SemType>,
         negs: list<Atom>,
-        i: s64,
+        index: s64,
     ) -> option<list<SemType>> {
-        if i == negs.len() { return some(fields); }
-        let n = negs[i];
-        for j in 0..fields.len() {
-            let rest = diff(d, fields[j], n.fields[j]);
-            if !is-empty(d, rest) {
+        if index == negs.len() { return some(fields); }
+        let negative = negs[index];
+        for field-index in 0..fields.len() {
+            let rest = diff(symbols, fields[field-index], negative.fields[field-index]);
+            if !is-empty(symbols, rest) {
                 let next: list<SemType> = [];
-                for k in 0..fields.len() { next.push(if k == j { rest } else { fields[k] }); }
-                match explore(d, next, negs, i + 1) {
+                for position in 0..fields.len() { next.push(if position == field-index { rest } else { fields[position] }); }
+                match explore(symbols, next, negs, index + 1) {
                     some(found) => { return some(found); }
                     none => {}
                 }
@@ -829,26 +829,26 @@ module semtype {
         none
     }
 
-    show-product: func(d: Symbols, a: Atom, fields: list<string>) -> string {
-        if a.tag.starts-with("tuple/") { return "(" + fields.join(", ") + ")"; }
+    show-product: func(symbols: Symbols, given: Atom, fields: list<string>) -> string {
+        if given.tag.starts-with("tuple/") { return "(" + fields.join(", ") + ")"; }
         // an anonymous record's: its fields' names in its tag
-        if a.tag == "\{\}" { return "\{\}"; }
-        if a.tag.starts-with("\{") {
-            let names = a.tag.substring(1, a.tag.len() - 1).split(",");
+        if given.tag == "\{\}" { return "\{\}"; }
+        if given.tag.starts-with("\{") {
+            let names = given.tag.substring(1, given.tag.len() - 1).split(",");
             let parts: list<string> = [];
-            for i in 0..names.len() { parts.push("{names[i]}: {fields[i]}"); }
+            for index in 0..names.len() { parts.push("{names[index]}: {fields[index]}"); }
             return "\{ " + parts.join(", ") + " \}";
         }
-        if a.owner != "" && d.records.has(intern(a.owner)) {
-            let names = d.records[intern(a.owner)].fields;
+        if given.owner != "" && symbols.records.has(intern(given.owner)) {
+            let names = symbols.records[intern(given.owner)].fields;
             let parts: list<string> = [];
-            for i in 0..names.len() { parts.push("{names[i]}: {fields[i]}"); }
+            for index in 0..names.len() { parts.push("{names[index]}: {fields[index]}"); }
             return "\{ " + parts.join(", ") + " \}";
         }
-        let name = if a.owner != "" {
-            a.tag.substring(a.owner.len() + 1, a.tag.len())
+        let name = if given.owner != "" {
+            given.tag.substring(given.owner.len() + 1, given.tag.len())
         } else {
-            a.tag
+            given.tag
         };
         if fields.len() == 1 { return "{name}({fields[0]})"; }
         name
@@ -858,18 +858,18 @@ module semtype {
 
     // a literal's key: an integer's value in decimal (- before a negative one), a float's text, a
     // char's code point, a string's text
-    literal-key: func(e: Expr) -> string {
-        match e.kind {
-            int-lit(x) => int-key(x),
+    literal-key: func(expression: Expr) -> string {
+        match expression.kind {
+            int-lit(number) => int-key(number),
             // by its value (1.0 and 1.00 are one; -0.0 and 0.0 are ==, so one too)
-            float-lit(x) => {
-                let v = parse-f64(x);
-                if v == 0.0 { "0.0" } else { "{v}" }
+            float-lit(number) => {
+                let parsed = parse-f64(number);
+                if parsed == 0.0 { "0.0" } else { "{parsed}" }
             }
-            char-lit(x) => "{x}",
-            str-lit(x) => x,
-            bool-lit(x) => if x { "true" } else { "false" },
-            unary(u) => "-" + literal-key(u.value),
+            char-lit(character) => "{character}",
+            str-lit(contents) => contents,
+            bool-lit(flag) => if flag { "true" } else { "false" },
+            unary(negation) => "-" + literal-key(negation.value),
             _ => "",
         }
     }
@@ -879,17 +879,17 @@ module semtype {
         let radix: u64 = 10;
         let start = 0;
         if text.len() > 2 && text.byte-at(0) == 48 {
-            let r = text.byte-at(1);
-            if r == 120 { radix = 16; }
-            else if r == 111 { radix = 8; }
-            else if r == 98 { radix = 2; }
+            let radix-byte = text.byte-at(1);
+            if radix-byte == 120 { radix = 16; }
+            else if radix-byte == 111 { radix = 8; }
+            else if radix-byte == 98 { radix = 2; }
             if radix != 10 { start = 2; }
         }
-        let v: u64 = 0;
-        for i in start..text.len() {
-            let c = text.byte-at(i);
-            if c != 95 { v = v * radix + hex-value(c) as u64; }
+        let value: u64 = 0;
+        for index in start..text.len() {
+            let byte = text.byte-at(index);
+            if byte != 95 { value = value * radix + hex-value(byte) as u64; }
         }
-        "{v}"
+        "{value}"
     }
 }

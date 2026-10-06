@@ -221,18 +221,18 @@ new-node: func(kind: Kind, ty: Type, effects: s64) -> Node {
 }
 
 // a node said to be at sp, where it is not said to be anywhere yet (its operands too)
-stamp: func(n: Node, sp: Span) {
-    if n.span.line != 0 || sp.line == 0 { return; }
-    n.span = sp;
-    for index in 0..operand-count(n) { stamp(operand(n, index), sp); }
+stamp: func(node: Node, sp: Span) {
+    if node.span.line != 0 || sp.line == 0 { return; }
+    node.span = sp;
+    for index in 0..operand-count(node) { stamp(operand(node, index), sp); }
 }
 
-const: func(c: Constant, ty: Type) -> Node { new-node(Kind.const(c), ty, 0) }
+const: func(constant: Constant, ty: Type) -> Node { new-node(Kind.const(constant), ty, 0) }
 
 // an integer of type ty (its bits: a negative one's two's complement)
-int-const: func(v: s64, ty: Type) -> Node { const(Constant.int(v as u64), ty) }
+int-const: func(value: s64, ty: Type) -> Node { const(Constant.int(value as u64), ty) }
 
-bool-const: func(b: bool) -> Node { const(Constant.bool(b), Type.bool-type) }
+bool-const: func(value: bool) -> Node { const(Constant.bool(value), Type.bool-type) }
 
 unit-const: func() -> Node { const(Constant.unit, Type.unit-type) }
 
@@ -250,7 +250,7 @@ static-list-node: func(data: StaticList) -> Node { new-node(Kind.static-list(dat
 
 descriptor-node: func(ty: Type, c-name: string) -> Node { new-node(Kind.descriptor({ ty: ty, c-name: c-name, }), Type.address-type, 0) }
 
-local: func(i: s64, ty: Type) -> Node { new-node(Kind.local(i), ty, 0) }
+local: func(index: s64, ty: Type) -> Node { new-node(Kind.local(index), ty, 0) }
 
 // a global's value (any call may change it: read as memory is)
 global-node: func(key: string, ty: Type) -> Node { new-node(Kind.global(key), ty, fx().read-mem) }
@@ -264,40 +264,40 @@ assign: func(dest: s64, value: Node) -> Node {
 }
 
 // a constant's truth: 1, 0, or -1 (not a constant)
-truth: func(n: Node) -> s64 {
-    match n.kind {
-        const(c) => match c {
-            bool(b) => if b { 1 } else { 0 },
+truth: func(node: Node) -> s64 {
+    match node.kind {
+        const(constant) => match constant {
+            bool(value) => if value { 1 } else { 0 },
             _ => -1,
         },
         _ => -1,
     }
 }
 
-bin: func(op: string, ty: Type, a: Node, b: Node) -> Node {
-    new-node(Kind.bin({ op: op, a: a, b: b, }), ty, a.fx | b.fx)
+bin: func(op: string, ty: Type, left: Node, right: Node) -> Node {
+    new-node(Kind.bin({ op: op, a: left, b: right, }), ty, left.fx | right.fx)
 }
 
 // !: of a constant, its opposite; of a !, what that turns
-un: func(op: string, ty: Type, a: Node) -> Node {
+un: func(op: string, ty: Type, inner: Node) -> Node {
     if op == "!" {
-        let t = truth(a);
-        if t >= 0 { return bool-const(t == 0); }
-        match a.kind {
-            un(x) => { if x.op == "!" { return x.a; } }
+        let known = truth(inner);
+        if known >= 0 { return bool-const(known == 0); }
+        match inner.kind {
+            un(negation) => { if negation.op == "!" { return negation.a; } }
             _ => {}
         }
     }
-    new-node(Kind.un({ op: op, a: a, }), ty, a.fx)
+    new-node(Kind.un({ op: op, a: inner, }), ty, inner.fx)
 }
 
-convert: func(ty: Type, a: Node) -> Node { new-node(Kind.convert(a), ty, a.fx) }
+convert: func(ty: Type, inner: Node) -> Node { new-node(Kind.convert(inner), ty, inner.fx) }
 
 // changes: the place can change (a record's field: fx.read-mem); a case's tag and payload, and a
 // value struct's part, never do
 load: func(base: Node, path: list<string>, arrow: bool, ty: Type, changes: bool) -> Node {
-    let f = if changes { fx().read-mem } else { 0 };
-    new-node(Kind.load({ base: base, path: path, arrow: arrow, }), ty, base.fx | f)
+    let read = if changes { fx().read-mem } else { 0 };
+    new-node(Kind.load({ base: base, path: path, arrow: arrow, }), ty, base.fx | read)
 }
 
 store: func(target: Node, value: Node) -> Node {
@@ -310,8 +310,8 @@ store: func(target: Node, value: Node) -> Node {
 
 // an if: on a constant, the branch taken; with no yes, the test turned
 if-stmt: func(test: Node, yes: list<Node>, no: list<Node>) -> Node {
-    let t = truth(test);
-    if t >= 0 { return block-stmt(if t == 1 { yes } else { no }, -1); }
+    let known = truth(test);
+    if known >= 0 { return block-stmt(if known == 1 { yes } else { no }, -1); }
     if yes.len() == 0 && no.len() > 0 { return if-stmt(un("!", Type.bool-type, test), no, []); }
     new-node(Kind.if({ test: test, yes: yes, no: no, }), Type.unit-type, test.fx)
 }
@@ -344,9 +344,9 @@ halt-stmt: func() -> Node { new-node(Kind.halt, Type.unit-type, 0) }
 
 // effects: the call's own (fx.call for one that may do anything, collecting included)
 call: func(key: string, c-name: string, args: list<Node>, ty: Type, effects: s64) -> Node {
-    let f = effects;
-    for a in args { f = f | a.fx; }
-    new-node(Kind.call({ key: key, c-name: c-name, name: intern(c-name), args: args, }), ty, f)
+    let combined = effects;
+    for argument in args { combined = combined | argument.fx; }
+    new-node(Kind.call({ key: key, c-name: c-name, name: intern(c-name), args: args, }), ty, combined)
 }
 
 alloc: func(ctype: string, rec: string, is-record: bool, trace: string, ty: Type) -> Node {
@@ -358,9 +358,9 @@ alloc: func(ctype: string, rec: string, is-record: bool, trace: string, ty: Type
 }
 
 make: func(ctype: string, fields: list<string>, parts: list<Node>, ty: Type) -> Node {
-    let f = 0;
-    for p in parts { f = f | p.fx; }
-    new-node(Kind.make({ ctype: ctype, fields: fields, parts: parts, }), ty, f)
+    let combined = 0;
+    for part in parts { combined = combined | part.fx; }
+    new-node(Kind.make({ ctype: ctype, fields: fields, parts: parts, }), ty, combined)
 }
 
 list-get: func(list: Node, index: Node, ctype: string, ty: Type, fixed: bool) -> Node {
@@ -371,22 +371,22 @@ list-get: func(list: Node, index: Node, ctype: string, ty: Type, fixed: bool) ->
     )
 }
 
-func-ref: func(key: string, c-name: string, c: string, ty: Type) -> Node {
-    new-node(Kind.func-ref({ key: key, c-name: c-name, name: intern(c-name), c: c, }), ty, 0)
+func-ref: func(key: string, c-name: string, written: string, ty: Type) -> Node {
+    new-node(Kind.func-ref({ key: key, c-name: c-name, name: intern(c-name), c: written, }), ty, 0)
 }
 
 // a call through a func value: it may do anything
 call-ref: func(callee: Node, args: list<Node>, ty: Type) -> Node {
-    let f = fx().call | callee.fx;
-    for a in args { f = f | a.fx; }
-    new-node(Kind.call-ref({ callee: callee, args: args, }), ty, f)
+    let combined = fx().call | callee.fx;
+    for argument in args { combined = combined | argument.fx; }
+    new-node(Kind.call-ref({ callee: callee, args: args, }), ty, combined)
 }
 
 deref: func(address: Node, ty: Type) -> Node { new-node(Kind.deref(address), ty, address.fx | fx().read-mem) }
 
 address-of: func(place: Node) -> Node { new-node(Kind.address-of(place), Type.address-type, place.fx) }
 
-size-of: func(t: Type) -> Node { new-node(Kind.size-of(t), Type.num("usize"), 0) }
+size-of: func(sized: Type) -> Node { new-node(Kind.size-of(sized), Type.num("usize"), 0) }
 
 element: func(base: Node, index: Node, item: Type) -> Node {
     new-node(Kind.element({ base: base, index: index, item: item, }), Type.address-type, base.fx | index.fx)
@@ -397,77 +397,77 @@ interp: func(parts: list<Node>, formatters: list<Formatter>) -> Node {
 }
 
 // whether a node may be an operand: it neither calls nor reads what may change
-pure: func(n: Node) -> bool { (n.fx & (fx().call | fx().read-mem)) == 0 }
+pure: func(node: Node) -> bool { (node.fx & (fx().call | fx().read-mem)) == 0 }
 
 // ================================================================ the one walk every pass shares
 
 // the bodies a statement holds (an if's two, a loop's, a block's): how many, and each by its
 // index. A walk counts rather than takes a list, so it makes nothing at each node
-nested-count: func(n: Node) -> s64 {
-    match n.kind {
-        if(x) => 2,
-        loop(x) => 1,
-        block(x) => 1,
+nested-count: func(node: Node) -> s64 {
+    match node.kind {
+        if(_) => 2,
+        loop(_) => 1,
+        block(_) => 1,
         _ => 0,
     }
 }
 
-nested-body: func(n: Node, index: s64) -> list<Node> {
-    match n.kind {
-        if(x) => if index == 0 { x.yes } else { x.no },
-        loop(x) => x.body,
-        block(x) => x.body,
+nested-body: func(node: Node, index: s64) -> list<Node> {
+    match node.kind {
+        if(branch) => if index == 0 { branch.yes } else { branch.no },
+        loop(looping) => looping.body,
+        block(grouped) => grouped.body,
         _ => panic("a statement read past its bodies"),
     }
 }
 
 // the operands a node reads (a loop's test and step included): how many, and each by its index
-operand-count: func(n: Node) -> s64 {
-    match n.kind {
-        assign(x) => 1,
-        bin(x) => 2,
-        un(x) => 1,
-        convert(a) => 1,
-        load(x) => 1,
-        store(x) => 2,
-        if(x) => 1,
-        loop(x) => present(x.test) + present(x.step),
-        return(v) => 1,
-        yield(v) => 1,
-        unreachable(x) => 1,
-        call(x) => x.args.len(),
-        call-ref(x) => 1 + x.args.len(),
-        make(x) => x.parts.len(),
-        list-get(x) => 2,
-        interp(x) => x.parts.len(),
-        deref(a) => 1,
-        address-of(a) => 1,
-        element(x) => 2,
+operand-count: func(node: Node) -> s64 {
+    match node.kind {
+        assign(_) => 1,
+        bin(_) => 2,
+        un(_) => 1,
+        convert(_) => 1,
+        load(_) => 1,
+        store(_) => 2,
+        if(_) => 1,
+        loop(looping) => present(looping.test) + present(looping.step),
+        return(_) => 1,
+        yield(_) => 1,
+        unreachable(_) => 1,
+        call(called) => called.args.len(),
+        call-ref(called) => 1 + called.args.len(),
+        make(made) => made.parts.len(),
+        list-get(_) => 2,
+        interp(joined) => joined.parts.len(),
+        deref(_) => 1,
+        address-of(_) => 1,
+        element(_) => 2,
         _ => 0,
     }
 }
 
-operand: func(n: Node, index: s64) -> Node {
-    match n.kind {
-        assign(x) => x.value,
-        bin(x) => if index == 0 { x.a } else { x.b },
-        un(x) => x.a,
-        convert(a) => a,
-        load(x) => x.base,
-        store(x) => if index == 0 { x.target } else { x.value },
-        if(x) => x.test,
-        loop(x) => loop-operand(x.test, x.step, index),
-        return(v) => v,
-        yield(v) => v,
-        unreachable(x) => x.value,
-        call(x) => x.args[index],
-        call-ref(x) => if index == 0 { x.callee } else { x.args[index - 1] },
-        make(x) => x.parts[index],
-        list-get(x) => if index == 0 { x.list } else { x.index },
-        interp(x) => x.parts[index],
-        deref(a) => a,
-        address-of(a) => a,
-        element(x) => if index == 0 { x.base } else { x.index },
+operand: func(node: Node, index: s64) -> Node {
+    match node.kind {
+        assign(assignment) => assignment.value,
+        bin(binary) => if index == 0 { binary.a } else { binary.b },
+        un(unary) => unary.a,
+        convert(inner) => inner,
+        load(loaded) => loaded.base,
+        store(stored) => if index == 0 { stored.target } else { stored.value },
+        if(branch) => branch.test,
+        loop(looping) => loop-operand(looping.test, looping.step, index),
+        return(value) => value,
+        yield(value) => value,
+        unreachable(unreached) => unreached.value,
+        call(called) => called.args[index],
+        call-ref(called) => if index == 0 { called.callee } else { called.args[index - 1] },
+        make(made) => made.parts[index],
+        list-get(read) => if index == 0 { read.list } else { read.index },
+        interp(joined) => joined.parts[index],
+        deref(address) => address,
+        address-of(place) => place,
+        element(indexed) => if index == 0 { indexed.base } else { indexed.index },
         _ => panic("a node read past its operands"),
     }
 }
@@ -500,23 +500,23 @@ flatten: func(body: list<Node>) -> list<Node> {
 }
 
 flatten-into: func(body: list<Node>, out: list<Node>) {
-    for n in body {
-        out.push(n);
-        for index in 0..nested-count(n) { flatten-into(nested-body(n, index), out); }
+    for node in body {
+        out.push(node);
+        for index in 0..nested-count(node) { flatten-into(nested-body(node, index), out); }
     }
 }
 
 // the locals a node reads, its operands' too (into out)
-reads: func(n: Node, out: list<s64>) {
-    match n.kind {
-        local(i) => out.push(i),
+reads: func(node: Node, out: list<s64>) {
+    match node.kind {
+        local(slot) => out.push(slot),
         _ => {}
     }
-    for index in 0..operand-count(n) { reads(operand(n, index), out); }
+    for index in 0..operand-count(node) { reads(operand(node, index), out); }
 }
 
 // a body's statements replaced by others, in place (other nodes may hold the list)
 replace-body: func(body: list<Node>, by: list<Node>) {
-    for k in 0..body.len() { body.pop(); }
-    for n in by { body.push(n); }
+    for position in 0..body.len() { body.pop(); }
+    for node in by { body.push(node); }
 }

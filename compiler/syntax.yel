@@ -142,7 +142,8 @@ resource Closure {
 // environment then holds it
 // ty: its type, as the checker bound it (a readonly one never writes what it holds); name: the name
 // it binds; span: where that name is written (a language server's go-to-definition)
-resource Mark { captured: bool, unit: Unit, ty: Type, name: string, span: Span, }
+// (slot: where yelc run keeps its value in its func's frame; -1 before it has one)
+resource Mark { captured: bool, unit: Unit, ty: Type, name: string, span: Span, slot: s64, }
 
 // a func's, closure's or for's body: whether it has an environment (a record the closures made in
 // it share, holding its captured bindings; a for's, one each turn)
@@ -349,9 +350,9 @@ is-export: func(sc: Scope, reactor: bool) -> bool {
 
 // whether a program is a reactor: its root package has no func main
 is-reactor: func(decls: list<Decl>) -> bool {
-    for d in decls {
-        match d {
-            func-decl(f) => { if f.name == "main" && f.scope.pkg.prefix == "" { return false; } }
+    for declaration in decls {
+        match declaration {
+            func-decl(declared) => { if declared.name == "main" && declared.scope.pkg.prefix == "" { return false; } }
             _ => {}
         }
     }
@@ -622,33 +623,16 @@ blank-scope: func(file: string) -> Scope {
     }
 }
 
-// an if, a match or a block: it ends at its brace, and takes no `;` as a statement
-ends-at-brace: func(e: Expr) -> bool {
-    match e.kind {
-        if-else(x) => true,
-        match-expr(x) => true,
-        block(x) => true,
-        _ => false,
-    }
-}
-
-is-name: func(e: Expr) -> bool {
-    match e.kind {
-        name(n) => true,
-        _ => false,
-    }
-}
-
-expr-name: func(e: Expr) -> string {
-    match e.kind {
-        name(n) => name-text(n),
+expr-name: func(expression: Expr) -> string {
+    match expression.kind {
+        name(identifier) => name-text(identifier),
         _ => "",
     }
 }
 
-is-str-lit: func(e: Expr) -> bool {
-    match e.kind {
-        str-lit(s) => true,
+is-str-lit: func(expression: Expr) -> bool {
+    match expression.kind {
+        str-lit(_) => true,
         _ => false,
     }
 }
@@ -814,109 +798,94 @@ module tree {
     }
 
     // a node of kind started: what is built from here is its
-    start: func(b: TreeBuilder, kind: NodeKind) {
-        b.open.push({ kind: kind, children: [], });
+    start: func(builder: TreeBuilder, kind: NodeKind) {
+        builder.open.push({ kind: kind, children: [], });
     }
 
     // the innermost node finished: a child of the one around it
-    finish: func(b: TreeBuilder) {
-        if b.open.len() < 2 { return; }
-        let done = b.open.pop();
-        b.open[b.open.len() - 1].children.push(GreenChild.node(made(done.kind, done.children)));
+    finish: func(builder: TreeBuilder) {
+        if builder.open.len() < 2 { return; }
+        let done = builder.open.pop();
+        builder.open[builder.open.len() - 1].children.push(GreenChild.node(made(done.kind, done.children)));
     }
 
     // where the builder is
-    mark: func(b: TreeBuilder) -> TreeMark {
-        { depth: b.open.len(), count: b.open[b.open.len() - 1].children.len(), at: b.at, }
+    mark: func(builder: TreeBuilder) -> TreeMark {
+        { depth: builder.open.len(), count: builder.open[builder.open.len() - 1].children.len(), at: builder.at, }
     }
 
     // a node of kind started at mark: what was built since (the innermost node's children from
     // there) its first children (a call around its callee, a binary around its left)
-    start-at: func(b: TreeBuilder, at: TreeMark, kind: NodeKind) {
-        if at.depth != b.open.len() {
-            start(b, kind);
+    start-at: func(builder: TreeBuilder, at: TreeMark, kind: NodeKind) {
+        if at.depth != builder.open.len() {
+            start(builder, kind);
             return;
         }
         // (what was built since the mark, off the holder's end: nothing before it copied)
-        let holder = b.open[b.open.len() - 1];
+        let holder = builder.open[builder.open.len() - 1];
         let taken: list<GreenChild> = [];
         for index in at.count..holder.children.len() { taken.push(holder.children[index]); }
         for index in at.count..taken.len() + at.count { holder.children.pop(); }
-        b.open.push({ kind: kind, children: taken, });
-    }
-
-    // the builder back where it was at mark (a parse begun again from there): what was built
-    // since dropped
-    rewind: func(b: TreeBuilder, at: TreeMark) {
-        loop {
-            if b.open.len() <= at.depth { break; }
-            b.open.pop();
-        }
-        let holder = b.open[b.open.len() - 1];
-        loop {
-            if holder.children.len() <= at.count { break; }
-            holder.children.pop();
-        }
-        b.at = at.at;
+        builder.open.push({ kind: kind, children: taken, });
     }
 
     // a token taken: the trivia before it (whitespace, comments), then its text, as the file has
     // them (the end of the file's, none)
-    token: func(b: TreeBuilder, t: Token) {
-        if t.kind == TokenKind.eof || t.end <= t.start { return; }
-        trivia(b, t.start);
+    token: func(builder: TreeBuilder, token: Token) {
+        if token.kind == TokenKind.eof || token.end <= token.start { return; }
+        trivia(builder, token.start);
         // (its text where that is its bytes, as most are: no copy made; a char's and %name's
         // bytes are more than their text)
-        let bytes = if t.kind == TokenKind.char || t.escaped || t.text.len() != t.end - t.start { b.text.substring(t.start, t.end) } else { t.text };
-        add(b, t.kind, bytes);
-        b.at = t.end;
+        let bytes = if token.kind == TokenKind.char || token.escaped || token.text.len() != token.end - token.start { builder.text.substring(token.start, token.end) } else { token.text };
+        add(builder, token.kind, bytes);
+        builder.at = token.end;
     }
 
     @(private) is-space: func(byte: s64) -> bool { byte == 32 || byte == 9 || byte == 10 || byte == 13 }
 
     // the whitespace and comments up to byte end, each a token (and a character no token starts
     // with, the lexer's error: unknown)
-    trivia: func(b: TreeBuilder, end: s64) {
-        let at = b.at;
+    trivia: func(builder: TreeBuilder, end: s64) {
+        let at = builder.at;
         loop {
             if at >= end { break; }
             let from = at;
-            if b.text.byte-at(at) == 47 && at + 1 < end && b.text.byte-at(at + 1) == 47 {
+            if builder.text.byte-at(at) == 47 && at + 1 < end && builder.text.byte-at(at + 1) == 47 {
                 loop {
-                    if at >= end || b.text.byte-at(at) == 10 { break; }
+                    if at >= end || builder.text.byte-at(at) == 10 { break; }
                     at += 1;
                 }
-                add(b, TokenKind.comment, b.text.substring(from, at));
-            } else if is-space(b.text.byte-at(at)) {
+                add(builder, TokenKind.comment, builder.text.substring(from, at));
+            } else if is-space(builder.text.byte-at(at)) {
                 loop {
-                    if at >= end || !is-space(b.text.byte-at(at)) { break; }
+                    if at >= end || !is-space(builder.text.byte-at(at)) { break; }
                     at += 1;
                 }
-                add(b, TokenKind.space, b.text.substring(from, at));
+                add(builder, TokenKind.space, builder.text.substring(from, at));
             } else {
                 // (a character no token starts with: the lexer's error, kept as it is)
                 loop {
-                    if at >= end || is-space(b.text.byte-at(at)) || (b.text.byte-at(at) == 47 && at + 1 < end && b.text.byte-at(at + 1) == 47) { break; }
+                    if at >= end || is-space(builder.text.byte-at(at)) || (builder.text.byte-at(at) == 47 && at + 1 < end && builder.text.byte-at(at + 1) == 47) { break; }
                     at += 1;
                 }
-                add(b, TokenKind.unknown, b.text.substring(from, at));
+                add(builder, TokenKind.unknown, builder.text.substring(from, at));
             }
         }
-        if end > b.at { b.at = end; }
+        if end > builder.at { builder.at = end; }
     }
 
     // the tree whole: what is left of the file (trivia) its root's, every node still open finished
-    finish-file: func(b: TreeBuilder) -> GreenNode {
-        trivia(b, b.text.len());
+    finish-file: func(builder: TreeBuilder) -> GreenNode {
+        trivia(builder, builder.text.len());
         loop {
-            if b.open.len() < 2 { break; }
-            finish(b);
+            if builder.open.len() < 2 { break; }
+            finish(builder);
         }
-        made(NodeKind.source-file, b.open[0].children)
+        made(NodeKind.source-file, builder.open[0].children)
     }
 
-    @(private) add: func(b: TreeBuilder, kind: TokenKind, text: string) {
-        b.open[b.open.len() - 1].children.push(GreenChild.token({ kind: kind, text: text, }));
+    @(private) add: func(builder: TreeBuilder, kind: TokenKind, text: string) {
+        builder.open[builder.open.len() - 1].children.push(GreenChild.token({ kind: kind, text: text, }));
     }
 
     @(private) made: func(kind: NodeKind, children: list<GreenChild>) -> GreenNode {
@@ -927,25 +896,25 @@ module tree {
 
     child-width: func(child: GreenChild) -> s64 {
         match child {
-            node(n) => n.width,
-            token(t) => t.text.len(),
+            node(inner) => inner.width,
+            token(leaf) => leaf.text.len(),
         }
     }
 
     // ---- the green tree read
 
     // a green node's text: its tokens', in order
-    green-text: func(n: GreenNode) -> string {
-        let out = buffer(n.width);
-        green-text-into(n, out);
+    green-text: func(node: GreenNode) -> string {
+        let out = buffer(node.width);
+        green-text-into(node, out);
         out.to-string()
     }
 
-    @(private) green-text-into: func(n: GreenNode, out: buffer) {
-        for child in n.children {
+    @(private) green-text-into: func(green: GreenNode, out: buffer) {
+        for child in green.children {
             match child {
                 node(inner) => green-text-into(inner, out),
-                token(t) => out.push(t.text),
+                token(leaf) => out.push(leaf.text),
             }
         }
     }
@@ -955,22 +924,20 @@ module tree {
     // a file's tree, its root in place
     root: func(green: GreenNode) -> SyntaxNode { { green: green, parent: none, offset: 0, index: 0, } }
 
-    kind: func(n: SyntaxNode) -> NodeKind { n.green.kind }
+    kind: func(node: SyntaxNode) -> NodeKind { node.green.kind }
 
     // the byte just past its end
-    end-offset: func(n: SyntaxNode) -> s64 { n.offset + n.green.width }
-
-    text: func(n: SyntaxNode) -> string { green-text(n.green) }
+    end-offset: func(node: SyntaxNode) -> s64 { node.offset + node.green.width }
 
     // its children, in place
-    children: func(n: SyntaxNode) -> list<SyntaxElement> {
+    children: func(parent: SyntaxNode) -> list<SyntaxElement> {
         let out: list<SyntaxElement> = [];
-        let at = n.offset;
-        for index in 0..n.green.children.len() {
-            let child = n.green.children[index];
+        let at = parent.offset;
+        for index in 0..parent.green.children.len() {
+            let child = parent.green.children[index];
             match child {
-                node(inner) => out.push(SyntaxElement.node({ green: inner, parent: some(n), offset: at, index: index, })),
-                token(t) => out.push(SyntaxElement.token({ green: t, parent: n, offset: at, index: index, })),
+                node(inner) => out.push(SyntaxElement.node({ green: inner, parent: some(parent), offset: at, index: index, })),
+                token(leaf) => out.push(SyntaxElement.token({ green: leaf, parent: parent, offset: at, index: index, })),
             }
             at += child-width(child);
         }
@@ -978,14 +945,14 @@ module tree {
     }
 
     // its child nodes, in place (its tokens passed over: none made)
-    child-nodes: func(n: SyntaxNode) -> list<SyntaxNode> {
+    child-nodes: func(parent: SyntaxNode) -> list<SyntaxNode> {
         let out: list<SyntaxNode> = [];
-        let at = n.offset;
-        for index in 0..n.green.children.len() {
-            let child = n.green.children[index];
+        let at = parent.offset;
+        for index in 0..parent.green.children.len() {
+            let child = parent.green.children[index];
             match child {
-                node(inner) => out.push({ green: inner, parent: some(n), offset: at, index: index, }),
-                token(t) => {}
+                node(inner) => out.push({ green: inner, parent: some(parent), offset: at, index: index, }),
+                token(_) => {}
             }
             at += child-width(child);
         }
@@ -993,14 +960,14 @@ module tree {
     }
 
     // its own tokens (trivia left out), in place (its child nodes passed over)
-    own-tokens: func(n: SyntaxNode) -> list<SyntaxToken> {
+    own-tokens: func(parent: SyntaxNode) -> list<SyntaxToken> {
         let out: list<SyntaxToken> = [];
-        let at = n.offset;
-        for index in 0..n.green.children.len() {
-            let child = n.green.children[index];
+        let at = parent.offset;
+        for index in 0..parent.green.children.len() {
+            let child = parent.green.children[index];
             match child {
-                token(t) => { if !is-trivia(t.kind) { out.push({ green: t, parent: n, offset: at, index: index, }); } }
-                node(inner) => {}
+                token(leaf) => { if !is-trivia(leaf.kind) { out.push({ green: leaf, parent: parent, offset: at, index: index, }); } }
+                node(_) => {}
             }
             at += child-width(child);
         }
@@ -1008,43 +975,27 @@ module tree {
     }
 
     // whether one of its own tokens is the operator or word v
-    has-word: func(n: SyntaxNode, v: string) -> bool {
-        for child in n.green.children {
+    has-word: func(parent: SyntaxNode, word: string) -> bool {
+        for child in parent.green.children {
             match child {
-                token(t) => { if (t.kind == TokenKind.op || t.kind == TokenKind.id) && t.text == v { return true; } }
-                node(inner) => {}
+                token(leaf) => { if (leaf.kind == TokenKind.op || leaf.kind == TokenKind.id) && leaf.text == word { return true; } }
+                node(_) => {}
             }
         }
         false
     }
 
-    // its tokens (trivia left out), in place, its descendants' too, in order
-    tokens: func(n: SyntaxNode) -> list<SyntaxToken> {
-        let out: list<SyntaxToken> = [];
-        tokens-into(n, out);
-        out
-    }
-
-    @(private) tokens-into: func(n: SyntaxNode, out: list<SyntaxToken>) {
-        for child in children(n) {
-            match child {
-                node(inner) => tokens-into(inner, out),
-                token(t) => { if !is-trivia(t.green.kind) { out.push(t); } }
-            }
-        }
-    }
-
     // its first token (trivia left out), its children's too: down its first edge
-    first-token: func(n: SyntaxNode) -> option<SyntaxToken> {
-        let at = n.offset;
-        for index in 0..n.green.children.len() {
-            let child = n.green.children[index];
+    first-token: func(parent: SyntaxNode) -> option<SyntaxToken> {
+        let at = parent.offset;
+        for index in 0..parent.green.children.len() {
+            let child = parent.green.children[index];
             match child {
-                token(t) => { if !is-trivia(t.kind) { return some({ green: t, parent: n, offset: at, index: index, }); } }
+                token(leaf) => { if !is-trivia(leaf.kind) { return some({ green: leaf, parent: parent, offset: at, index: index, }); } }
                 node(inner) => {
                     if inner.width > 0 {
-                        match first-token({ green: inner, parent: some(n), offset: at, index: index, }) {
-                            some(t) => { return some(t); }
+                        match first-token({ green: inner, parent: some(parent), offset: at, index: index, }) {
+                            some(found) => { return some(found); }
                             none => {}
                         }
                     }
@@ -1056,19 +1007,19 @@ module tree {
     }
 
     // its last token (trivia left out): down its last edge
-    last-token: func(n: SyntaxNode) -> option<SyntaxToken> {
-        let at = end-offset(n);
-        let count = n.green.children.len();
+    last-token: func(parent: SyntaxNode) -> option<SyntaxToken> {
+        let at = end-offset(parent);
+        let count = parent.green.children.len();
         for back in 0..count {
             let index = count - 1 - back;
-            let child = n.green.children[index];
+            let child = parent.green.children[index];
             at -= child-width(child);
             match child {
-                token(t) => { if !is-trivia(t.kind) { return some({ green: t, parent: n, offset: at, index: index, }); } }
+                token(leaf) => { if !is-trivia(leaf.kind) { return some({ green: leaf, parent: parent, offset: at, index: index, }); } }
                 node(inner) => {
                     if inner.width > 0 {
-                        match last-token({ green: inner, parent: some(n), offset: at, index: index, }) {
-                            some(t) => { return some(t); }
+                        match last-token({ green: inner, parent: some(parent), offset: at, index: index, }) {
+                            some(found) => { return some(found); }
                             none => {}
                         }
                     }
@@ -1080,14 +1031,14 @@ module tree {
 
     // the first token (trivia left out) that starts at or past byte at: down the nodes that
     // reach past it
-    token-from: func(n: SyntaxNode, at: s64) -> option<SyntaxToken> {
-        for child in children(n) {
+    token-from: func(parent: SyntaxNode, at: s64) -> option<SyntaxToken> {
+        for child in children(parent) {
             match child {
-                token(t) => { if t.offset >= at && !is-trivia(t.green.kind) { return some(t); } }
+                token(leaf) => { if leaf.offset >= at && !is-trivia(leaf.green.kind) { return some(leaf); } }
                 node(inner) => {
                     if end-offset(inner) > at {
                         match token-from(inner, at) {
-                            some(t) => { return some(t); }
+                            some(found) => { return some(found); }
                             none => {}
                         }
                     }
@@ -1099,15 +1050,15 @@ module tree {
 
     // the last token (trivia left out) that starts before byte at: down the last node starting
     // before it
-    token-before: func(n: SyntaxNode, at: s64) -> option<SyntaxToken> {
-        let children = children(n);
+    token-before: func(parent: SyntaxNode, at: s64) -> option<SyntaxToken> {
+        let children = children(parent);
         for back in 0..children.len() {
             match children[children.len() - 1 - back] {
-                token(t) => { if t.offset < at && !is-trivia(t.green.kind) { return some(t); } }
+                token(leaf) => { if leaf.offset < at && !is-trivia(leaf.green.kind) { return some(leaf); } }
                 node(inner) => {
                     if inner.offset < at {
                         match token-before(inner, at) {
-                            some(t) => { return some(t); }
+                            some(found) => { return some(found); }
                             none => {}
                         }
                     }
@@ -1118,14 +1069,14 @@ module tree {
     }
 
     // the nodes it is in, innermost first
-    ancestors: func(n: SyntaxNode) -> list<SyntaxNode> {
+    ancestors: func(node: SyntaxNode) -> list<SyntaxNode> {
         let out: list<SyntaxNode> = [];
-        let at = n.parent;
+        let at = node.parent;
         loop {
             match at {
-                some(p) => {
-                    out.push(p);
-                    at = p.parent;
+                some(parent) => {
+                    out.push(parent);
+                    at = parent.parent;
                 }
                 none => { break; }
             }
@@ -1134,9 +1085,9 @@ module tree {
     }
 
     // it, then the nodes it is in, innermost first
-    self-and-ancestors: func(n: SyntaxNode) -> list<SyntaxNode> {
-        let out = [n,];
-        for a in ancestors(n) { out.push(a); }
+    self-and-ancestors: func(node: SyntaxNode) -> list<SyntaxNode> {
+        let out = [node,];
+        for ancestor in ancestors(node) { out.push(ancestor); }
         out
     }
 
@@ -1144,27 +1095,27 @@ module tree {
 
     // the token (not trivia) offset is in or just past (a cursor at a name's end is at that name):
     // the one that starts at offset first, else the one it ends: down the nodes around offset
-    token-at: func(n: SyntaxNode, offset: s64) -> option<SyntaxToken> {
+    token-at: func(parent: SyntaxNode, offset: s64) -> option<SyntaxToken> {
         let ending: option<SyntaxToken> = none;
-        let at = n.offset;
-        for index in 0..n.green.children.len() {
-            let child = n.green.children[index];
+        let at = parent.offset;
+        for index in 0..parent.green.children.len() {
+            let child = parent.green.children[index];
             let width = child-width(child);
             if at > offset { break; }
             if at + width >= offset {
                 match child {
-                    token(t) => {
-                        if !is-trivia(t.kind) {
-                            let found: SyntaxToken = { green: t, parent: n, offset: at, index: index, };
+                    token(leaf) => {
+                        if !is-trivia(leaf.kind) {
+                            let found: SyntaxToken = { green: leaf, parent: parent, offset: at, index: index, };
                             if offset < at + width { return some(found); }
                             ending = some(found);
                         }
                     }
                     node(inner) => {
-                        match token-at({ green: inner, parent: some(n), offset: at, index: index, }, offset) {
-                            some(t) => {
-                                if t.offset <= offset && offset < t.offset + t.green.text.len() { return some(t); }
-                                ending = some(t);
+                        match token-at({ green: inner, parent: some(parent), offset: at, index: index, }, offset) {
+                            some(hit) => {
+                                if hit.offset <= offset && offset < hit.offset + hit.green.text.len() { return some(hit); }
+                                ending = some(hit);
                             }
                             none => {}
                         }
@@ -1201,16 +1152,6 @@ module tree {
         if line > lines.len() { return length; }
         let found = lines[line - 1] + col - 1;
         if found > length { length } else { found }
-    }
-
-    // the innermost node that covers start to end
-    covering: func(n: SyntaxNode, start: s64, end: s64) -> SyntaxNode {
-        for inner in child-nodes(n) {
-            if inner.offset <= start && end <= end-offset(inner) && inner.green.width > 0 {
-                return covering(inner, start, end);
-            }
-        }
-        n
     }
 
     // ---- places: a byte offset as a line and a column (from 1, columns in bytes), and back

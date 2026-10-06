@@ -29,60 +29,60 @@ name-text: func(name: Name) -> string { name-texts[name as s64] }
 // a name as it shows in a string ("record {name} has no field": its text, not its id)
 display: func(name: Name) -> string { name-text(name) }
 
-is-alpha: func(c: s64) -> bool {
-    (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95
+is-alpha: func(byte: s64) -> bool {
+    (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90) || byte == 95
 }
 
-is-digit: func(c: s64) -> bool {
-    c >= 48 && c <= 57
+is-digit: func(byte: s64) -> bool {
+    byte >= 48 && byte <= 57
 }
 
-is-name-char: func(c: s64) -> bool {
-    is-alpha(c) || is-digit(c)
+is-name-char: func(byte: s64) -> bool {
+    is-alpha(byte) || is-digit(byte)
 }
 
 // where a name that starts at i ends: a hyphen is part of it only when a name character follows
-name-end: func(src: string, i: s64) -> s64 {
-    let n = src.len();
-    for j in i..n {
-        let c = src.byte-at(j);
-        if !is-name-char(c) && !(c == 45 && is-name-char(src.byte-at(j + 1))) { return j; }
+name-end: func(src: string, begin: s64) -> s64 {
+    let length = src.len();
+    for index in begin..length {
+        let byte = src.byte-at(index);
+        if !is-name-char(byte) && !(byte == 45 && is-name-char(src.byte-at(index + 1))) { return index; }
     }
-    n
+    length
 }
 
-digits-end: func(src: string, i: s64) -> s64 {
-    let n = src.len();
-    for j in i..n {
-        if !is-digit(src.byte-at(j)) { return j; }
+digits-end: func(src: string, begin: s64) -> s64 {
+    let length = src.len();
+    for index in begin..length {
+        if !is-digit(src.byte-at(index)) { return index; }
     }
-    n
+    length
 }
 
 // a number that starts at i: where it ends, and whether it is a float. 0x, 0o and 0b take their
 // radix's digits; a fraction (when allowed) needs a digit after the `.`, an exponent one after e
 record NumberEnd { end: s64, is-float: bool, }
 
-number-end: func(src: string, i: s64, fraction: bool) -> NumberEnd {
-    if src.byte-at(i) == 48 {
-        let radix = radix-of(src.byte-at(i + 1));
-        if radix > 0 && radix-digit(src.byte-at(i + 2), radix) {
-            return { end: radix-end(src, i + 2, radix), is-float: false, };
+number-end: func(src: string, begin: s64, fraction: bool) -> NumberEnd {
+    if src.byte-at(begin) == 48 {
+        let radix = radix-of(src.byte-at(begin + 1));
+        if radix > 0 && radix-digit(src.byte-at(begin + 2), radix) {
+            return { end: radix-end(src, begin + 2, radix), is-float: false, };
         }
     }
-    let end = digits-end(src, i);
+    let end = digits-end(src, begin);
     let is-float = false;
     if fraction && src.byte-at(end) == 46 && is-digit(src.byte-at(end + 1)) {
         end = digits-end(src, end + 1);
         is-float = true;
     }
-    let e = src.byte-at(end);
-    if e == 101 || e == 69 {
-        let d = end + 1;
-        let sign = src.byte-at(d);
-        if sign == 43 || sign == 45 { d += 1; }
-        if is-digit(src.byte-at(d)) {
-            end = digits-end(src, d);
+    let marker = src.byte-at(end);
+    if marker == 101 || marker == 69 {
+        let cursor = end + 1;
+        let sign = src.byte-at(cursor);
+        if sign == 43 || sign == 45 { cursor += 1; }
+        if is-digit(src.byte-at(cursor)) {
+            end = digits-end(src, cursor);
             is-float = true;
         }
     }
@@ -90,52 +90,52 @@ number-end: func(src: string, i: s64, fraction: bool) -> NumberEnd {
 }
 
 // 16, 8 or 2 for the letter after a 0 (x, o, b); 0 for none
-radix-of: func(c: s64) -> s64 {
-    if c == 120 { 16 } else if c == 111 { 8 } else if c == 98 { 2 } else { 0 }
+radix-of: func(byte: s64) -> s64 {
+    if byte == 120 { 16 } else if byte == 111 { 8 } else if byte == 98 { 2 } else { 0 }
 }
 
-radix-digit: func(c: s64, radix: s64) -> bool {
-    if radix == 16 { is-digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70) }
-    else if radix == 8 { c >= 48 && c <= 55 }
-    else { c == 48 || c == 49 }
+radix-digit: func(byte: s64, radix: s64) -> bool {
+    if radix == 16 { is-digit(byte) || (byte >= 97 && byte <= 102) || (byte >= 65 && byte <= 70) }
+    else if radix == 8 { byte >= 48 && byte <= 55 }
+    else { byte == 48 || byte == 49 }
 }
 
-radix-end: func(src: string, i: s64, radix: s64) -> s64 {
-    let n = src.len();
-    for j in i..n {
-        if !radix-digit(src.byte-at(j), radix) { return j; }
+radix-end: func(src: string, begin: s64, radix: s64) -> s64 {
+    let length = src.len();
+    for index in begin..length {
+        if !radix-digit(src.byte-at(index), radix) { return index; }
     }
-    n
+    length
 }
 
 // where a character literal's text ends (its closing '), from just after the opening one
 char-end: func(src: string, from: s64) -> s64 {
-    let n = src.len();
-    let i = from;
-    for step in 0..n + 1 {
-        if i >= n { return n; }
-        let c = src.byte-at(i);
-        if c == 39 { return i; }
-        if c == 10 { return n; }
-        if c == 92 { i += 2; } else { i += 1; }
+    let length = src.len();
+    let at = from;
+    for step in 0..length + 1 {
+        if at >= length { return length; }
+        let byte = src.byte-at(at);
+        if byte == 39 { return at; }
+        if byte == 10 { return length; }
+        if byte == 92 { at += 2; } else { at += 1; }
     }
-    n
+    length
 }
 
-line-end: func(src: string, i: s64) -> s64 {
-    let n = src.len();
-    for j in i..n {
-        if src.byte-at(j) == 10 { return j; }
+line-end: func(src: string, begin: s64) -> s64 {
+    let length = src.len();
+    for index in begin..length {
+        if src.byte-at(index) == 10 { return index; }
     }
-    n
+    length
 }
 
 // where a string's text ends (its closing quote), from just after the opening one: a quote inside
 // an interpolation's braces opens a string of that expression's
 // whether the { at raw[i] opens an interpolation in a C template (c"..."): a name or a ( follows
-opens-interp: func(raw: string, i: s64) -> bool {
-    let c = raw.byte-at(i + 1);
-    is-alpha(c) || c == 40
+opens-interp: func(raw: string, at: s64) -> bool {
+    let byte = raw.byte-at(at + 1);
+    is-alpha(byte) || byte == 40
 }
 
 // where a string's text ends (its closing quote), from just after the opening one: its
@@ -168,8 +168,8 @@ quote-end: func(src: string, from: s64, template: bool) -> s64 {
 
 newlines: func(src: string, from: s64, to: s64) -> s64 {
     let count = 0;
-    for i in from..to {
-        if src.byte-at(i) == 10 { count += 1; }
+    for index in from..to {
+        if src.byte-at(index) == 10 { count += 1; }
     }
     count
 }
@@ -177,41 +177,41 @@ newlines: func(src: string, from: s64, to: s64) -> s64 {
 // the last newline in src[from..to], or -1
 last-newline: func(src: string, from: s64, to: s64) -> s64 {
     let found = -1;
-    for i in from..to {
-        if src.byte-at(i) == 10 { found = i; }
+    for index in from..to {
+        if src.byte-at(index) == 10 { found = index; }
     }
     found
 }
 
-hex-value: func(h: s64) -> s64 {
-    if h <= 57 { h - 48 } else if h >= 97 { h - 87 } else { h - 55 }
+hex-value: func(digit: s64) -> s64 {
+    if digit <= 57 { digit - 48 } else if digit >= 97 { digit - 87 } else { digit - 55 }
 }
 
 // an id without its version: ns:name@1.0.0 is ns:name
 without-version: func(id: string) -> string {
-    for i in 0..id.len() {
-        if id.byte-at(i) == 64 { return id.substring(0, i); }
+    for index in 0..id.len() {
+        if id.byte-at(index) == 64 { return id.substring(0, index); }
     }
     id
 }
 
 // a number written in decimal digits (a tuple field's name), or -1
-tuple-index: func(f: string) -> s64 {
-    let n = 0;
-    for i in 0..f.len() {
-        let d = f.byte-at(i);
-        if !is-digit(d) || i > 6 { return -1; }
-        n = n * 10 + d - 48;
+tuple-index: func(field: string) -> s64 {
+    let value = 0;
+    for index in 0..field.len() {
+        let digit = field.byte-at(index);
+        if !is-digit(digit) || index > 6 { return -1; }
+        value = value * 10 + digit - 48;
     }
-    n
+    value
 }
 
 // a key's last part: its name in its module
 base-name: func(key: string) -> string {
-    let n = key.len();
-    for k in 0..n {
-        let c = key.byte-at(n - 1 - k);
-        if c == 46 || c == 47 { return key.substring(n - k, n); }
+    let length = key.len();
+    for index in 0..length {
+        let byte = key.byte-at(length - 1 - index);
+        if byte == 46 || byte == 47 { return key.substring(length - index, length); }
     }
     key
 }

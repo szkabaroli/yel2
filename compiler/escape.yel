@@ -13,6 +13,14 @@
 // binding's stream or future that no one else has has its end let go after its last use (gen.yel's
 // releases).
 
+// a value a func gives the call of a func value it was given (a parameter's: map's f(x)): that
+// parameter (by position) and where the value goes in its call. What it does with the value is the
+// func value's, known only where the func is called (the closure given: lent-effect)
+record Lend { param: s64, position: s64, }
+
+// what a func value does with what it is given at one position: written, kept
+record ParamUse { writes: bool, keeps: bool, }
+
 // a func's locals in groups that may hold one value, and whether each group's value escapes the
 // func; for each local, the loop it is first defined in (0: none), each loop's parent, and each
 // record the func makes with the loop it is made in
@@ -25,6 +33,11 @@ resource Groups {
     // new): what such a value holds, others may reach
     outside: list<bool>,
     written: list<bool>,
+    // the locals each local's value was read from, as a resource's field (another's part, in no
+    // group of it): a write through it writes them too
+    owners: list<list<s64>>,
+    // what each group is given, through a call, a func value parameter of the func (Lend)
+    lent: list<list<Lend>>,
     // what observe counts (observing: the groups of param-changes): an @(observable) resource's
     // local in a group of its own (apart), and a write that reaches one going no further, since what
     // is written is its own field, which its registrar tells of (observed: those types; none when
@@ -54,6 +67,9 @@ resource CallFlow {
     writes: list<bool>,
     changes: list<bool>,
     gives: list<bool>,
+    // (by index) the func values among the call's arguments each is given to (Lend: the callee's
+    // parameter it is, and where it goes in its call)
+    lent: list<list<Lend>>,
     moved: bool,
     new-result: bool,
 }
@@ -70,16 +86,24 @@ resource Facts {
     param-kept-in: map<Name, list<list<s64>>>,
     param-gives: map<Name, list<bool>>,
     param-writes: map<Name, list<bool>>,
+    // by C name: for each parameter, the func value parameters it is given to (Lend)
+    param-lent: map<Name, list<list<Lend>>>,
     // by C name: which parameters each func writes as observe counts it (a write through an
     // @(observable) resource is that resource's, not what holds it: gen.settle-observed's)
     param-changes: map<Name, list<bool>>,
     fresh-result: map<Name, bool>,
+    // by C name: whether what each func gives back is itself new, though it may hold what it was
+    // given (filter's list: its items are the argument's)
+    new-top: map<Name, bool>,
     // the WIT funcs' wrappers (and an async one's start), by C name: what they are given crosses to
     // the host (moved, or copied), what they give back is new
     wit: set<Name>,
     // what each extern does, by its C name (flow.derive)
     externs: map<string, RuntimeEffect>,
     pointer-types: map<Name, bool>,
+    // the variants held by value (not pointers: each holds what its payloads hold), with their
+    // payloads
+    value-payloads: map<Name, list<Type>>,
     // the @(observable) resources
     observable-types: map<Name, bool>,
     // the named types that may hold a func value (a closure's environment with it)
@@ -99,210 +123,299 @@ resource Facts {
 
 module opt {
     // whether a value of type t may hold a func value (holders: the named types that may)
-    holds-funcs: func(holders: map<Name, bool>, t: Type) -> bool {
-        match t {
-            func-type(f) => true,
-            named(n) => holders.has(n),
-            _ => any-child(t, { x -> holds-funcs(holders, x) }),
+    holds-funcs: func(holders: map<Name, bool>, given: Type) -> bool {
+        match given {
+            func-type(_) => true,
+            named(written) => holders.has(written),
+            _ => any-child(given, { item -> holds-funcs(holders, item) }),
         }
     }
 
     // whether a call's argument may be (part of) its result: a func value only where the result may
     // hold one (a closure given filter is none of the list it gives)
-    may-become: func(p: Facts, arg: Node, result: Type) -> bool {
+    may-become: func(facts: Facts, arg: Node, result: Type) -> bool {
         match arg.ty {
-            func-type(f) => holds-funcs(p.func-holders, result),
+            func-type(_) => holds-funcs(facts.func-holders, result),
             _ => true,
         }
     }
 
-    holds-pointers: func(p: Facts, t: Type) -> bool {
-        match t {
+    holds-pointers: func(facts: Facts, given: Type) -> bool {
+        match given {
             string-type => true,
             buffer-type => true,
             // a closure's environment
-            func-type(f) => true,
-            list-type(x) => true,
-            map-type(x) => true,
-            future-type(x) => true,
-            seq-type(x) => true,
-            stream-type(x) => true,
-            named(n) => p.pointer-types.has(n),
-            _ => any-child(t, { x -> holds-pointers(p, x) }),
+            func-type(_) => true,
+            list-type(_) => true,
+            map-type(_) => true,
+            future-type(_) => true,
+            seq-type(_) => true,
+            stream-type(_) => true,
+            named(written) => facts.pointer-types.has(written) || facts.value-payloads.get-or(written, []).any({ item -> holds-pointers(facts, item) }),
+            _ => any-child(given, { item -> holds-pointers(facts, item) }),
         }
     }
 
     // whether local d's value may hold a value that is written (holds-mutable of its type: found
     // once for each of the func's locals)
-    local-mutable: func(p: Facts, f: IrFunc, d: s64) -> bool {
-        let known = p.mutable-locals.get-or(f.name, []);
-        if known.len() != f.locals.len() {
-            known = f.locals.map({ x -> holds-mutable(p, x.ty) });
-            p.mutable-locals.set(f.name, known);
+    local-mutable: func(facts: Facts, function: IrFunc, local-index: s64) -> bool {
+        let known = facts.mutable-locals.get-or(function.name, []);
+        if known.len() != function.locals.len() {
+            known = function.locals.map({ local -> holds-mutable(facts, local.ty) });
+            facts.mutable-locals.set(function.name, known);
         }
-        known[d]
+        known[local-index]
     }
 
     // whether a value of type t may hold a value that is written (a list, a record, a closure's
     // environment, …): a string, a number or anything made of them holds none
-    holds-mutable: func(p: Facts, t: Type) -> bool {
-        match t {
+    holds-mutable: func(facts: Facts, given: Type) -> bool {
+        match given {
             string-type => false,
-            option-type(x) => any-child(t, { y -> holds-mutable(p, y) }),
-            result-type(r) => any-child(t, { y -> holds-mutable(p, y) }),
-            tuple-type(xs) => any-child(t, { y -> holds-mutable(p, y) }),
-            union-type(xs) => any-child(t, { y -> holds-mutable(p, y) }),
-            anon-record(r) => any-child(t, { y -> holds-mutable(p, y) }),
-            fixed-list(x) => any-child(t, { y -> holds-mutable(p, y) }),
-            _ => holds-pointers(p, t),
+            option-type(_) => any-child(given, { item -> holds-mutable(facts, item) }),
+            result-type(_) => any-child(given, { item -> holds-mutable(facts, item) }),
+            tuple-type(_) => any-child(given, { item -> holds-mutable(facts, item) }),
+            union-type(_) => any-child(given, { item -> holds-mutable(facts, item) }),
+            anon-record(_) => any-child(given, { item -> holds-mutable(facts, item) }),
+            fixed-list(_) => any-child(given, { item -> holds-mutable(facts, item) }),
+            // a variant held by value, as a tuple of its payloads
+            named(written) => if facts.value-payloads.has(written) {
+                facts.value-payloads[written].any({ item -> holds-mutable(facts, item) })
+            } else {
+                holds-pointers(facts, given)
+            },
+            _ => holds-pointers(facts, given),
         }
     }
 
-    find: func(gr: Groups, i: s64) -> s64 {
-        let r = i;
+    find: func(gr: Groups, local-index: s64) -> s64 {
+        let root = local-index;
         for step in 0..gr.parent.len() + 1 {
-            if gr.parent[r] == r { return r; }
-            r = gr.parent[r];
+            if gr.parent[root] == root { return root; }
+            root = gr.parent[root];
         }
-        r
+        root
     }
 
-    join: func(gr: Groups, a: s64, b: s64) {
-        if gr.apart[a] || gr.apart[b] { return; }
-        let x = find(gr, a);
-        let y = find(gr, b);
-        if x == y { return; }
-        gr.parent[y] = x;
-        if gr.escapes[y] { gr.escapes[x] = true; }
-        if gr.returned[y] { gr.returned[x] = true; }
-        if gr.stale[y] { gr.stale[x] = true; }
-        if gr.outside[y] { gr.outside[x] = true; }
-        if gr.written[y] { gr.written[x] = true; }
-        if gr.moved[y] { gr.moved[x] = true; }
-        for k in gr.holders[y] { gr.holders[x].push(k); }
-        for q in gr.holding-params[y] {
-            if !gr.holding-params[x].contains(q) { gr.holding-params[x].push(q); }
+    join: func(gr: Groups, one: s64, other: s64) {
+        if gr.apart[one] || gr.apart[other] { return; }
+        let kept-root = find(gr, one);
+        let merged-root = find(gr, other);
+        if kept-root == merged-root { return; }
+        gr.parent[merged-root] = kept-root;
+        if gr.escapes[merged-root] { gr.escapes[kept-root] = true; }
+        if gr.returned[merged-root] { gr.returned[kept-root] = true; }
+        if gr.stale[merged-root] { gr.stale[kept-root] = true; }
+        if gr.outside[merged-root] { gr.outside[kept-root] = true; }
+        if gr.written[merged-root] { gr.written[kept-root] = true; }
+        if gr.moved[merged-root] { gr.moved[kept-root] = true; }
+        for holder in gr.holders[merged-root] { gr.holders[kept-root].push(holder); }
+        for parameter in gr.holding-params[merged-root] {
+            if !gr.holding-params[kept-root].contains(parameter) { gr.holding-params[kept-root].push(parameter); }
+        }
+        for borrowed in gr.lent[merged-root] {
+            if !gr.lent[kept-root].contains(borrowed) { gr.lent[kept-root].push(borrowed); }
+        }
+    }
+
+    // what n reads is given a func value parameter's call (l)
+    lend: func(gr: Groups, node: Node, borrowed: Lend) {
+        let read: list<s64> = [];
+        reads(node, read);
+        for local-index in read {
+            let root = find(gr, local-index);
+            if !gr.lent[root].contains(borrowed) { gr.lent[root].push(borrowed); }
+        }
+    }
+
+    // the position of the parameter a func value node is (a parameter's local never assigned in
+    // the body: still its caller's value), else -1
+    func-param: func(function: IrFunc, node: Node) -> s64 {
+        let local-index = match node.kind {
+            local(read-index) => read-index,
+            _ => { return -1; }
+        };
+        let at = function.params.index-of(local-index);
+        if at < 0 { return -1; }
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assigned) => { if assigned.dest == local-index { return -1; } }
+                _ => {}
+            }
+        }
+        at
+    }
+
+    // the closure a func value node is made of (its lifted func's C name): a closure literal, or a
+    // local of body assigned only one
+    closure-made: func(facts: Facts, body: list<Node>, node: Node) -> option<Name> {
+        match node.kind {
+            make(made) => {
+                if made.parts.len() == 2 {
+                    match made.parts[0].kind {
+                        func-ref(referred) => {
+                            if facts.funcs.has(referred.name) && facts.funcs[referred.name].closure { return some(referred.name); }
+                        }
+                        _ => {}
+                    }
+                }
+                none
+            }
+            local(local-index) => {
+                let found: option<Name> = none;
+                let assigned = 0;
+                for node in flatten(body) {
+                    match node.kind {
+                        assign(assignment) => {
+                            if assignment.dest == local-index {
+                                assigned += 1;
+                                found = closure-made(facts, [], assignment.value);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if assigned == 1 { found } else { none }
+            }
+            _ => none,
+        }
+    }
+
+    // what a closure given a call does with what it is given at a position: written (as observe
+    // counts it, observing), kept; none known (not a closure made here), both
+    lent-effect: func(facts: Facts, body: list<Node>, func-value: Node, position: s64, observing: bool) -> ParamUse {
+        match closure-made(facts, body, func-value) {
+            some(closure-name) => {
+                if !facts.param-escapes.has(closure-name) { return { writes: true, keeps: true, }; }
+                let ws = if observing { facts.param-changes[closure-name] } else { facts.param-writes[closure-name] };
+                if position >= ws.len() { return { writes: false, keeps: false, }; }
+                {
+                    writes: ws[position],
+                    keeps: facts.param-escapes[closure-name][position] || facts.param-kept-in[closure-name][position].len() > 0,
+                }
+            }
+            none => { writes: true, keeps: true, },
         }
     }
 
     // what n reads is written (through it: a field set, an item pushed); observing, only what a
     // write through it changes (changed-reads)
-    write: func(gr: Groups, n: Node) {
+    write: func(gr: Groups, node: Node) {
         let read: list<s64> = [];
-        if gr.observing { changed-reads(gr, n, read); } else { reads(n, read); }
-        for i in read { gr.written[find(gr, i)] = true; }
+        if gr.observing { changed-reads(gr, node, read); } else { reads(node, read); }
+        for local-index in read { gr.written[find(gr, local-index)] = true; }
     }
 
     // the locals a write through n changes, as observe counts them: none past an @(observable)
     // resource (n one, or one's field), whose registrar tells of what is written in it
-    changed-reads: func(gr: Groups, n: Node, out: list<s64>) {
-        match n.kind {
-            local(i) => {
-                out.push(i);
+    changed-reads: func(gr: Groups, node: Node, out: list<s64>) {
+        match node.kind {
+            local(local-index) => {
+                out.push(local-index);
                 return;
             }
-            load(x) => { if x.arrow && observed(gr, x.base.ty) { return; } }
+            load(loaded) => { if loaded.arrow && observed(gr, loaded.base.ty) { return; } }
             _ => {}
         }
-        if observed(gr, n.ty) { return; }
-        for index in 0..operand-count(n) { changed-reads(gr, operand(n, index), out); }
+        if observed(gr, node.ty) { return; }
+        for index in 0..operand-count(node) { changed-reads(gr, operand(node, index), out); }
     }
 
     // whether a value of type t is an @(observable) resource (observing: else none is)
-    observed: func(gr: Groups, t: Type) -> bool {
-        match t {
-            named(n) => gr.observed.has(n),
-            readonly-type(x) => observed(gr, x),
+    observed: func(gr: Groups, given: Type) -> bool {
+        match given {
+            named(written) => gr.observed.has(written),
+            readonly-type(inner) => observed(gr, inner),
             _ => false,
         }
     }
 
     // whether any of f's locals may hold an @(observable) resource (else what observe counts is
     // what is written)
-    touches-observed: func(p: Facts, f: IrFunc) -> bool {
-        if p.observable-types.len() == 0 { return false; }
-        f.locals.any({ x -> mentions-observed(p, x.ty) })
+    touches-observed: func(facts: Facts, function: IrFunc) -> bool {
+        if facts.observable-types.len() == 0 { return false; }
+        function.locals.any({ local -> mentions-observed(facts, local.ty) })
     }
 
-    @(private) mentions-observed: func(p: Facts, t: Type) -> bool {
-        match t {
-            named(n) => p.observable-types.has(n),
-            _ => any-child(t, { x -> mentions-observed(p, x) }),
+    @(private) mentions-observed: func(facts: Facts, given: Type) -> bool {
+        match given {
+            named(written) => facts.observable-types.has(written),
+            _ => any-child(given, { item -> mentions-observed(facts, item) }),
         }
     }
 
     // d's group may hold a value made elsewhere
-    taint: func(gr: Groups, d: s64) { if d >= 0 { gr.stale[find(gr, d)] = true; } }
+    taint: func(gr: Groups, local-index: s64) { if local-index >= 0 { gr.stale[find(gr, local-index)] = true; } }
 
     // d's, where it may hold a value that is written (a number's, a string's: nothing to say)
-    taint-holder: func(p: Facts, gr: Groups, f: IrFunc, d: s64) {
-        if d >= 0 && local-mutable(p, f, d) {
-            taint(gr, d);
-            gr.outside[find(gr, d)] = true;
+    taint-holder: func(facts: Facts, gr: Groups, function: IrFunc, local-index: s64) {
+        if local-index >= 0 && local-mutable(facts, function, local-index) {
+            taint(gr, local-index);
+            gr.outside[find(gr, local-index)] = true;
         }
     }
 
     // what n reads is given back
-    give-back: func(gr: Groups, n: Node) {
+    give-back: func(gr: Groups, node: Node) {
         let read: list<s64> = [];
-        reads(n, read);
-        for i in read { gr.returned[find(gr, i)] = true; }
+        reads(node, read);
+        for local-index in read { gr.returned[find(gr, local-index)] = true; }
     }
 
     // d may hold what n reads
-    flow: func(gr: Groups, d: s64, n: Node) {
+    flow: func(gr: Groups, local-index: s64, node: Node) {
         let read: list<s64> = [];
-        reads(n, read);
-        for i in read { join(gr, d, i); }
+        reads(node, read);
+        for read-index in read { join(gr, local-index, read-index); }
     }
 
     // what n reads leaves the func
-    escape: func(gr: Groups, n: Node) {
+    escape: func(gr: Groups, node: Node) {
         let read: list<s64> = [];
-        reads(n, read);
-        for i in read { gr.escapes[find(gr, i)] = true; }
+        reads(node, read);
+        for local-index in read { gr.escapes[find(gr, local-index)] = true; }
     }
 
     // what n reads is held by what holder reads (kept in it; where holder reads no local, the
     // value escapes: a field's, a temporary's)
-    hold: func(gr: Groups, n: Node, holder: Node) {
+    hold: func(gr: Groups, node: Node, holder: Node) {
         let held: list<s64> = [];
-        reads(n, held);
+        reads(node, held);
         let by: list<s64> = [];
         reads(holder, by);
         if by.len() == 0 {
-            escape(gr, n);
+            escape(gr, node);
             return;
         }
-        for h in held {
-            for k in by { gr.holders[find(gr, h)].push(k); }
+        for held-local in held {
+            for holding-local in by { gr.holders[find(gr, held-local)].push(holding-local); }
         }
     }
 
     // what holds each group, followed to the end: a group held by one that escapes, is given back
     // or came from outside (a field's value: others may reach it) does too, and one a parameter's
     // group holds is kept in that parameter (its position)
-    close: func(gr: Groups, f: IrFunc) {
+    close: func(gr: Groups, function: IrFunc) {
         loop {
             let changed = false;
-            for i in 0..gr.parent.len() {
-                if find(gr, i) != i { continue; }
-                for k in gr.holders[i] {
-                    let h = find(gr, k);
-                    if h == i { continue; }
-                    if (gr.escapes[h] || gr.outside[h]) && !gr.escapes[i] {
-                        gr.escapes[i] = true;
+            for root in 0..gr.parent.len() {
+                if find(gr, root) != root { continue; }
+                for held in gr.holders[root] {
+                    let held-root = find(gr, held);
+                    if held-root == root { continue; }
+                    if (gr.escapes[held-root] || gr.outside[held-root]) && !gr.escapes[root] {
+                        gr.escapes[root] = true;
                         changed = true;
                     }
-                    if gr.returned[h] && !gr.returned[i] {
-                        gr.returned[i] = true;
+                    if gr.returned[held-root] && !gr.returned[root] {
+                        gr.returned[root] = true;
                         changed = true;
                     }
-                    for at in 0..f.params.len() {
-                        let q = find(gr, f.params[at]);
-                        let holds-it = q == h || gr.holding-params[h].contains(at);
-                        if holds-it && q != i && !gr.holding-params[i].contains(at) {
-                            gr.holding-params[i].push(at);
+                    for at in 0..function.params.len() {
+                        let parameter-root = find(gr, function.params[at]);
+                        let holds-it = parameter-root == held-root || gr.holding-params[held-root].contains(at);
+                        if holds-it && parameter-root != root && !gr.holding-params[root].contains(at) {
+                            gr.holding-params[root].push(at);
                             changed = true;
                         }
                     }
@@ -312,15 +425,15 @@ module opt {
         }
     }
 
-    define: func(gr: Groups, i: s64, loop: s64) {
-        if gr.def-loop[i] < 0 { gr.def-loop[i] = loop; }
+    define: func(gr: Groups, local-index: s64, loop: s64) {
+        if gr.def-loop[local-index] < 0 { gr.def-loop[local-index] = loop; }
     }
 
     // a func's groups: who shares a value with whom, and which values leave it
-    groups: func(p: Facts, f: IrFunc) -> Groups { groups-for(p, f, false) }
+    groups: func(facts: Facts, function: IrFunc) -> Groups { groups-for(facts, function, false) }
 
     // observing: what observe counts as written (see Groups), the rest of what is found not read
-    groups-for: func(p: Facts, f: IrFunc, observing: bool) -> Groups {
+    groups-for: func(facts: Facts, function: IrFunc, observing: bool) -> Groups {
         let gr: Groups = {
             parent: [],
             escapes: [],
@@ -328,8 +441,10 @@ module opt {
             stale: [],
             outside: [],
             written: [],
+            owners: [],
+            lent: [],
             observing: observing,
-            observed: if observing { p.observable-types } else { map.new() },
+            observed: if observing { facts.observable-types } else { map.new() },
             apart: [],
             moved: [],
             holders: [],
@@ -339,130 +454,178 @@ module opt {
             records: [],
             record-loops: [],
         };
-        for i in 0..f.locals.len() {
-            gr.parent.push(i);
+        for local-index in 0..function.locals.len() {
+            gr.parent.push(local-index);
             gr.escapes.push(false);
             gr.returned.push(false);
             gr.stale.push(false);
             gr.outside.push(false);
             gr.written.push(false);
-            gr.apart.push(observing && observed(gr, f.locals[i].ty));
+            gr.owners.push([]);
+            gr.lent.push([]);
+            gr.apart.push(observing && observed(gr, function.locals[local-index].ty));
             gr.moved.push(false);
             gr.holders.push([]);
             gr.holding-params.push([]);
             gr.def-loop.push(-1);
         }
         // a parameter's value is its caller's
-        for q in f.params {
-            define(gr, q, 0);
-            taint(gr, q);
+        for parameter in function.params {
+            define(gr, parameter, 0);
+            taint(gr, parameter);
         }
-        group-walk(p, gr, f, f.body, 0);
-        for n in flatten(f.body) { closure-envs(p, gr, n); }
-        close(gr, f);
+        group-walk(facts, gr, function, function.body, 0);
+        for node in flatten(function.body) { closure-envs(facts, gr, node); }
+        close(gr, function);
+        write-owners(gr);
         gr
+    }
+
+    // a part written is its owner written (t.members.push(x) writes t), through any chain of
+    // parts; observing, none past an @(observable) resource, which tells of its own fields
+    write-owners: func(gr: Groups) {
+        loop {
+            let changed = false;
+            for local-index in 0..gr.owners.len() {
+                if !gr.written[find(gr, local-index)] { continue; }
+                for owner in gr.owners[local-index] {
+                    if !gr.written[find(gr, owner)] && !gr.apart[owner] {
+                        gr.written[find(gr, owner)] = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed { break; }
+        }
     }
 
     // each closure made in n (its operands too) whose body lets its environment escape: the
     // environment it is given escapes here
-    closure-envs: func(p: Facts, gr: Groups, n: Node) {
-        match n.kind {
-            make(m) => {
-                if m.parts.len() == 2 {
-                    match m.parts[0].kind {
-                        func-ref(r) => { if p.env-escapes.get-or(r.name, false) { escape(gr, m.parts[1]); } }
+    closure-envs: func(facts: Facts, gr: Groups, node: Node) {
+        match node.kind {
+            make(made) => {
+                if made.parts.len() == 2 {
+                    match made.parts[0].kind {
+                        func-ref(referred) => { if facts.env-escapes.get-or(referred.name, false) { escape(gr, made.parts[1]); } }
                         _ => {}
                     }
                 }
             }
             _ => {}
         }
-        for index in 0..operand-count(n) { closure-envs(p, gr, operand(n, index)); }
+        for index in 0..operand-count(node) { closure-envs(facts, gr, operand(node, index)); }
     }
 
-    group-walk: func(p: Facts, gr: Groups, f: IrFunc, body: list<Node>, loop: s64) {
-        for n in body {
-            match n.kind {
-                assign(x) => {
-                    define(gr, x.dest, loop);
-                    value-flow(p, gr, f, x.dest, x.value, loop);
+    group-walk: func(facts: Facts, gr: Groups, function: IrFunc, body: list<Node>, loop: s64) {
+        for node in body {
+            match node.kind {
+                assign(assigned) => {
+                    define(gr, assigned.dest, loop);
+                    value-flow(facts, gr, function, assigned.dest, assigned.value, loop);
                 }
-                call(c) => value-flow(p, gr, f, -1, n, loop),
-                call-ref(c) => value-flow(p, gr, f, -1, n, loop),
-                store(x) => {
-                    escape(gr, x.value);
-                    write(gr, x.target);
+                call(_) => value-flow(facts, gr, function, -1, node, loop),
+                call-ref(_) => value-flow(facts, gr, function, -1, node, loop),
+                store(stored) => {
+                    escape(gr, stored.value);
+                    write(gr, stored.target);
                 }
-                return(v) => give-back(gr, v),
+                return(returned) => give-back(gr, returned),
                 // a generator's value: read by whoever steps it, any time later
-                yield(v) => escape(gr, v),
-                loop(x) => {
+                yield(yielded) => escape(gr, yielded),
+                loop(looping) => {
                     let inner = gr.loop-parent.len();
                     gr.loop-parent.push(loop);
-                    group-walk(p, gr, f, x.body, inner);
+                    group-walk(facts, gr, function, looping.body, inner);
                 }
-                _ => { for index in 0..nested-count(n) { group-walk(p, gr, f, nested-body(n, index), loop); } }
+                _ => { for index in 0..nested-count(node) { group-walk(facts, gr, function, nested-body(node, index), loop); } }
             }
         }
     }
 
     // a value given to d (-1: none): who may hold it, and what it lets escape
-    value-flow: func(p: Facts, gr: Groups, f: IrFunc, d: s64, v: Node, loop: s64) {
+    value-flow: func(facts: Facts, gr: Groups, function: IrFunc, local-index: s64, produced: Node, loop: s64) {
         // only a value that may hold another (not a string, a number: what no one writes) shares
-        let holds = d >= 0 && local-mutable(p, f, d);
-        match v.kind {
+        let holds = local-index >= 0 && local-mutable(facts, function, local-index);
+        match produced.kind {
             // a func value's call: any argument may escape, the result be any of them (or anything)
-            call-ref(c) => {
-                for a in c.args {
-                    escape(gr, a);
-                    write(gr, a);
+            // (a func value parameter's call: what it does, its caller's closure says)
+            call-ref(called) => {
+                let through = func-param(function, called.callee);
+                for position in 0..called.args.len() {
+                    if through >= 0 {
+                        lend(gr, called.args[position], { param: through, position: position, });
+                    } else {
+                        escape(gr, called.args[position]);
+                        write(gr, called.args[position]);
+                    }
                 }
                 if holds {
-                    for a in c.args {
-                        if may-become(p, a, f.locals[d].ty) { flow(gr, d, a); }
+                    for argument in called.args {
+                        if may-become(facts, argument, function.locals[local-index].ty) { flow(gr, local-index, argument); }
                     }
                 }
-                taint-holder(p, gr, f, d);
+                taint-holder(facts, gr, function, local-index);
             }
             // a call: as call-flow says of each argument
-            call(c) => {
-                let cf = call-flow(p, c);
-                for i in 0..c.args.len() {
-                    let a = c.args[i];
+            call(called) => {
+                let cf = call-flow(facts, called);
+                for index in 0..called.args.len() {
+                    let argument = called.args[index];
                     if cf.moved {
                         let read: list<s64> = [];
-                        reads(a, read);
-                        for r in read { gr.moved[find(gr, r)] = true; }
+                        reads(argument, read);
+                        for read-index in read { gr.moved[find(gr, read-index)] = true; }
                     }
-                    if cf.keeps[i] { escape(gr, a); }
-                    for j in cf.kept-in[i] { hold(gr, a, c.args[j]); }
-                    let writes = if gr.observing { cf.changes[i] } else { cf.writes[i] };
-                    if writes { write(gr, a); }
-                    if holds && cf.gives[i] && may-become(p, a, f.locals[d].ty) { flow(gr, d, a); }
+                    if cf.keeps[index] { escape(gr, argument); }
+                    for kept in cf.kept-in[index] { hold(gr, argument, called.args[kept]); }
+                    let writes = if gr.observing { cf.changes[index] } else { cf.writes[index] };
+                    if writes { write(gr, argument); }
+                    if holds && cf.gives[index] && may-become(facts, argument, function.locals[local-index].ty) { flow(gr, local-index, argument); }
+                    // given a func value it is given: what the closure given does, or (one this
+                    // func was given) lent on
+                    for borrowed in cf.lent[index] {
+                        if borrowed.param >= called.args.len() {
+                            escape(gr, argument);
+                            write(gr, argument);
+                            continue;
+                        }
+                        let value = called.args[borrowed.param];
+                        let on = func-param(function, value);
+                        if on >= 0 {
+                            lend(gr, argument, { param: on, position: borrowed.position, });
+                        } else {
+                            let use = lent-effect(facts, function.body, value, borrowed.position, gr.observing);
+                            if use.keeps { escape(gr, argument); }
+                            if use.writes { write(gr, argument); }
+                        }
+                    }
                 }
-                if !cf.new-result { taint-holder(p, gr, f, d); }
+                if !cf.new-result { taint-holder(facts, gr, function, local-index); }
             }
-            alloc(a) => {
-                if d >= 0 && a.is-record {
-                    gr.records.push(d);
+            alloc(allocated) => {
+                if local-index >= 0 && allocated.is-record {
+                    gr.records.push(local-index);
                     gr.record-loops.push(loop);
                 }
             }
             // a field or a payload was stored (so escaped) before it can be loaded: a value
             // struct's part is the struct's, another value's (->) is that value's
-            load(x) => {
-                if holds && !x.arrow { flow(gr, d, x.base); }
-                if x.arrow { taint-holder(p, gr, f, d); }
+            load(loaded) => {
+                if holds && !loaded.arrow { flow(gr, local-index, loaded.base); }
+                if loaded.arrow {
+                    taint-holder(facts, gr, function, local-index);
+                    if holds { reads(loaded.base, gr.owners[local-index]); }
+                }
             }
-            list-get(x) => {
-                if holds { flow(gr, d, x.list); }
-                taint-holder(p, gr, f, d);
+            list-get(got) => {
+                if holds { flow(gr, local-index, got.list); }
+                taint-holder(facts, gr, function, local-index);
             }
-            interp(x) => {}
+            interp(_) => {}
             // a global's value: any func may reach what it holds
-            global(_) => taint-holder(p, gr, f, d),
+            global(_) => taint-holder(facts, gr, function, local-index),
             // a value struct (some(r), a tuple) holds what it is made of
-            _ => { if holds { flow(gr, d, v); } }
+            _ => { if holds { flow(gr, local-index, produced); } }
         }
     }
 
@@ -472,94 +635,103 @@ module opt {
     // declaration says (flow.derive; one not declared may give back any, its result not new); an
     // async func's or a generator's start, its frame holding every one (what its step keeps, kept
     // now); a yel func's, as its summary says; one not known, anything
-    call-flow: func(p: Facts, c: CallNode) -> CallFlow {
-        match p.flows.get(c.name) {
-            some(known) => { if known.keeps.len() == c.args.len() { return known; } }
+    call-flow: func(facts: Facts, called: CallNode) -> CallFlow {
+        match facts.flows.get(called.name) {
+            some(known) => { if known.keeps.len() == called.args.len() { return known; } }
             none => {}
         }
-        let cf = find-call-flow(p, c);
-        p.flows.set(c.name, cf);
+        let cf = find-call-flow(facts, called);
+        facts.flows.set(called.name, cf);
         cf
     }
 
     // a call's flow, found (call-flow keeps it: what it gives is only read)
-    find-call-flow: func(p: Facts, c: CallNode) -> CallFlow {
-        let n = c.args.len();
-        let cf: CallFlow = { keeps: [], kept-in: [], writes: [], changes: [], gives: [], moved: false, new-result: true, };
-        if p.wit.has(c.name) {
+    find-call-flow: func(facts: Facts, called: CallNode) -> CallFlow {
+        let count = called.args.len();
+        let cf: CallFlow = { keeps: [], kept-in: [], writes: [], changes: [], gives: [], lent: [], moved: false, new-result: true, };
+        if facts.wit.has(called.name) {
             cf.moved = true;
-            for i in 0..n {
+            for step in 0..count {
                 cf.keeps.push(false);
                 cf.kept-in.push([]);
                 cf.writes.push(false);
                 cf.changes.push(false);
                 cf.gives.push(false);
+                cf.lent.push([]);
             }
             return cf;
         }
-        if c.key == "" {
-            let e = flow.call-effect(p.externs, c.c-name);
-            let k = type-args-before(c.args);
-            for i in 0..n {
-                cf.keeps.push(i >= k && flow.keeps(e, i - k));
+        if called.key == "" {
+            let runtime-effect = flow.call-effect(facts.externs, called.c-name);
+            let skipped = type-args-before(called.args);
+            for index in 0..count {
+                cf.keeps.push(index >= skipped && flow.keeps(runtime-effect, index - skipped));
                 // the extern's params past its type arguments
                 let holders: list<s64> = [];
-                if i >= k {
-                    for j in flow.kept-in(e, i - k) { holders.push(j + k); }
+                if index >= skipped {
+                    for kept in flow.kept-in(runtime-effect, index - skipped) { holders.push(kept + skipped); }
                 }
                 cf.kept-in.push(holders);
-                cf.writes.push(i >= k && flow.writes(e, i - k));
-                cf.changes.push(i >= k && flow.writes(e, i - k));
-                cf.gives.push(i >= k && flow.gives(e, i - k));
+                cf.writes.push(index >= skipped && flow.writes(runtime-effect, index - skipped));
+                cf.changes.push(index >= skipped && flow.writes(runtime-effect, index - skipped));
+                cf.gives.push(index >= skipped && flow.gives(runtime-effect, index - skipped));
+                cf.lent.push([]);
             }
-            cf.new-result = e.listed;
+            cf.new-result = runtime-effect.listed;
             return cf;
         }
-        let begun = starts-at(c.c-name, 0, "s_");
-        let step = if begun { intern("u" + c.c-name.substring(1, c.c-name.len())) } else { c.name };
-        let start = begun && p.param-escapes.has(step);
-        let key = if start { step } else { c.name };
-        if !p.param-escapes.has(key) {
-            for i in 0..n {
+        let begun = starts-at(called.c-name, 0, "s_");
+        let step = if begun { intern("u" + called.c-name.substring(1, called.c-name.len())) } else { called.name };
+        let start = begun && facts.param-escapes.has(step);
+        let key = if start { step } else { called.name };
+        if !facts.param-escapes.has(key) {
+            for step in 0..count {
                 cf.keeps.push(true);
                 cf.kept-in.push([]);
                 cf.writes.push(true);
                 cf.changes.push(true);
                 cf.gives.push(true);
+                cf.lent.push([]);
             }
             cf.new-result = false;
             return cf;
         }
-        let esc = p.param-escapes[key];
-        let kept-in = p.param-kept-in[key];
-        let ws = p.param-writes[key];
-        let cs = p.param-changes[key];
-        let gives = p.param-gives[key];
-        for i in 0..n {
-            cf.keeps.push(i >= esc.len() || esc[i]);
-            cf.kept-in.push(if i < kept-in.len() { kept-in[i] } else { [] });
-            cf.writes.push(i >= ws.len() || ws[i]);
-            cf.changes.push(i >= cs.len() || cs[i]);
-            cf.gives.push(start || i >= gives.len() || gives[i]);
+        let esc = facts.param-escapes[key];
+        let kept-in = facts.param-kept-in[key];
+        let ws = facts.param-writes[key];
+        let cs = facts.param-changes[key];
+        let gives = facts.param-gives[key];
+        let lent = facts.param-lent[key];
+        for index in 0..count {
+            cf.lent.push(if index < lent.len() { lent[index] } else { [] });
+            // (a started task calls what it is given while it runs: kept)
+            let started-lent = start && index < lent.len() && lent[index].len() > 0;
+            cf.keeps.push(index >= esc.len() || esc[index] || started-lent);
+            cf.kept-in.push(if index < kept-in.len() { kept-in[index] } else { [] });
+            cf.writes.push(index >= ws.len() || ws[index]);
+            cf.changes.push(index >= cs.len() || cs[index]);
+            cf.gives.push(start || index >= gives.len() || gives[index]);
         }
-        cf.new-result = start || p.fresh-result[key];
+        cf.new-result = start || facts.fresh-result[key];
         cf
     }
 
     // the values a statement lets escape (stored, yielded, kept by the func it is given, given a
     // func value)
-    escaping: func(p: Facts, n: Node) -> list<Node> {
-        match n.kind {
-            assign(x) => escaping(p, x.value),
-            store(x) => [x.value,],
-            yield(v) => [v,],
-            call-ref(c) => c.args,
-            call(c) => {
-                let cf = call-flow(p, c);
+    escaping: func(facts: Facts, node: Node) -> list<Node> {
+        match node.kind {
+            assign(assigned) => escaping(facts, assigned.value),
+            store(stored) => [stored.value,],
+            yield(yielded) => [yielded,],
+            call-ref(called) => called.args,
+            call(called) => {
+                let cf = call-flow(facts, called);
                 let out: list<Node> = [];
-                // kept anywhere, or in another argument (another name holds it)
-                for i in 0..c.args.len() {
-                    if cf.keeps[i] || cf.kept-in[i].len() > 0 { out.push(c.args[i]); }
+                // kept anywhere, or in another argument (another name holds it), or by the func
+                // value given it (a closure made here: as it says)
+                for index in 0..called.args.len() {
+                    let lent-kept = cf.lent[index].any({ borrowed -> borrowed.param >= called.args.len() || lent-effect(facts, [], called.args[borrowed.param], borrowed.position, false).keeps });
+                    if cf.keeps[index] || cf.kept-in[index].len() > 0 || lent-kept { out.push(called.args[index]); }
                 }
                 out
             }
@@ -569,22 +741,22 @@ module opt {
 
     // how many of a runtime call's arguments are its type arguments
     type-args-before: func(args: list<Node>) -> s64 {
-        let k = 0;
+        let count = 0;
         loop {
-            if k == args.len() { return k; }
-            let is-type-arg = match args[k].kind {
+            if count == args.len() { return count; }
+            let is-type-arg = match args[count].kind {
                 type-arg(_) => true,
                 _ => false,
             };
-            if !is-type-arg { return k; }
-            k += 1;
+            if !is-type-arg { return count; }
+            count += 1;
         }
     }
 
     // a yel func a statement calls, by C name ("" for none)
-    callee: func(n: Node) -> option<Name> {
-        match value(n).kind {
-            call(c) => if c.key != "" { some(c.name) } else { none },
+    callee: func(node: Node) -> option<Name> {
+        match value(node).kind {
+            call(called) => if called.key != "" { some(called.name) } else { none },
             _ => none,
         }
     }
@@ -593,15 +765,15 @@ module opt {
     // each is called (into counts)
     calls: func(body: list<Node>, out: list<Name>, counts: map<Name, s64>) {
         let listed: set<Name> = set.new();
-        for c in out { listed.add(c); }
-        for n in flatten(body) {
-            match callee(n) {
-                some(c) => {
-                    if !listed.has(c) {
-                        listed.add(c);
-                        out.push(c);
+        for callee-name in out { listed.add(callee-name); }
+        for node in flatten(body) {
+            match callee(node) {
+                some(callee-name) => {
+                    if !listed.has(callee-name) {
+                        listed.add(callee-name);
+                        out.push(callee-name);
                     }
-                    counts.set(c, counts.get-or(c, 0) + 1);
+                    counts.set(callee-name, counts.get-or(callee-name, 0) + 1);
                 }
                 none => {}
             }
@@ -609,136 +781,176 @@ module opt {
     }
 
     // each func's callees (the yel funcs it calls, by C name), found once
-    find-callees: func(p: Facts, funcs: list<IrFunc>) {
-        p.callees = map.new();
-        for f in funcs {
+    find-callees: func(facts: Facts, funcs: list<IrFunc>) {
+        facts.callees = map.new();
+        for function in funcs {
             let out: list<Name> = [];
-            calls(f.body, out, map.new());
+            calls(function.body, out, map.new());
             // a closure made here: its body's summary (whether it lets its environment escape)
             // known before this func's
-            for n in flatten(f.body) { closures-made(n, out); }
-            p.callees.set(f.name, out);
+            for node in flatten(function.body) { closures-made(node, out); }
+            facts.callees.set(function.name, out);
         }
     }
 
     // the funcs n makes a value of (a closure's body), into out (once each)
-    closures-made: func(n: Node, out: list<Name>) {
-        match n.kind {
-            func-ref(r) => { if !out.contains(r.name) { out.push(r.name); } }
+    closures-made: func(node: Node, out: list<Name>) {
+        match node.kind {
+            func-ref(referred) => { if !out.contains(referred.name) { out.push(referred.name); } }
             _ => {}
         }
-        for index in 0..operand-count(n) { closures-made(operand(n, index), out); }
+        for index in 0..operand-count(node) { closures-made(operand(node, index), out); }
     }
 
     // each func's summary (which parameters it keeps, which it gives back, whether its result is
     // new): a fixpoint (flow.fixpoint) from none kept, none given back, every result new; each
     // func's groups kept
-    param-escapes: func(p: Facts, funcs: list<IrFunc>) {
-        p.param-escapes = map.new();
-        p.param-kept-in = map.new();
-        p.param-gives = map.new();
-        p.param-writes = map.new();
-        p.param-changes = map.new();
-        p.fresh-result = map.new();
-        p.groups = map.new();
-        p.flows = map.new();
-        p.mutable-locals = map.new();
-        p.env-escapes = map.new();
-        find-callees(p, funcs);
+    param-escapes: func(facts: Facts, funcs: list<IrFunc>) {
+        facts.param-escapes = map.new();
+        facts.param-kept-in = map.new();
+        facts.param-gives = map.new();
+        facts.param-writes = map.new();
+        facts.param-lent = map.new();
+        facts.param-changes = map.new();
+        facts.fresh-result = map.new();
+        facts.new-top = map.new();
+        facts.groups = map.new();
+        facts.flows = map.new();
+        facts.mutable-locals = map.new();
+        facts.env-escapes = map.new();
+        find-callees(facts, funcs);
         let keys: list<Name> = [];
-        for f in funcs {
+        for function in funcs {
             let zeros: list<bool> = [];
-            for q in f.params { zeros.push(false); }
-            p.param-escapes.set(f.name, zeros);
+            for parameter in function.params { zeros.push(false); }
+            facts.param-escapes.set(function.name, zeros);
             let none-in: list<list<s64>> = [];
-            for q in f.params { none-in.push([]); }
-            p.param-kept-in.set(f.name, none-in);
-            p.param-gives.set(f.name, zeros.slice(0, zeros.len()));
-            p.param-writes.set(f.name, zeros.slice(0, zeros.len()));
-            p.param-changes.set(f.name, zeros.slice(0, zeros.len()));
-            p.fresh-result.set(f.name, true);
-            keys.push(f.name);
+            for parameter in function.params { none-in.push([]); }
+            facts.param-kept-in.set(function.name, none-in);
+            facts.param-gives.set(function.name, zeros.slice(0, zeros.len()));
+            facts.param-writes.set(function.name, zeros.slice(0, zeros.len()));
+            let none-lent: list<list<Lend>> = [];
+            for parameter in function.params { none-lent.push([]); }
+            facts.param-lent.set(function.name, none-lent);
+            facts.param-changes.set(function.name, zeros.slice(0, zeros.len()));
+            facts.fresh-result.set(function.name, true);
+            facts.new-top.set(function.name, true);
+            keys.push(function.name);
         }
-        flow.fixpoint(keys, p.callees, { n -> summarize(p, n) });
+        flow.fixpoint(keys, facts.callees, { name -> summarize(facts, name) });
     }
 
     // a func's groups found again, and its summary; whether the summary changed
-    summarize: func(p: Facts, n: Name) -> bool {
-        let f = p.funcs[n];
-        let gr = groups(p, f);
-        p.groups.set(n, gr);
+    summarize: func(facts: Facts, name: Name) -> bool {
+        let function = facts.funcs[name];
+        let gr = groups(facts, function);
+        facts.groups.set(name, gr);
         let esc: list<bool> = [];
         let kept-in: list<list<s64>> = [];
         let gives: list<bool> = [];
         let ws: list<bool> = [];
-        for q in f.params {
+        let lent: list<list<Lend>> = [];
+        for parameter in function.params {
+            lent.push(gr.lent[find(gr, parameter)]);
             // a generator's frame holds its parameters as long as it is read: kept
-            esc.push(gr.escapes[find(gr, q)] || f.generator);
-            kept-in.push(gr.holding-params[find(gr, q)]);
-            gives.push(gr.returned[find(gr, q)]);
-            ws.push(gr.written[find(gr, q)]);
+            esc.push(gr.escapes[find(gr, parameter)] || function.generator);
+            kept-in.push(gr.holding-params[find(gr, parameter)]);
+            gives.push(gr.returned[find(gr, parameter)]);
+            ws.push(gr.written[find(gr, parameter)]);
         }
         // what observe counts: found again only where a local may hold an @(observable) resource
         let cs = ws;
-        if touches-observed(p, f) {
-            let seen = groups-for(p, f, true);
-            cs = f.params.map({ q -> seen.written[find(seen, q)] });
+        if touches-observed(facts, function) {
+            let seen = groups-for(facts, function, true);
+            cs = function.params.map({ parameter -> seen.written[find(seen, parameter)] });
         }
-        let fresh = p.fresh-result[n] && gives-new(gr, f);
-        let env = f.env-param >= 0 && gr.escapes[find(gr, f.env-param)];
-        let changed = !same(esc, p.param-escapes[n]) || !same(gives, p.param-gives[n])
-            || !same(ws, p.param-writes[n]) || !same(cs, p.param-changes[n]) || fresh != p.fresh-result[n] || !same-in(kept-in, p.param-kept-in[n])
-            || env != p.env-escapes.get-or(n, false);
-        p.env-escapes.set(n, env);
+        let fresh = facts.fresh-result[name] && gives-new(gr, function);
+        let top = facts.new-top[name] && returns-new(gr, function);
+        let env = function.env-param >= 0 && gr.escapes[find(gr, function.env-param)];
+        let changed = !same(esc, facts.param-escapes[name]) || !same(gives, facts.param-gives[name])
+            || !same(ws, facts.param-writes[name]) || !same-lent(lent, facts.param-lent[name]) || !same(cs, facts.param-changes[name]) || fresh != facts.fresh-result[name] || top != facts.new-top[name] || !same-in(kept-in, facts.param-kept-in[name])
+            || env != facts.env-escapes.get-or(name, false);
+        facts.env-escapes.set(name, env);
         // a call of it found again (and of its start, an async func's step's)
         if changed {
-            p.flows.remove(n);
-            let text = name-text(n);
-            if starts-at(text, 0, "u_") { p.flows.remove(intern("s" + text.substring(1, text.len()))); }
+            facts.flows.remove(name);
+            let text = name-text(name);
+            if starts-at(text, 0, "u_") { facts.flows.remove(intern("s" + text.substring(1, text.len()))); }
         }
-        p.param-escapes.set(n, esc);
-        p.param-kept-in.set(n, kept-in);
-        p.param-gives.set(n, gives);
-        p.param-writes.set(n, ws);
-        p.param-changes.set(n, cs);
-        p.fresh-result.set(n, fresh);
+        facts.param-escapes.set(name, esc);
+        facts.param-kept-in.set(name, kept-in);
+        facts.param-gives.set(name, gives);
+        facts.param-writes.set(name, ws);
+        facts.param-lent.set(name, lent);
+        facts.param-changes.set(name, cs);
+        facts.fresh-result.set(name, fresh);
+        facts.new-top.set(name, top);
         changed
     }
 
     // whether everything a func gives back is new (no returned group holds a value made elsewhere)
-    gives-new: func(gr: Groups, f: IrFunc) -> bool {
-        for i in 0..f.locals.len() {
-            if gr.returned[find(gr, i)] && gr.stale[find(gr, i)] { return false; }
+    gives-new: func(gr: Groups, function: IrFunc) -> bool {
+        for local-index in 0..function.locals.len() {
+            if gr.returned[find(gr, local-index)] && gr.stale[find(gr, local-index)] { return false; }
         }
         true
     }
 
-    same-in: func(a: list<list<s64>>, b: list<list<s64>>) -> bool {
-        if a.len() != b.len() { return false; }
-        for i in 0..a.len() {
-            if a[i].len() != b[i].len() { return false; }
-            for q in a[i] {
-                if !b[i].contains(q) { return false; }
+    // whether each value a func gives back is new itself (what it holds aside: the groups it
+    // returns, not those they hold)
+    returns-new: func(gr: Groups, function: IrFunc) -> bool {
+        for node in flatten(function.body) {
+            match node.kind {
+                return(returned) => {
+                    let read: list<s64> = [];
+                    reads(returned, read);
+                    for local-index in read {
+                        if gr.stale[find(gr, local-index)] { return false; }
+                    }
+                }
+                _ => {}
             }
         }
         true
     }
 
-    same: func(a: list<bool>, b: list<bool>) -> bool {
-        if a.len() != b.len() { return false; }
-        for i in 0..a.len() {
-            if a[i] != b[i] { return false; }
+    same-in: func(one: list<list<s64>>, other: list<list<s64>>) -> bool {
+        if one.len() != other.len() { return false; }
+        for index in 0..one.len() {
+            if one[index].len() != other[index].len() { return false; }
+            for item in one[index] {
+                if !other[index].contains(item) { return false; }
+            }
+        }
+        true
+    }
+
+    same-lent: func(one: list<list<Lend>>, other: list<list<Lend>>) -> bool {
+        if one.len() != other.len() { return false; }
+        for index in 0..one.len() {
+            if one[index].len() != other[index].len() { return false; }
+            for borrowed in one[index] {
+                if !other[index].contains(borrowed) { return false; }
+            }
+        }
+        true
+    }
+
+    same: func(one: list<bool>, other: list<bool>) -> bool {
+        if one.len() != other.len() { return false; }
+        for index in 0..one.len() {
+            if one[index] != other[index] { return false; }
         }
         true
     }
 
     // whether loop a is b or inside it
-    within: func(gr: Groups, a: s64, b: s64) -> bool {
-        let l = a;
+    within: func(gr: Groups, inner: s64, outer: s64) -> bool {
+        let current = inner;
         for step in 0..gr.loop-parent.len() + 1 {
-            if l == b { return true; }
-            if l == 0 { return false; }
-            l = gr.loop-parent[l];
+            if current == outer { return true; }
+            if current == 0 { return false; }
+            current = gr.loop-parent[current];
         }
         false
     }
@@ -749,9 +961,9 @@ module opt {
         let at = 0;
         loop {
             if at >= out.len() { break; }
-            for k in gr.holders[out[at]] {
-                let h = find(gr, k);
-                if !out.contains(h) { out.push(h); }
+            for held in gr.holders[out[at]] {
+                let held-root = find(gr, held);
+                if !out.contains(held-root) { out.push(held-root); }
             }
             at += 1;
         }
@@ -761,36 +973,36 @@ module opt {
     // a func's records that never leave it go on its stack: none of its group escapes, and every
     // local of its group is first defined in the loop the record is made in (else a later turn
     // would make it again in the same place while an earlier turn's is still held)
-    place-records: func(p: Facts, f: IrFunc) {
-        let gr = p.groups[f.name];
+    place-records: func(facts: Facts, function: IrFunc) {
+        let gr = facts.groups[function.name];
         let stack: map<string, bool> = map.new();
-        for k in 0..gr.records.len() {
-            let d = gr.records[k];
-            let root = find(gr, d);
+        for index in 0..gr.records.len() {
+            let local-index = gr.records[index];
+            let root = find(gr, local-index);
             // not held by a parameter either (its caller has it)
             let ok = !gr.escapes[root] && !gr.returned[root] && gr.holding-params[root].len() == 0;
             // its group and every group holding it (a list it is pushed to): each local of them first
             // defined in the record's loop
             let held-by = holder-roots(gr, root);
             if ok {
-                for j in 0..f.locals.len() {
-                    if ok && held-by.contains(find(gr, j)) && gr.def-loop[j] >= 0 && !within(
+                for other-index in 0..function.locals.len() {
+                    if ok && held-by.contains(find(gr, other-index)) && gr.def-loop[other-index] >= 0 && !within(
                         gr,
-                        gr.def-loop[j],
-                        gr.record-loops[k],
+                        gr.def-loop[other-index],
+                        gr.record-loops[index],
                     ) {
                         ok = false;
                     }
                 }
             }
-            if ok { stack.set("{d}", true); }
+            if ok { stack.set("{local-index}", true); }
         }
-        for n in flatten(f.body) {
-            match n.kind {
-                assign(x) => {
-                    match x.value.kind {
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assigned) => {
+                    match assigned.value.kind {
                         // an async func's: never on the stack (it is gone while it waits)
-                        alloc(a) => { a.stack = stack.has("{x.dest}") && !f.async; }
+                        alloc(allocated) => { allocated.stack = stack.has("{assigned.dest}") && !function.async; }
                         _ => {}
                     }
                 }

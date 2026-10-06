@@ -34,6 +34,9 @@ resource EffectSite {
     // whether the call's result, its type arguments given, is readonly (a generic func gives back
     // a readonly argument as readonly only then)
     result-readonly: bool,
+    // whether what the parameter holds of the func's type parameters is readonly (its type
+    // arguments given): a generic func whose result is new gives back only parts of it, readonly
+    items-readonly: bool,
 }
 
 // what a local made readonly is given, and where it is: whether everything given it is new,
@@ -71,167 +74,191 @@ resource FlowView {
     context: Context,
     facts: Facts,
     all: map<string, list<ParamEffect>>,
+    // what each func (by key) gives the func values it is given (Lend), each parameter's
+    lent: map<string, list<list<Lend>>>,
     fresh: map<string, bool>,
+    // whether what each func (by key) gives back is new itself (escape.yel's new-top)
+    new-top: map<string, bool>,
     externs: map<string, RuntimeEffect>,
     locals: map<Mark, list<IrLocalRef>>,
 }
 
 module effects {
     // each site checked against the program's flow
-    check-sites: func(decls: list<Decl>, sites: list<EffectSite>, p: Facts, context: Context) {
+    check-sites: func(decls: list<Decl>, sites: list<EffectSite>, facts: Facts, context: Context) {
         if sites.len() == 0 { return; }
         let funcs: map<string, Func> = map.new();
         let externs: map<string, RuntimeEffect> = map.new();
-        for d in decls {
-            match d {
-                func-decl(f) => funcs.set(f.name, f),
-                extern-decl(x) => externs.set(x.name, flow.derive(x)),
+        for declaration in decls {
+            match declaration {
+                func-decl(declared) => funcs.set(declared.name, declared),
+                extern-decl(declared) => externs.set(declared.name, flow.derive(declared)),
                 _ => {}
             }
         }
-        let v = view(p, externs, context);
-        for s in sites { check-site(s, funcs, v); }
+        let viewing = view(facts, externs, context);
+        for site in sites { check-site(site, funcs, viewing); }
     }
 
     // the flow by func key and by binding
-    view: func(p: Facts, externs: map<string, RuntimeEffect>, context: Context) -> FlowView {
-        let v: FlowView = {
+    view: func(facts: Facts, externs: map<string, RuntimeEffect>, context: Context) -> FlowView {
+        let viewing: FlowView = {
             context: context,
-            facts: p,
+            facts: facts,
             all: map.new(),
+            lent: map.new(),
             fresh: map.new(),
+            new-top: map.new(),
             externs: externs,
             locals: map.new(),
         };
-        for c in p.funcs.keys() {
-            let f = p.funcs[c];
-            for i in 0..f.locals.len() {
-                match f.locals[i].binding {
-                    some(m) => {
-                        if !v.locals.has(m) { v.locals.set(m, []); }
-                        v.locals[m].push({ func: c, local: i, });
+        for key in facts.funcs.keys() {
+            let function = facts.funcs[key];
+            for index in 0..function.locals.len() {
+                match function.locals[index].binding {
+                    some(mark) => {
+                        if !viewing.locals.has(mark) { viewing.locals.set(mark, []); }
+                        viewing.locals[mark].push({ func: key, local: index, });
                     }
                     none => {}
                 }
             }
-            if !f.closure && p.param-escapes.has(c) {
-                let keeps = p.param-escapes[c];
-                let kept-in = p.param-kept-in[c];
-                let gives = p.param-gives[c];
-                let ws = p.param-writes[c];
+            if !function.closure && facts.param-escapes.has(key) {
+                let keeps = facts.param-escapes[key];
+                let kept-in = facts.param-kept-in[key];
+                let gives = facts.param-gives[key];
+                let ws = facts.param-writes[key];
                 let mine: list<ParamEffect> = [];
                 // kept in another argument is kept, for readonly's sake (that one may write it)
-                for i in 0..keeps.len() { mine.push({ writes: ws[i], keeps: keeps[i] || kept-in[i].len() > 0, gives: gives[i], }); }
-                if v.all.has(f.key) {
-                    let had = v.all[f.key];
-                    for i in 0..had.len() {
-                        if i < mine.len() {
-                            had[i] = {
-                                writes: had[i].writes || mine[i].writes,
-                                keeps: had[i].keeps || mine[i].keeps,
-                                gives: had[i].gives || mine[i].gives,
+                for index in 0..keeps.len() { mine.push({ writes: ws[index], keeps: keeps[index] || kept-in[index].len() > 0, gives: gives[index], }); }
+                if viewing.all.has(function.key) {
+                    let had = viewing.all[function.key];
+                    for index in 0..had.len() {
+                        if index < mine.len() {
+                            had[index] = {
+                                writes: had[index].writes || mine[index].writes,
+                                keeps: had[index].keeps || mine[index].keeps,
+                                gives: had[index].gives || mine[index].gives,
                             };
                         }
                     }
                 } else {
-                    v.all.set(f.key, mine);
+                    viewing.all.set(function.key, mine);
                 }
-                let fresh = p.fresh-result[c];
-                v.fresh.set(f.key, if v.fresh.has(f.key) { v.fresh[f.key] && fresh } else { fresh });
+                let lent = facts.param-lent[key];
+                if viewing.lent.has(function.key) {
+                    let had = viewing.lent[function.key];
+                    for index in 0..had.len() {
+                        if index < lent.len() {
+                            for borrowed in lent[index] {
+                                if !had[index].contains(borrowed) { had[index].push(borrowed); }
+                            }
+                        }
+                    }
+                } else {
+                    viewing.lent.set(function.key, lent.map({ ls -> ls.slice(0, ls.len()) }));
+                }
+                let top = facts.new-top[key];
+                viewing.new-top.set(function.key, if viewing.new-top.has(function.key) { viewing.new-top[function.key] && top } else { top });
+                let fresh = facts.fresh-result[key];
+                viewing.fresh.set(function.key, if viewing.fresh.has(function.key) { viewing.fresh[function.key] && fresh } else { fresh });
             }
         }
-        v
+        viewing
     }
 
-    check-site: func(s: EffectSite, funcs: map<string, Func>, v: FlowView) {
-        let callee = base-name(s.callee);
-        if s.kind == "move" {
-            if funcs.has(s.in-func) {
-                check-move(s, funcs[s.in-func], callee, v);
+    check-site: func(site: EffectSite, funcs: map<string, Func>, viewing: FlowView) {
+        let callee = base-name(site.callee);
+        if site.kind == "move" {
+            if funcs.has(site.in-func) {
+                check-move(site, funcs[site.in-func], callee, viewing);
             }
             return;
         }
-        if s.kind == "read" {
-            let e = effect(s.callee, s.index, v);
-            let generic = funcs.has(s.callee) && funcs[s.callee].type-params.len() > 0
-                || v.externs.has(s.callee);
-            let what = "argument {s.index + 1} of {callee} is readonly";
-            if e.writes {
-                site-error(v, s, "{what}, and {callee} writes it", "readonly", "", "give it a value that is not readonly (a copy), or make {callee} only read it");
+        if site.kind == "read" {
+            let parameter-effect = with-lent(effect(site.callee, site.index, viewing), site, funcs, viewing);
+            let generic = funcs.has(site.callee) && funcs[site.callee].type-params.len() > 0
+                || viewing.externs.has(site.callee);
+            let what = "argument {site.index + 1} of {callee} is readonly";
+            if parameter-effect.writes {
+                site-error(viewing, site, "{what}, and {callee} writes it", "readonly", "", "give it a value that is not readonly (a copy), or make {callee} only read it");
                 return;
             }
-            if e.keeps {
-                site-error(v, s, "{what}, and {callee} keeps it where it may be written", "readonly", "", "");
+            if parameter-effect.keeps {
+                site-error(viewing, site, "{what}, and {callee} keeps it where it may be written", "readonly", "", "");
                 return;
             }
             // a generic func gives back what it is given: readonly where its result's type is
-            if e.gives && !(generic && s.result-readonly) {
-                site-error(v, s, "{what}, and {callee} gives it back as a value that may be written", "readonly", "", "");
+            // (or, its result new, gives back only parts of it, which its type arguments say are
+            // readonly: filter's items)
+            let parts = site.items-readonly && viewing.new-top.get-or(site.callee, false);
+            if parameter-effect.gives && !(generic && (site.result-readonly || parts)) {
+                site-error(viewing, site, "{what}, and {callee} gives it back as a value that may be written", "readonly", "", "");
                 return;
             }
             return;
         }
-        if s.kind == "borrow" {
-            let e = effect(s.callee, s.index, v);
+        if site.kind == "borrow" {
+            let parameter-effect = effect(site.callee, site.index, viewing);
             // lent for the call: fine where the func keeps nothing; else it must be a value no
             // other name has (then given away). A started call's task holds it while it runs
-            if !e.keeps && !e.gives && !s.started { return; }
+            if !parameter-effect.keeps && !parameter-effect.gives && !site.started { return; }
         }
-        let why = unique-why(s, funcs, v);
+        let why = unique-why(site, funcs, viewing);
         if why == "" { return; }
         // a use after it is made readonly: shown where it is
-        let d = diagnostics.error(
-            s.span,
-            if s.kind == "borrow" && s.started {
-                "argument {s.index + 1} of {callee} is wanted readonly, and the started task holds it while it runs: {why}"
-            } else if s.kind == "borrow" {
-                "argument {s.index + 1} of {callee} is wanted readonly, and {callee} keeps it or gives it back: {why}"
+        let diagnostic = diagnostics.error(
+            site.span,
+            if site.kind == "borrow" && site.started {
+                "argument {site.index + 1} of {callee} is wanted readonly, and the started task holds it while it runs: {why}"
+            } else if site.kind == "borrow" {
+                "argument {site.index + 1} of {callee} is wanted readonly, and {callee} keeps it or gives it back: {why}"
             } else {
                 "readonly is wanted here: {why}"
             },
             "",
         );
-        match s.binding {
-            some(m) => {
-                if funcs.has(s.in-func) {
-                    match used-after(funcs[s.in-func], m, s.span, v) {
-                        some(sp) => diagnostics.also(d, sp, "used here, after it is made readonly"),
+        match site.binding {
+            some(mark) => {
+                if funcs.has(site.in-func) {
+                    match used-after(funcs[site.in-func], mark, site.span, viewing) {
+                        some(sp) => diagnostics.also(diagnostic, sp, "used here, after it is made readonly"),
                         none => {}
                     }
                 }
             }
             none => {}
         }
-        diagnostics.report(v.context, d);
+        diagnostics.report(viewing.context, diagnostic);
     }
 
     // an error at a site, kept (its caller goes on to the next site: one error for each): its
     // label, a note and help ("" for none)
-    site-error: func(v: FlowView, s: EffectSite, message: string, label: string, note: string, help: string) {
-        let d = diagnostics.error(s.span, message, label);
-        if note != "" { diagnostics.note(d, note); }
-        if help != "" { diagnostics.help(d, help); }
-        diagnostics.report(v.context, d);
+    site-error: func(viewing: FlowView, site: EffectSite, message: string, label: string, note: string, help: string) {
+        let diagnostic = diagnostics.error(site.span, message, label);
+        if note != "" { diagnostics.note(diagnostic, note); }
+        if help != "" { diagnostics.help(diagnostic, help); }
+        diagnostics.report(viewing.context, diagnostic);
     }
 
     // where a local is used after a place (at), if it is
-    used-after: func(f: Func, x: Mark, at: Span, v: FlowView) -> option<Span> {
-        let facts = facts-for(f, x, at, false);
-        local-facts-block(facts, f.body, v);
+    used-after: func(function: Func, mark: Mark, at: Span, viewing: FlowView) -> option<Span> {
+        let facts = facts-for(function, mark, at, false);
+        local-facts-block(facts, function.body, viewing);
         facts.used-after
     }
 
     // why a site's value may have another name that writes it ("" when it has none: a value made
     // by a func that gives back such values, or a local made so and not used after)
-    unique-why: func(s: EffectSite, funcs: map<string, Func>, v: FlowView) -> string {
-        if s.source != "" {
-            if is-fresh(s.source, v) { return ""; }
-            return "{base-name(s.source)} may give back a value another name has (make it in the func, or give back one no one else has)";
+    unique-why: func(site: EffectSite, funcs: map<string, Func>, viewing: FlowView) -> string {
+        if site.source != "" {
+            if is-fresh(site.source, viewing) { return ""; }
+            return "{base-name(site.source)} may give back a value another name has (make it in the func, or give back one no one else has)";
         }
-        match s.binding {
-            some(m) => {
-                if funcs.has(s.in-func) {
-                    return local-why(funcs[s.in-func], m, s.span, v);
+        match site.binding {
+            some(mark) => {
+                if funcs.has(site.in-func) {
+                    return local-why(funcs[site.in-func], mark, site.span, site.kind, viewing);
                 }
             }
             none => {}
@@ -240,47 +267,48 @@ module effects {
     }
 
     // whether a call's result is a value no other name has
-    is-fresh: func(callee: string, v: FlowView) -> bool {
-        if v.fresh.has(callee) { return v.fresh[callee]; }
+    is-fresh: func(callee: string, viewing: FlowView) -> bool {
+        if viewing.fresh.has(callee) { return viewing.fresh[callee]; }
         // an extern's: new values, but for those that give back part of an argument
-        if v.externs.has(callee) { return flow.is-new(v.externs[callee]); }
+        if viewing.externs.has(callee) { return flow.is-new(viewing.externs[callee]); }
         false
     }
 
     // why a func's local x may have another name that writes it where it is made readonly (at):
     // "" when everything given it is new, it is never kept nor given another name, and it is not
     // used after (nor made readonly in a loop it was made outside of)
-    local-why: func(f: Func, x: Mark, at: Span, v: FlowView) -> string {
-        let n = binding-name(f, x);
-        if contains(f.marks, x) || is-param(v, x) { return "{n} is a parameter: its caller may have it too"; }
-        let facts = facts-for(f, x, at, false);
-        local-facts-block(facts, f.body, v);
+    local-why: func(function: Func, mark: Mark, at: Span, kind: site-kind, viewing: FlowView) -> string {
+        let name = binding-name(function, mark);
+        if contains(function.marks, mark) || is-param(viewing, mark) { return "{name} is a parameter: its caller may have it too"; }
+        let facts = facts-for(function, mark, at, false);
+        local-facts-block(facts, function.body, viewing);
         if !facts.sources-fresh {
-            return "{n} is given a value another name may have (only a literal, or a func's new value, can be made readonly)";
+            return "{name} is given a value another name may have (only a literal, or a func's new value, can be made readonly)";
         }
         if facts.at-depth > facts.made-depth && facts.made-depth >= 0 {
-            return "{n} is made outside the loop it is made readonly in (the next turn would see it)";
+            return "{name} is made outside the loop it is made readonly in (the next turn would see it)";
         }
         match facts.used-after {
-            some(sp) => {
-                return "{n} is used again after (once readonly, use the readonly name)";
+            some(_) => {
+                return "{name} is used again after (once readonly, use the readonly name)";
             }
             none => {}
         }
         // kept, or given another name: as the flow says
-        let held = held-by(v, x, facts.frozen-as);
-        if held == "kept" { return "{n} is kept where it may be written (stored, or captured by a closure)"; }
-        if held != "" { return "{held} is another name for {n} (or part of it), and may write it"; }
+        // a borrow's call keeps it in its readonly parameter: given away there, not kept
+        let held = held-by(viewing, mark, facts.frozen-as, if kind == "borrow" { some(at) } else { none });
+        if held == "kept" { return "{name} is kept where it may be written (stored, or captured by a closure)"; }
+        if held != "" { return "{held} is another name for {name} (or part of it), and may write it"; }
         ""
     }
 
     // whether a binding is a parameter (a closure's too: the IR's lifted func's)
-    is-param: func(v: FlowView, x: Mark) -> bool {
-        if !v.locals.has(x) { return false; }
-        for r in v.locals[x] {
-            let f = v.facts.funcs[r.func];
-            for q in f.params {
-                if q == r.local { return true; }
+    is-param: func(viewing: FlowView, mark: Mark) -> bool {
+        if !viewing.locals.has(mark) { return false; }
+        for reference in viewing.locals[mark] {
+            let function = viewing.facts.funcs[reference.func];
+            for parameter in function.params {
+                if parameter == reference.local { return true; }
             }
         }
         false
@@ -288,33 +316,34 @@ module effects {
 
     // what the flow says of a binding's value: "kept" (it escapes: stored, kept by a func it is
     // given, captured), another binding's name that may hold it (but but's: the name it is made
-    // readonly as), or "" for neither
-    held-by: func(v: FlowView, x: Mark, but: option<Mark>) -> string {
-        if x.captured { return "kept"; }
-        if !v.locals.has(x) { return ""; }
-        for r in v.locals[x] {
-            if v.facts.groups.has(r.func) {
-                let f = v.facts.funcs[r.func];
-                let made = derived(v, f, r.local);
+    // readonly as), or "" for neither; what it is given as at given (a readonly parameter, which
+    // keeps it given away) is not its keeping
+    held-by: func(viewing: FlowView, mark: Mark, but: option<Mark>, given: option<Span>) -> string {
+        if mark.captured { return "kept"; }
+        if !viewing.locals.has(mark) { return ""; }
+        for reference in viewing.locals[mark] {
+            if viewing.facts.groups.has(reference.func) {
+                let function = viewing.facts.funcs[reference.func];
+                let made = derived(viewing, function, reference.local);
                 // kept: it, or a value made of it, let escape (a spawned task's frame among them)
-                for n in flatten(f.body) {
-                    for e in opt.escaping(v.facts, n) {
-                        if reads-any(e, made) { return "kept"; }
+                for node in flatten(function.body) {
+                    for escaping in opt.escaping(viewing.facts, node) {
+                        if reads-any(escaping, made) && !same-place(escaping.span, given) { return "kept"; }
                     }
                 }
                 // another name: a binding whose value is made from it (through any chain of
                 // assignments: a copy, a call given it, a value built of it) and may hold one that is
                 // written
-                for j in made {
-                    match f.locals[j].binding {
-                        some(m) => {
-                            let other = m != x && match but {
-                                some(b) => m != b,
+                for producer in made {
+                    match function.locals[producer].binding {
+                        some(produced) => {
+                            let other = produced != mark && match but {
+                                some(excluded) => produced != excluded,
                                 none => true,
                             };
                             // a readonly binding never writes it (what it holds is read only)
-                            if other && opt.local-mutable(v.facts, f, j) && !is-readonly(resolve(m.ty)) {
-                                return f.locals[j].name;
+                            if other && opt.local-mutable(viewing.facts, function, producer) && !is-readonly(resolve(produced.ty)) {
+                                return function.locals[producer].name;
                             }
                         }
                         none => {}
@@ -325,56 +354,64 @@ module effects {
         ""
     }
 
+    // whether a span is where one is (none: nowhere)
+    same-place: func(sp: Span, at: option<Span>) -> bool {
+        match at {
+            some(place) => sp.source == place.source && sp.line == place.line && sp.col == place.col,
+            none => false,
+        }
+    }
+
     // a local moved where it is given (s.span) may not be used again: not after, not in the next
     // turn of a loop it is made outside of, not through another name
-    check-move: func(s: EffectSite, f: Func, callee: string, v: FlowView) {
-        let n = s.local;
-        let x = match s.binding {
-            some(m) => m,
+    check-move: func(site: EffectSite, function: Func, callee: string, viewing: FlowView) {
+        let name = site.local;
+        let mark = match site.binding {
+            some(bound) => bound,
             none => { return; }
         };
         let moved = "moved here: {callee} takes its end (it leaves the component)";
-        let facts = facts-for(f, x, s.span, true);
-        if contains(f.marks, x) { facts.made-depth = 0; }
-        local-facts-block(facts, f.body, v);
+        let facts = facts-for(function, mark, site.span, true);
+        if contains(function.marks, mark) { facts.made-depth = 0; }
+        local-facts-block(facts, function.body, viewing);
         if !facts.sources-fresh {
             site-error(
-                v,
-                s,
-                "{n} is moved, and another name may hold it",
+                viewing,
+                site,
+                "{name} is moved, and another name may hold it",
                 moved,
-                "{n} is given a value made elsewhere (a name's, a field's, or part of one)",
+                "{name} is given a value made elsewhere (a name's, a field's, or part of one)",
                 "move a stream or a future made here: a func's new value, or a part of one (let (s, w) = stream-pair(8))",
             );
             return;
         }
         match facts.used-after {
             some(sp) => {
-                let d = diagnostics.error(sp, "{n} is used after it is moved", "used here, after the move");
-                diagnostics.also(d, s.span, moved);
-                diagnostics.help(d, "a stream or a future given a WIT func is the callee's: read what you need from it first");
-                diagnostics.report(v.context, d);
+                let diagnostic = diagnostics.error(sp, "{name} is used after it is moved", "used here, after the move");
+                diagnostics.also(diagnostic, site.span, moved);
+                diagnostics.help(diagnostic, "a stream or a future given a WIT func is the callee's: read what you need from it first");
+                diagnostics.report(viewing.context, diagnostic);
                 return;
             }
             none => {}
         }
         if facts.at-depth > facts.made-depth && facts.made-depth >= 0 {
             site-error(
-                v,
-                s,
-                "{n} is moved in a loop it is made outside of",
+                viewing,
+                site,
+                "{name} is moved in a loop it is made outside of",
                 "moved here, in every turn",
                 "the next turn would move it again",
                 "make it in the loop, or break out of the loop once it is moved",
             );
             return;
         }
-        let held = held-by(v, x, none);
+        let held = held-by(viewing, mark, none, none);
         if held == "kept" {
             site-error(
-                v,
-                s,
-                "{n} is moved, and it is kept elsewhere (stored, or captured by a closure)",
+                viewing,
+                site,
+                "{name} is moved, and it is kept elsewhere (stored, or captured by a closure)",
                 moved,
                 "what keeps it could still use it after the move",
                 "",
@@ -383,9 +420,9 @@ module effects {
         }
         if held != "" {
             site-error(
-                v,
-                s,
-                "{n} is moved while {held} is another name for it (or holds it)",
+                viewing,
+                site,
+                "{name} is moved while {held} is another name for it (or holds it)",
                 moved,
                 "{held} could still use it after the move",
                 "",
@@ -396,60 +433,134 @@ module effects {
 
     // what a call's callee does with its parameter i: a func's (as read so far), the runtime's
     // (by its C name), or (a func value, something not known) everything
-    effect: func(callee: string, i: s64, v: FlowView) -> ParamEffect {
-        if v.all.has(callee) {
-            let es = v.all[callee];
-            if i < es.len() { return es[i]; }
+    effect: func(callee: string, index: s64, viewing: FlowView) -> ParamEffect {
+        if viewing.all.has(callee) {
+            let es = viewing.all[callee];
+            if index < es.len() { return es[index]; }
             return { writes: false, keeps: false, gives: false, };
         }
-        if v.externs.has(callee) { return extern-effect(v.externs[callee], i); }
+        if viewing.externs.has(callee) { return extern-effect(viewing.externs[callee], index); }
         { writes: true, keeps: true, gives: true, }
     }
 
+    // what a call does with an argument, with what the func values it is given do with it (the
+    // closures given at the site's call, found in the IR by the argument's place: one not found,
+    // or a func value not made there, may write it and keep it)
+    with-lent: func(parameter-effect: ParamEffect, site: EffectSite, funcs: map<string, Func>, viewing: FlowView) -> ParamEffect {
+        if !viewing.lent.has(site.callee) || site.index >= viewing.lent[site.callee].len() { return parameter-effect; }
+        let lent = viewing.lent[site.callee][site.index];
+        if lent.len() == 0 { return parameter-effect; }
+        for key in viewing.facts.funcs.keys() {
+            let function = viewing.facts.funcs[key];
+            for node in flatten(function.body) {
+                match site-call(node, site, viewing) {
+                    some(found) => {
+                        let writes = parameter-effect.writes;
+                        let keeps = parameter-effect.keeps;
+                        for borrowed in lent {
+                            // a closure whose parameter is readonly: what it does with it is
+                            // checked in it (it neither writes it nor keeps it where it may be)
+                            if borrowed.param < found.args.len() && takes-readonly(viewing, funcs, site, function.body, found.args[borrowed.param], borrowed.position) { continue; }
+                            let use = if borrowed.param < found.args.len() {
+                                opt.lent-effect(viewing.facts, function.body, found.args[borrowed.param], borrowed.position, false)
+                            } else {
+                                { writes: true, keeps: true, }
+                            };
+                            writes = writes || use.writes;
+                            keeps = keeps || use.keeps;
+                        }
+                        return { writes: writes, keeps: keeps, gives: parameter-effect.gives, };
+                    }
+                    none => {}
+                }
+            }
+        }
+        { writes: true, keeps: true, gives: parameter-effect.gives, }
+    }
+
+    // whether a func value is a closure made here whose parameter at a position is readonly (as
+    // the checker typed the literal, in the site's func: the IR's types are the C's)
+    takes-readonly: func(viewing: FlowView, funcs: map<string, Func>, site: EffectSite, body: list<Node>, func-value: Node, position: s64) -> bool {
+        if !funcs.has(site.in-func) { return false; }
+        let at = match opt.closure-made(viewing.facts, body, func-value) {
+            some(referred) => viewing.facts.funcs[referred].span,
+            none => { return false; }
+        };
+        for expression in walk.exprs(funcs[site.in-func].body, true) {
+            if walk.is-closure(expression) && same-place(expression.span, some(at)) {
+                match resolve(expression.ty) {
+                    func-type(signature) => { return position < signature.params.len() && is-readonly(signature.params[position]); }
+                    _ => { return false; }
+                }
+            }
+        }
+        false
+    }
+
+    // the call of a site's callee in a node (its operands too) given the site's value where it is
+    site-call: func(node: Node, site: EffectSite, viewing: FlowView) -> option<CallNode> {
+        match node.kind {
+            call(called) => {
+                // (a generic func's instance: its key is the func's)
+                let callee = called.key == site.callee || viewing.facts.funcs.has(called.name) && viewing.facts.funcs[called.name].key == site.callee;
+                if callee && site.index < called.args.len()
+                    && same-place(called.args[site.index].span, some(site.span)) { return some(called); }
+            }
+            _ => {}
+        }
+        for index in 0..operand-count(node) {
+            match site-call(operand(node, index), site, viewing) {
+                some(found) => { return some(found); }
+                none => {}
+            }
+        }
+        none
+    }
+
     // what an extern does with argument i (flow.yel derives it from its declaration)
-    extern-effect: func(e: RuntimeEffect, i: s64) -> ParamEffect {
-        { writes: flow.writes(e, i), keeps: flow.keeps(e, i) || flow.kept-in(e, i).len() > 0, gives: flow.gives(e, i), }
+    extern-effect: func(runtime-effect: RuntimeEffect, index: s64) -> ParamEffect {
+        { writes: flow.writes(runtime-effect, index), keeps: flow.keeps(runtime-effect, index) || flow.kept-in(runtime-effect, index).len() > 0, gives: flow.gives(runtime-effect, index), }
     }
 
     // whether a (checked) type's values cannot be written: numbers, bools, chars, strings, their
     // literal types and ranges, unions of them, and options, results and tuples of them (another
     // type, or one not known: they may be)
-    settled-immutable: func(t: Type) -> bool {
-        match resolve(t) {
-            num(n) => true,
+    settled-immutable: func(given: Type) -> bool {
+        match resolve(given) {
+            num(_) => true,
             bool-type => true,
             char-type => true,
             string-type => true,
-            singleton(s) => true,
-            range-type(x) => true,
+            singleton(_) => true,
+            range-type(_) => true,
             unit-type => true,
-            distinct-type(x) => settled-immutable(x.base),
+            distinct-type(distinct) => settled-immutable(distinct.base),
             // held by value: one of these values (an option<u8> read from a stream) is no other
             // value's
-            union-type(xs) => !any-child(t, { x -> !settled-immutable(x) }),
-            option-type(x) => !any-child(t, { y -> !settled-immutable(y) }),
-            result-type(r) => !any-child(t, { y -> !settled-immutable(y) }),
-            tuple-type(xs) => !any-child(t, { y -> !settled-immutable(y) }),
+            union-type(_) => !any-child(given, { item -> !settled-immutable(item) }),
+            option-type(_) => !any-child(given, { item -> !settled-immutable(item) }),
+            result-type(_) => !any-child(given, { item -> !settled-immutable(item) }),
+            tuple-type(_) => !any-child(given, { item -> !settled-immutable(item) }),
             _ => false,
         }
     }
 
     // the locals made from local i: it, and each assigned a value made of one of them (a copy, a
     // value built of it, a part of it; a call's result where its callee gives that argument back)
-    derived: func(v: FlowView, f: IrFunc, i: s64) -> list<s64> {
-        let out = [i,];
+    derived: func(viewing: FlowView, function: IrFunc, local-index: s64) -> list<s64> {
+        let out = [local-index,];
         let assigns: list<AssignNode> = [];
-        for n in flatten(f.body) {
-            match n.kind {
-                assign(x) => assigns.push(x),
+        for node in flatten(function.body) {
+            match node.kind {
+                assign(assigned) => assigns.push(assigned),
                 _ => {}
             }
         }
         loop {
             let grew = false;
-            for x in assigns {
-                if !contains(out, x.dest) && made-of(v, x.value, out) {
-                    out.push(x.dest);
+            for assigned in assigns {
+                if !contains(out, assigned.dest) && made-of(viewing, assigned.value, out) {
+                    out.push(assigned.dest);
                     grew = true;
                 }
             }
@@ -458,34 +569,34 @@ module effects {
     }
 
     // whether a value is made of one of the locals (a call's: an argument it gives back)
-    made-of: func(v: FlowView, n: Node, locals: list<s64>) -> bool {
-        match n.kind {
-            call(c) => {
-                let cf = opt.call-flow(v.facts, c);
-                for i in 0..c.args.len() {
-                    if cf.gives[i] && reads-any(c.args[i], locals) { return true; }
+    made-of: func(viewing: FlowView, node: Node, locals: list<s64>) -> bool {
+        match node.kind {
+            call(called) => {
+                let cf = opt.call-flow(viewing.facts, called);
+                for index in 0..called.args.len() {
+                    if cf.gives[index] && reads-any(called.args[index], locals) { return true; }
                 }
                 false
             }
-            _ => reads-any(n, locals),
+            _ => reads-any(node, locals),
         }
     }
 
-    reads-any: func(n: Node, locals: list<s64>) -> bool {
+    reads-any: func(node: Node, locals: list<s64>) -> bool {
         let read: list<s64> = [];
-        reads(n, read);
-        for r in read {
-            if contains(locals, r) { return true; }
+        reads(node, read);
+        for local-index in read {
+            if contains(locals, local-index) { return true; }
         }
         false
     }
 
     // what a local's facts start as: its binding, where it is looked at from (at), and whether a
     // pattern's part of a new value counts as new
-    facts-for: func(f: Func, x: Mark, at: Span, parts-fresh: bool) -> LocalFacts {
+    facts-for: func(function: Func, mark: Mark, at: Span, parts-fresh: bool) -> LocalFacts {
         {
-            binding: x,
-            bindings: f.bindings,
+            binding: mark,
+            bindings: function.bindings,
             at: at,
             sources-fresh: true,
             bound: false,
@@ -499,14 +610,14 @@ module effects {
     }
 
     // a binding's name (a parameter's, or any name read as it)
-    binding-name: func(f: Func, m: Mark) -> string {
-        for i in 0..f.params.len() {
-            if f.marks[i] == m { return f.params[i]; }
+    binding-name: func(function: Func, mark: Mark) -> string {
+        for index in 0..function.params.len() {
+            if function.marks[index] == mark { return function.params[index]; }
         }
-        for e in f.bindings.exprs.keys() {
-            if f.bindings.exprs[e] == m {
-                match e.kind {
-                    name(n) => { return name-text(n); }
+        for expression in function.bindings.exprs.keys() {
+            if function.bindings.exprs[expression] == mark {
+                match expression.kind {
+                    name(written) => { return name-text(written); }
                     _ => {}
                 }
             }
@@ -516,107 +627,107 @@ module effects {
 
     // ================================================================ a local made readonly
 
-    local-facts-block: func(lf: LocalFacts, b: Block, v: FlowView) {
-        for i in 0..b.stmts.len() {
-            let sp = b.spans[i];
-            match b.stmts[i] {
-                let-stmt(x) => {
-                    local-facts(lf, x.value, v);
-                    if x.value.span.line == lf.at.line
-                        && x.value.span.col == lf.at.col { lf.frozen-as = some(x.mark); }
-                    if x.mark == lf.binding {
+    local-facts-block: func(lf: LocalFacts, block: Block, viewing: FlowView) {
+        for index in 0..block.stmts.len() {
+            let sp = block.spans[index];
+            match block.stmts[index] {
+                let-stmt(declared) => {
+                    local-facts(lf, declared.value, viewing);
+                    if declared.value.span.line == lf.at.line
+                        && declared.value.span.col == lf.at.col { lf.frozen-as = some(declared.mark); }
+                    if declared.mark == lf.binding {
                         lf.made-depth = lf.depth;
-                        if !new-value(x.value, v) { lf.sources-fresh = false; }
+                        if !new-value(declared.value, viewing) { lf.sources-fresh = false; }
                     }
                 }
-                let-pattern(x) => {
-                    local-facts(lf, x.value, v);
-                    if walk.pattern-binds(x.pattern, lf.binding) {
-                        if !lf.parts-fresh || !new-value(x.value, v) {
+                let-pattern(destructured) => {
+                    local-facts(lf, destructured.value, viewing);
+                    if walk.pattern-binds(destructured.pattern, lf.binding) {
+                        if !lf.parts-fresh || !new-value(destructured.value, viewing) {
                             lf.sources-fresh = false;
                         }
                         lf.made-depth = lf.depth;
                     }
                 }
-                return-stmt(e) => local-facts(lf, e, v),
-                for-stmt(x) => {
-                    local-facts(lf, x.start, v);
-                    match x.stop {
-                        some(e) => local-facts(lf, e, v),
+                return-stmt(returned) => local-facts(lf, returned, viewing),
+                for-stmt(iteration) => {
+                    local-facts(lf, iteration.start, viewing);
+                    match iteration.stop {
+                        some(stop) => local-facts(lf, stop, viewing),
                         none => {}
                     }
-                    if x.mark == lf.binding {
+                    if iteration.mark == lf.binding {
                         lf.sources-fresh = false;
                         lf.made-depth = lf.depth + 1;
                     }
                     lf.depth += 1;
-                    local-facts-block(lf, x.body, v);
+                    local-facts-block(lf, iteration.body, viewing);
                     lf.depth -= 1;
                 }
-                loop-stmt(x) => {
+                loop-stmt(repeating) => {
                     lf.depth += 1;
-                    local-facts-block(lf, x.body, v);
+                    local-facts-block(lf, repeating.body, viewing);
                     lf.depth -= 1;
                 }
-                assign(x) => {
-                    local-facts(lf, x.value, v);
-                    if lf.bindings.assigns.has(x) && lf.bindings.assigns[x] == lf.binding {
-                        if !new-value(x.value, v) { lf.sources-fresh = false; }
+                assign(assigned) => {
+                    local-facts(lf, assigned.value, viewing);
+                    if lf.bindings.assigns.has(assigned) && lf.bindings.assigns[assigned] == lf.binding {
+                        if !new-value(assigned.value, viewing) { lf.sources-fresh = false; }
                         mention(lf, sp);
                     }
                 }
-                assign-field(x) => {
-                    local-facts(lf, x.target, v);
-                    local-facts(lf, x.value, v);
+                assign-field(assigned) => {
+                    local-facts(lf, assigned.target, viewing);
+                    local-facts(lf, assigned.value, viewing);
                 }
-                expr-stmt(x) => local-facts(lf, x.value, v),
+                expr-stmt(evaluated) => local-facts(lf, evaluated.value, viewing),
                 break-stmt => {}
                 continue-stmt => {}
             }
         }
     }
 
-    local-facts: func(lf: LocalFacts, e: Expr, v: FlowView) {
-        match e.kind {
-            name(n) => {
-                if lf.bindings.exprs.has(e) && lf.bindings.exprs[e] == lf.binding {
-                    if e.span.line == lf.at.line
-                        && e.span.col == lf.at.col { lf.at-depth = lf.depth; }
-                    else { mention(lf, e.span); }
+    local-facts: func(lf: LocalFacts, expression: Expr, viewing: FlowView) {
+        match expression.kind {
+            name(_) => {
+                if lf.bindings.exprs.has(expression) && lf.bindings.exprs[expression] == lf.binding {
+                    if expression.span.line == lf.at.line
+                        && expression.span.col == lf.at.col { lf.at-depth = lf.depth; }
+                    else { mention(lf, expression.span); }
                 }
             }
             closure(cl) => {
                 lf.depth += 1;
-                local-facts-block(lf, cl.body, v);
+                local-facts-block(lf, cl.body, viewing);
                 lf.depth -= 1;
             }
-            if-else(x) => {
-                local-facts(lf, x.cond, v);
-                local-facts-block(lf, x.then, v);
-                match x.otherwise {
-                    some(b) => local-facts-block(lf, b, v),
+            if-else(conditional) => {
+                local-facts(lf, conditional.cond, viewing);
+                local-facts-block(lf, conditional.then, viewing);
+                match conditional.otherwise {
+                    some(otherwise) => local-facts-block(lf, otherwise, viewing),
                     none => {}
                 }
             }
-            block(b) => local-facts-block(lf, b, v),
-            match-expr(m) => {
-                local-facts(lf, m.value, v);
-                for arm in m.arms {
+            block(inner) => local-facts-block(lf, inner, viewing),
+            match-expr(matching) => {
+                local-facts(lf, matching.value, viewing);
+                for arm in matching.arms {
                     if walk.pattern-binds(arm.pattern, lf.binding) {
                         lf.sources-fresh = false;
                         lf.made-depth = lf.depth;
                     }
                     match arm.guard {
-                        some(g) => local-facts(lf, g, v),
+                        some(guard) => local-facts(lf, guard, viewing),
                         none => {}
                     }
-                    local-facts(lf, arm.body, v);
+                    local-facts(lf, arm.body, viewing);
                 }
             }
             _ => {
                 let names: list<Expr> = [];
-                sub-exprs(e, names);
-                for x in names { local-facts(lf, x, v); }
+                sub-exprs(expression, names);
+                for part in names { local-facts(lf, part, viewing); }
             }
         }
     }
@@ -627,51 +738,51 @@ module effects {
         if after {
             match lf.used-after {
                 none => { lf.used-after = some(sp); }
-                some(x) => {}
+                some(_) => {}
             }
         }
     }
 
     // a value no other name has: a literal, or a call of a func (or the runtime's) that makes one
-    new-value: func(e: Expr, v: FlowView) -> bool {
-        match e.kind {
-            list-lit(xs) => true,
-            record-lit(fs) => true,
-            call(x) => is-fresh(x.name, v),
-            method(m) => is-fresh(m.name, v),
-            _ => settled-immutable(e.ty),
+    new-value: func(expression: Expr, viewing: FlowView) -> bool {
+        match expression.kind {
+            list-lit(_) => true,
+            record-lit(_) => true,
+            call(called) => is-fresh(called.name, viewing),
+            method(invoked) => is-fresh(invoked.name, viewing),
+            _ => settled-immutable(expression.ty),
         }
     }
 
     // an expression's direct parts that are expressions (blocks aside)
-    sub-exprs: func(e: Expr, out: list<Expr>) {
-        match e.kind {
-            field(f) => out.push(f.target),
-            call(x) => { for a in x.args { out.push(a); } }
-            method(m) => {
-                out.push(m.target);
-                for a in m.args { out.push(a); }
+    sub-exprs: func(expression: Expr, out: list<Expr>) {
+        match expression.kind {
+            field(accessed) => out.push(accessed.target),
+            call(called) => { for argument in called.args { out.push(argument); } }
+            method(invoked) => {
+                out.push(invoked.target);
+                for argument in invoked.args { out.push(argument); }
             }
-            apply(x) => {
-                out.push(x.callee);
-                for a in x.args { out.push(a); }
+            apply(applied) => {
+                out.push(applied.callee);
+                for argument in applied.args { out.push(argument); }
             }
-            record-lit(fields) => { for f in fields { out.push(f.value); } }
-            list-lit(xs) => { for x in xs { out.push(x); } }
-            tuple-lit(xs) => { for x in xs { out.push(x); } }
-            interp(xs) => { for x in xs { out.push(x); } }
-            binary(b) => {
-                out.push(b.left);
-                out.push(b.right);
+            record-lit(fields) => { for entry in fields { out.push(entry.value); } }
+            list-lit(xs) => { for item in xs { out.push(item); } }
+            tuple-lit(xs) => { for item in xs { out.push(item); } }
+            interp(xs) => { for item in xs { out.push(item); } }
+            binary(operation) => {
+                out.push(operation.left);
+                out.push(operation.right);
             }
-            unary(u) => out.push(u.value),
-            cast(x) => out.push(x.value),
-            widen(x) => out.push(x.value),
-            is-test(x) => out.push(x.value),
-            try-as(x) => out.push(x.value),
-            start-expr(x) => out.push(x),
-            yield-expr(x) => out.push(x),
-            wait-expr(w) => { for v in w.values { out.push(v); } }
+            unary(operation) => out.push(operation.value),
+            cast(converted) => out.push(converted.value),
+            widen(widened) => out.push(widened.value),
+            is-test(tested) => out.push(tested.value),
+            try-as(attempted) => out.push(attempted.value),
+            start-expr(started) => out.push(started),
+            yield-expr(yielded) => out.push(yielded),
+            wait-expr(waiting) => { for awaited in waiting.values { out.push(awaited); } }
             _ => {}
         }
     }

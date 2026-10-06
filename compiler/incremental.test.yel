@@ -19,27 +19,27 @@ module incremental-tests {
 
     // what a check found, as text: its problems, then each reference (where, and what it names),
     // then each target
-    @(private) found: func(c: analysis.Checked) -> string {
+    @(private) found: func(checked: analysis.Checked) -> string {
         let out: list<string> = [];
-        for p in c.problems { out.push("problem {p.place.path}:{p.place.line}:{p.place.col} {p.message}"); }
-        for r in c.references {
-            let t = c.targets[r.target];
-            out.push("reference {r.place.path}:{r.place.line}:{r.place.col} {t.container}.{t.name}");
+        for problem in checked.problems { out.push("problem {problem.place.path}:{problem.place.line}:{problem.place.col} {problem.message}"); }
+        for reference in checked.references {
+            let target = checked.targets[reference.target];
+            out.push("reference {reference.place.path}:{reference.place.line}:{reference.place.col} {target.container}.{target.name}");
         }
-        for t in c.targets { out.push("target {t.container}.{t.name} {t.place.path}:{t.place.line}:{t.place.col} {t.signature} | {t.docs}"); }
+        for target in checked.targets { out.push("target {target.container}.{target.name} {target.place.path}:{target.place.line}:{target.place.col} {target.signature} | {target.docs}"); }
         out.join("\n")
     }
 
     // the first line where two texts differ, and each's
     @(private) first-difference: func(was: string, now: string) -> string {
-        let a = was.split("\n");
-        let b = now.split("\n");
-        for index in 0..a.len() {
-            if index >= b.len() || a[index] != b[index] {
-                return "line {index}:\n  full:        {a[index]}\n  incremental: {if index < b.len() { b[index] } else { "(none)" }}";
+        let full-lines = was.split("\n");
+        let incremental-lines = now.split("\n");
+        for index in 0..full-lines.len() {
+            if index >= incremental-lines.len() || full-lines[index] != incremental-lines[index] {
+                return "line {index}:\n  full:        {full-lines[index]}\n  incremental: {if index < incremental-lines.len() { incremental-lines[index] } else { "(none)" }}";
             }
         }
-        "the incremental has {b.len() - a.len()} more lines"
+        "the incremental has {incremental-lines.len() - full-lines.len()} more lines"
     }
 
     // file's text edited (from given with what), checked from the cache and from nothing: the same
@@ -61,12 +61,12 @@ module incremental-tests {
         let text = expect.ok(wait diagnostics.read-file(file));
         let cache = incremental();
         let first = wait checked(file, text, some(cache));
-        let second = wait same-as-full(cache, file, text, "        let all = tree.child-nodes(n);\n", "        let all = tree.child-nodes(n);\n        let counted = all.len();\n");
+        let second = wait same-as-full(cache, file, text, "        let all = tree.child-nodes(node);\n", "        let all = tree.child-nodes(node);\n        let counted = all.len();\n");
         // (an untouched func, in another file: its body the first check's, not checked again)
         expect.holds(same-body(first, second, "lexer.lex-file"));
         expect.holds(!same-body(first, second, "lower.first-node"));
         // (an error made in a body: told as a full check tells it)
-        let third = wait same-as-full(cache, file, text, "        let all = tree.child-nodes(n);\n", "        let all = tree.child-nodes(n);\n        let broken: s64 = \"text\";\n");
+        let third = wait same-as-full(cache, file, text, "        let all = tree.child-nodes(node);\n", "        let all = tree.child-nodes(node);\n        let broken: s64 = \"text\";\n");
         expect.holds(third.problems.len() > 0);
         // (lines added above funcs of the same file: they move, and are checked again)
         let _ = wait same-as-full(cache, file, text, "module lower \{\n", "module lower \{\n\n\n");
@@ -78,24 +78,24 @@ module incremental-tests {
         let text = expect.ok(wait diagnostics.read-file(file));
         let cache = incremental();
         let first = wait checked(file, text, some(cache));
-        let second = wait same-as-full(cache, file, text, "    first-node: func(n: SyntaxNode) -> option<SyntaxNode> \{", "    first-node: func(n: SyntaxNode, unused: s64 = 0) -> option<SyntaxNode> \{");
+        let second = wait same-as-full(cache, file, text, "    first-node: func(node: SyntaxNode) -> option<SyntaxNode> \{", "    first-node: func(node: SyntaxNode, unused: s64 = 0) -> option<SyntaxNode> \{");
         expect.holds(!same-body(first, second, "lexer.lex-file"));
     }
 
     // whether the func named key has the same checked body (its marks: the one list) in two checks
-    @(private) same-body: func(a: analysis.Checked, b: analysis.Checked, key: string) -> bool {
-        let x = func-named(a, key);
-        let y = func-named(b, key);
-        match (x, y) {
-            (some(f), some(g)) => f.marks == g.marks,
+    @(private) same-body: func(earlier: analysis.Checked, later: analysis.Checked, key: string) -> bool {
+        let earlier-func = func-named(earlier, key);
+        let later-func = func-named(later, key);
+        match (earlier-func, later-func) {
+            (some(first), some(second)) => first.marks == second.marks,
             _ => false,
         }
     }
 
-    @(private) func-named: func(c: analysis.Checked, key: string) -> option<Func> {
-        for d in c.compiled.prog.decls {
-            match d {
-                func-decl(f) => { if f.name.ends-with(key) { return some(f); } }
+    @(private) func-named: func(checked: analysis.Checked, key: string) -> option<Func> {
+        for declaration in checked.compiled.prog.decls {
+            match declaration {
+                func-decl(found) => { if found.name.ends-with(key) { return some(found); } }
                 _ => {}
             }
         }
