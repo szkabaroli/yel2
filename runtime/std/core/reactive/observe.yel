@@ -1,4 +1,4 @@
-// Observation, as Swift's: what a run reads, and who is told when it changes. The compiler's half:
+// Observation: what a run reads, and who is told when it changes. The compiler's half:
 // an @(observable) resource holds a registrar (made with it), each read of one of its fields calls
 // access, and each write will-set (a field assigned, a part of a value in it, or what is in it
 // changed in place: xs.push(x) of a list field, a func that writes it). This half is std's: track

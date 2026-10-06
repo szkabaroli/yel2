@@ -137,7 +137,7 @@ extern uint8_t y_class_of[8192 / 16 + 1];
 extern y_page *y_pages[Y_NCLASS], *y_tails[Y_NCLASS], *y_cursor[Y_NCLASS], *y_larges;
 // a collection runs once the heap has doubled (or quadrupled: see y_collect) since the last one left
 // it, and never below
-// y_heap_min (YEL_GC_MIN_MB, default 4, as Go's): a program that keeps most of what it makes (a compile)
+// y_heap_min (YEL_GC_MIN_MB, default 4): a program that keeps most of what it makes (a compile)
 // runs faster with more (fewer collections), a component stays smaller with less
 extern size_t y_heap_bytes, y_heap_min;
 extern long y_stress, y_stress_left, y_collections, y_verbose;
@@ -441,6 +441,7 @@ yunit yel_eprint(ystr s);
 /** The target triple this runtime was built for (yelc's default for --backend bitcode; "" for one
  * it does not know). */
 ystr yel_host_triple(void);
+ystr yel_executable_path(void);
 
 /** What main does last: stdout flushed, main's value the exit code. */
 int y_finish(int64_t code);

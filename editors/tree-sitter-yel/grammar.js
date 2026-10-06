@@ -543,8 +543,7 @@ module.exports = grammar({
     _literal: ($) =>
       choice($.number, $.string, $.c_string, $.multiline_string, $.char, $.boolean, $.regex),
 
-    // /pattern/flags: a regex literal (where a value starts: else a / divides), as
-    // tree-sitter-javascript reads one
+    // /pattern/flags: a regex literal (where a value starts: else a / divides)
     regex: ($) =>
       seq(
         "/",

@@ -95,7 +95,7 @@ variant ExprKind {
     start-expr(Expr),
     // wait f(x), wait fut, wait a | b (the first done), wait { a: x, b: y } (all of them)
     wait-expr(Wait),
-    // #name, #name(args): what the compiler knows, as Odin's directives (the checker gives its
+    // #name, #name(args): what the compiler knows, a directive (the checker gives its
     // value): #file, #line, #column, #func, #location where it is written; as a parameter's
     // default, #caller-location and #caller-expression(param) the call's
     directive(Directive),
@@ -365,8 +365,8 @@ record Visibility { level: string, pkg: Package, file: string, span: Span, }
 
 // where a declaration is written: its package, its module ("" at the top level), its file, and the
 // file's includes (a name to a module's key) and what asked for them
-// build: the targets its file is built for, from a first line //+build native (or wasi), as Odin's
-// #+build: its funcs are checked everywhere and made only there ("" for every target)
+// build: the targets its file is built for, from a first line //+build native (or wasi): its funcs
+// are checked everywhere and made only there ("" for every target)
 resource Scope {
     pkg: Package,
     module: string,
@@ -411,9 +411,8 @@ resource Func {
 record Bindings { exprs: map<Expr, Mark>, assigns: map<Assign, Mark>, }
 
 // @c(name = "c_func", keeps = "p", gives = "q"): an extern's C func, and what it does that its
-// types cannot say. A name with $1, $2, ... in it is C written in place (an intrinsic, as Porffor's
-// Porffor.IR.*): $n the nth argument, a type parameter's three first (its C type, its scan, its
-// descriptor), then the values
+// types cannot say. A name with $1, $2, ... in it is C written in place (an intrinsic): $n the nth
+// argument, a type parameter's three first (its C type, its scan, its descriptor), then the values
 resource CFunc { name: string, keeps: list<string>, gives: list<string>, }
 
 // wit-module and wit-name: a WIT interface's func (a component's import), "" for a C one
@@ -654,7 +653,7 @@ is-str-lit: func(e: Expr) -> bool {
     }
 }
 
-// ---- the syntax tree, lossless (red-green: Roslyn's, and rust-analyzer's rowan)
+// ---- the syntax tree, lossless (red-green)
 //
 // A file as written, every byte of it. Its green tree: nodes, each its kind, its children and its
 // width in bytes, and tokens, each its kind and its text; the whitespace and comments between

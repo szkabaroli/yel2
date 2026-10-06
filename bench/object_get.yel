@@ -1,4 +1,4 @@
-// Porffor's bench/object_get.js: a record's field read 100 million times
+// A record's field read 100 million times
 
 from "wasi:clocks" include monotonic-clock;
 

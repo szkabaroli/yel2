@@ -1,4 +1,4 @@
-// URLs, as the WHATWG URL Standard has them (a browser's, Node's URL): a URL read (its scheme,
+// URLs, as the WHATWG URL Standard has them (a browser's URL): a URL read (its scheme,
 // user, password, host, port, path, query and fragment, each percent-encoded as its part needs, its
 // path's . and .. segments taken out, a special scheme's default port left out), or read against a
 // base (a relative reference: ../a?b), and written again; and a query's parameters

@@ -3,7 +3,7 @@ package yel:ui@0.1.0;
 // Verbatim subset of external/yel/crates/yel-host/wit/deps/meshx-ui/dom.wit —
 // only the `dom` interface, which is the sole stable host surface. The
 // per-component interfaces in the original (counter, nested-parent, ...) are
-// fixtures for the Rust host and are not part of the contract.
+// fixtures for the original host and are not part of the contract.
 interface dom {
     variant color {
         red,

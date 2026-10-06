@@ -1,4 +1,4 @@
-// Porffor's bench/interp-dispatch.js (from Hermes): a float factorial, 4 million times
+// A float factorial, 4 million times
 
 from "wasi:clocks" include monotonic-clock;
 

@@ -1,4 +1,4 @@
-// LLVM bitcode, written by yel itself (Zig's route: no libLLVM, the bitstream made here): a module
+// LLVM bitcode, written by yel itself (no libLLVM, the bitstream made here): a module
 // built up (its types, globals, funcs and their instructions) and written. llvm.yel lowers the IR
 // into one (yelc --backend bitcode).
 //

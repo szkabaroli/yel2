@@ -1,6 +1,6 @@
-// std:url against the WHATWG URL Standard as node has it (new URL): each URL read (its parts, and
-// written again), and RFC 3986's references read against its base, http://a/b/c/d;p?q. The output is
-// node's for the same texts (invalid where it throws)
+// std:url against the WHATWG URL Standard as a reference parser has it: each URL read (its parts,
+// and written again), and RFC 3986's references read against its base, http://a/b/c/d;p?q. The
+// output is the reference's for the same texts (invalid where it refuses one)
 
 from "std:url" include url;
 

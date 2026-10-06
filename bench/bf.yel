@@ -1,9 +1,8 @@
-// Porffor's bench/bf.js: a brainfuck interpreter running a mandelbrot's program, up to its first
-// line of output
+// A brainfuck interpreter running a mandelbrot's program, up to its first line of output
 
 from "wasi:clocks" include monotonic-clock;
 
-// how many lines the program has written (bf.js's lines)
+// how many lines the program has written
 resource Out { lines: s32, }
 
 // whether the program is done: its first line written

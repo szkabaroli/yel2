@@ -1,5 +1,4 @@
-// Porffor's bench/string_methods.js: toUpperCase and toLowerCase (the ones it runs), 8000 times
-// each
+// A string upper-cased and lower-cased, 8000 times each
 
 from "wasi:clocks" include monotonic-clock;
 

@@ -1,6 +1,6 @@
 // The runner yelc test makes (packages.yel's test-runner) calls these: which tests to run, each in
 // a child process of its own (std:process: a failure, a panic, ends only it), and what each did,
-// then how many failed. And a test's snapshots, as Jest keeps them: the runner loads the file of
+// then how many failed. And a test's snapshots: the runner loads the file of
 // its test's file before it runs (prepare), expect.snapshot compares against them and records what
 // is new or changed (snapshot), and the runner writes the file again once it passed (save). A file
 // of snapshots is snapshots/<file>.snap beside the test's file: each one a line === <test> <n>

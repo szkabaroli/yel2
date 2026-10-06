@@ -1549,11 +1549,10 @@ module checker {
 
     // ================================================================ directives and defaults
 
-    // a directive's value where it is written (as Odin's): #file, its file's path; #line and
-    // #column, its place's; #func, the func it is in; #location, all of them (std's
-    // source-location); #embed(path), a file's bytes (as Zig's @embedFile: the path from the
-    // file's directory, or one yelc --embed names). #caller-location and #caller-expression are a parameter's default's only:
-    // the call's
+    // a directive's value where it is written: #file, its file's path; #line and #column, its
+    // place's; #func, the func it is in; #location, all of them (std's source-location);
+    // #embed(path), a file's bytes (the path from the file's directory, or one yelc --embed names).
+    // #caller-location and #caller-expression are a parameter's default's only: the call's
     directive-value: func(c: Checker, e: Expr, d: Directive, want: Type) -> Type {
         let place = e.span;
         if d.name == "file" {

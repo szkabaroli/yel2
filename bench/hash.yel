@@ -1,4 +1,4 @@
-// Porffor's bench/hash.js: an integer hash, 8 slices of 16 seeds, 2 million steps each
+// An integer hash, 8 slices of 16 seeds, 2 million steps each
 
 from "wasi:clocks" include monotonic-clock;
 

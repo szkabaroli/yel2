@@ -216,7 +216,7 @@ base-name: func(key: string) -> string {
     key
 }
 
-// an interpolation's format spec ("{x:spec}"), as Rust's: [[fill]align][0][width][.precision][kind]
+// an interpolation's format spec ("{x:spec}"): [[fill]align][0][width][.precision][kind]
 // align is < (left), > (right) or ^ (centered), "" for the value's own (a number's right, else left);
 // width and precision -1 where not given; kind ? (debug: WAVE), x X (hex), b (binary), o (octal),
 // "" for its display

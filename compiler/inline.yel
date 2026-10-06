@@ -1,4 +1,4 @@
-// Inlining for escape analysis, as Porffor's inline.js: a func that returns a record it makes is
+// Inlining for escape analysis: a func that returns a record it makes is
 // inlined where it is called, so that record can stay on the caller's stack (escape.yel). Inlined
 // for that alone: clang inlines for call overhead. Mode size: where called once (the func then
 // dropped) or where tiny, so the program grows no bigger; speed: up to 40 statements too. Funcs no

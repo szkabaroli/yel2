@@ -1,7 +1,6 @@
-// Porffor's bench/indirect.js: calls with 0 to 16 arguments, 10 million each, direct and through a
-// func value; each func's body a barrier (black-box, as Porffor's asm volatile) so none is
-// optimized away. JS's run passes 16 arguments to any func; yel's are typed, so each arity has its
-// own run
+// Calls with 0 to 16 arguments, 10 million each, direct and through a func value; each func's
+// body a barrier (black-box) so none is optimized away. The original's run passes 16 arguments to
+// any func; yel's are typed, so each arity has its own run
 
 from "wasi:clocks" include monotonic-clock;
 

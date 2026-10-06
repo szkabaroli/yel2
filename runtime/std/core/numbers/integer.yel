@@ -1,6 +1,5 @@
-// Integers: each type's bounds, in a module of the type's name, as Rust's u32::MAX and Odin's
-// max(u32): s8.MIN, u32.MAX, each of its own type (an s8's fits where an s8 is wanted). An
-// unsigned type's MIN is 0, so every type has both.
+// Integers: each type's bounds, in a module of the type's name: s8.MIN, u32.MAX, each of its own
+// type (an s8's fits where an s8 is wanted). An unsigned type's MIN is 0, so every type has both.
 
 module s8 {
     const MIN: s8 = -128;

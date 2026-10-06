@@ -1,14 +1,14 @@
-// yel IR: one structured tree of nodes, laid out as Porffor's (external/porffor/compiler/ir.js).
+// yel IR: one structured tree of nodes.
 // pipeline: checked tree -> IR (codegen.yel) -> C text (render.yel); between them inline.yel and
 // escape.yel, and the collector's roots (roots.yel), all on this one shape.
 // a node: its kind (Kind: what it is, with its operands), its type (unit for a statement), and its
 // effects (Fx bits, OR-merged from its operands). The constructors below fold as they build.
 //
-// Where yel differs from Porffor: an operand is pure (no fx.call, no fx.read-mem): codegen binds
-// anything else to a local first, so the collector's slots see every pointer live across a call,
-// and C's unordered arguments cannot reorder effects.
+// An operand is pure (no fx.call, no fx.read-mem): codegen binds anything else to a local first, so
+// the collector's slots see every pointer live across a call, and C's unordered arguments cannot
+// reorder effects.
 
-// effects: Porffor's FX bits
+// effects: bits, one each
 record Fx { read-mem: s64, write-mem: s64, call: s64, read-global: s64, write-local: s64, }
 
 fx: func() -> Fx { { read-mem: 1, write-mem: 2, call: 4, read-global: 8, write-local: 16, } }
@@ -66,7 +66,7 @@ variant Kind {
     yield(Node),
     // calls: a yel func's (key, its C name) or the runtime's (key "")
     call(CallNode),
-    // a func as a value (its C function), and a call through one (Porffor's CallDynamic)
+    // a func as a value (its C function), and a call through one
     func-ref(FuncRefNode),
     call-ref(CallRefNode),
     // alloc / gc: a record or a case on the heap, or (escape.yel) on the func's stack

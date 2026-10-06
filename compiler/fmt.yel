@@ -1,13 +1,12 @@
-// The formatter (yelc --fmt): a file's tokens, as written, laid out again, 100 columns wide, as
-// Prettier lays out JavaScript. Every (), [] and {} is a group, printed on one line where it fits
-// and else broken: its items one to a line, indented four spaces, a list's last given a comma. What
-// the author laid out over lines (a newline between a group's items) stays laid out as written,
-// each of its lines one group of its own; blank lines stay (one at most). A block's braces break
-// with the line they are on, so an if and its elses break together; a call whose last argument is
-// a group keeps the call on one line and breaks only that group (out.push({ ... })), but a call
-// holding a broken argument before its last breaks. A closure keeps its params and -> on the line
-// it opens on and breaks only its body. Tokens are printed as their source bytes, so strings and
-// comments are never changed.
+// The formatter (yelc --fmt): a file's tokens, as written, laid out again, 100 columns wide. Every
+// (), [] and {} is a group, printed on one line where it fits and else broken: its items one to a
+// line, indented four spaces, a list's last given a comma. What the author laid out over lines (a
+// newline between a group's items) stays laid out as written, each of its lines one group of its
+// own; blank lines stay (one at most). A block's braces break with the line they are on, so an if
+// and its elses break together; a call whose last argument is a group keeps the call on one line
+// and breaks only that group (out.push({ ... })), but a call holding a broken argument before its
+// last breaks. A closure keeps its params and -> on the line it opens on and breaks only its body.
+// Tokens are printed as their source bytes, so strings and comments are never changed.
 //
 // Formatting what this makes changes nothing: each choice made of a group this breaks is made the
 // same once that group is written broken (a fill's separator measured only to the next {} or []
@@ -720,7 +719,7 @@ module fmt {
 
     // ================================================================ printing
 
-    // a layout's text: Wadler's printer, as Prettier's: a group flat where it fits up to the next
+    // a layout's text: Wadler's printer: a group flat where it fits up to the next
     // line break, else broken; a nest in a flat group adds nothing (so a group broken inside a flat
     // one is indented from the line it starts on)
     print-doc: func(doc: Doc) -> string {

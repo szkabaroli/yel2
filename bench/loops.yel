@@ -1,4 +1,4 @@
-// Porffor's bench/loops.js: 5000 floats summed three ways (Math.random's numbers made by an LCG)
+// 5000 floats summed three ways (the random numbers made by an LCG)
 
 from "wasi:clocks" include monotonic-clock;
 

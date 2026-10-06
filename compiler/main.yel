@@ -15,7 +15,7 @@
 //   yelc --fmt <file.yel | dir>...   (each file formatted in place, fmt.yel)
 //   yelc --version                   ("dev", or the release it was built as)
 //   yelc build [step]... [-Dname=value]... [--help]   (the project's build.yel, found here or above,
-//        compiled into a runner and run: std:build's build system, as Zig's)
+//        compiled into a runner and run: std:build's build system)
 //
 // yelc's home is the directory above its own (build/yelc2: the repository's), or YEL_HOME: where
 // its runtime is (the prelude given none, and found in no runtime/ here; the runtime's object and
@@ -344,10 +344,9 @@ module analysis {
 
         // the standard library's core (runtime/std/core, beside the prelude, its files in the
         // folders in it too: text, collections, numbers, async, reactive, runtime, host): yel:std,
-        // written in yel over the prelude's externs, as Porffor's builtins are over its
-        // intrinsics. Every program reaches its names after its own and the prelude's; the rest of
-        // the library (each other directory of runtime/std) only by an include
-        // (std:encoding/json)
+        // written in yel over the prelude's externs and intrinsics. Every program reaches its names
+        // after its own and the prelude's; the rest of the library (each other directory of
+        // runtime/std) only by an include (std:encoding/json)
         let library = packages.core-dir(prog);
         if wait diagnostics.is-source-dir(context, library) {
             wait packages.load-package(prog, library, "the standard library");
@@ -1415,7 +1414,7 @@ module analysis {
     // of a tuple or an anonymous record (~T#f: its type, and no place, as nothing declares it)
     @(private) unnamed: func(found: NameUse, by-key: map<string, s64>, targets: list<Target>) -> option<Target> {
         let nowhere-place: Place = { path: "", line: 0, col: 0, end-line: 0, end-col: 0, };
-        // a literal: its type, then its value (as rust-analyzer tells one: an integer's in
+        // a literal: its type, then its value (an integer's in
         // decimal, hex and binary; a float's with its bits; a char's, a string's as they are)
         if found.key.starts-with("literal:") {
             let kind = found.key.substring(8, found.key.find-from(":", 8).unwrap-or(found.key.len()));
@@ -1712,15 +1711,17 @@ ran: func(command: string, arguments: list<string>) -> bool {
     }
 }
 
-// yelc's home: YEL_HOME, else the directory above its own (build/yelc2: the repository's)
+// yelc's home: YEL_HOME, else the directory above its own file's (build/yelc2: the repository's)
 home: func() -> string {
     for pair in environment.get-environment() {
         let (name, value) = pair;
         if name == "YEL_HOME" && value != "" { return value; }
     }
-    // (its own directory's parent: build/yelc2's is build/.., ../yelc2's ../..; one found on PATH
-    // has none to go by: YEL_HOME)
-    let me = environment.get-arguments()[0];
+    // (its own directory's parent: build/yelc2's is build/.., bin/yelc's the release's root; its
+    // own file, every symlink followed, so one run from PATH or through a link finds it too;
+    // else what it was run as)
+    let me = executable-path();
+    if me == "" { me = environment.get-arguments()[0]; }
     match me.find-last("/") {
         some(slash) => if slash == 0 { "/.." } else { me.substring(0, slash) + "/.." },
         none => ".",

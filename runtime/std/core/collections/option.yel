@@ -1,4 +1,4 @@
-// Options: the value, or another where there is none (unwrap-or, as Rust's), and whether there is
+// Options: the value, or another where there is none (unwrap-or), and whether there is
 // one
 
 module option {

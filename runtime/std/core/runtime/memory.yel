@@ -1,5 +1,5 @@
 // What std reads and writes in place that yel cannot say: intrinsics, C the compiler writes where
-// they are called (as Porffor's Porffor.IR.*). $1, $2, $3 are a type parameter's C type, scan and
+// they are called. $1, $2, $3 are a type parameter's C type, scan and
 // descriptor, then the arguments. Only std calls these; programs have the checked funcs built on
 // them (list.yel's get, set, push, pop). Each is typed on what it touches, so the flow analysis
 // sees what the C does: set-item writes the list and keeps the item, item-at gives one of its items.

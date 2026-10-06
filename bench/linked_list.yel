@@ -1,5 +1,5 @@
-// Porffor's bench/linked_list.js: a list of 7 nodes (made once) relinked, walked, cut and reversed
-// 400000 times (JS's null is none; the methods the loop calls, as funcs)
+// A list of 7 nodes (made once) relinked, walked, cut and reversed 400000 times (the original's
+// null is none; the methods the loop calls, as funcs)
 
 from "wasi:clocks" include monotonic-clock;
 

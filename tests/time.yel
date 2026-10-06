@@ -1,6 +1,6 @@
-// std:time against JavaScript's Date (node): instants from milliseconds written as toISOString does,
-// with their weekday, and ISO 8601 / RFC 3339 texts read (Z, an offset, a date alone; invalid where
-// Date.parse gives NaN). The output is node's for the same values
+// std:time against a reference date library: instants from milliseconds written in ISO 8601, with
+// their weekday, and ISO 8601 / RFC 3339 texts read (Z, an offset, a date alone; invalid where the
+// reference reads no date). The output is the reference's for the same values
 
 from "std:time" include time;
 

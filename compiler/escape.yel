@@ -7,11 +7,11 @@
 // back, whether its result is new) is a fixpoint over the program (flow.fixpoint), a call read
 // through its callee's summary, the runtime's through flow.yel's table.
 //
-// What uses it: a record that never leaves the func making it is kept on the func's stack, so it
-// is never allocated (Porffor's escape.js goes further: a literal's fields become locals; here the
-// record keeps its layout, traced through the frame), a record made in a loop only if nothing holds
-// it from one turn into the next; and a binding's stream or future that no one else has has its
-// end let go after its last use (gen.yel's releases).
+// What uses it: a record that never leaves the func making it is kept on the func's stack, so it is
+// never allocated (the record keeps its layout, traced through the frame; its fields do not become
+// locals), a record made in a loop only if nothing holds it from one turn into the next; and a
+// binding's stream or future that no one else has has its end let go after its last use (gen.yel's
+// releases).
 
 // a func's locals in groups that may hold one value, and whether each group's value escapes the
 // func; for each local, the loop it is first defined in (0: none), each loop's parent, and each

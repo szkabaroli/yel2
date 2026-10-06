@@ -7,13 +7,14 @@
 // session through it.
 //
 //   yel-lsp [prelude.yel]    messages on stdin, replies on stdout, framing errors on stderr; the
-//                            runtime's prelude (default runtime/prelude.yel, from the directory
-//                            it starts in), beside it the standard library and WIT
+//                            runtime's prelude (default: its home's, YEL_HOME or the directory
+//                            above its own file's, as yelc's; else runtime/prelude.yel from the
+//                            directory it starts in), beside it the standard library and WIT
 
 from "std:cli" include environment;
 
 main: async func(args: list<string>) -> s32 {
-    let given = if args.len() > 0 { args[0] } else { "runtime/prelude.yel" };
+    let given = if args.len() > 0 { args[0] } else { default-prelude() };
     // (absolute, as the editor's URIs are)
     let prelude = if given.starts-with("/") { given } else { "{environment.get-initial-cwd().unwrap-or(".")}/{given}" };
     let state = server.new(rpc.connect(), prelude);
@@ -43,4 +44,24 @@ main: async func(args: list<string>) -> s32 {
     }
     wait rpc.close(state.connection);
     code
+}
+
+// the prelude given none: YEL_HOME's, else its own home's (bin/yel-lsp's: the release's root;
+// build/yel-lsp's: the repository's), else the one in the directory it starts in
+default-prelude: func() -> string {
+    for pair in environment.get-environment() {
+        let (name, value) = pair;
+        if name == "YEL_HOME" && value != "" { return value + "/runtime/prelude.yel"; }
+    }
+    let me = executable-path();
+    match me.find-last("/") {
+        some(slash) => {
+            let dir = me.substring(0, slash);
+            match dir.find-last("/") {
+                some(up) => dir.substring(0, up) + "/runtime/prelude.yel",
+                none => "runtime/prelude.yel",
+            }
+        }
+        none => "runtime/prelude.yel",
+    }
 }

@@ -1,9 +1,8 @@
-// Values as std reads them, whatever their type, as Ballerina's lang.value: a value's text (debug:
-// WAVE; display: an interpolation's). A type is its descriptor (the compiler's static ytype,
-// runtime/yel.h) and a value is where it is held, both as addresses (s64); the compiler hands them
-// to these funcs. What reads them is below: intrinsics (C written in place, as Porffor's
-// Porffor.IR.*), the only C. Nothing here may be collected while it is read: the compiler holds the
-// collector around a call.
+// Values as std reads them, whatever their type: a value's text (debug: WAVE; display: an
+// interpolation's). A type is its descriptor (the compiler's static ytype, runtime/yel.h) and a
+// value is where it is held, both as addresses (s64); the compiler hands them to these funcs. What
+// reads them is below: intrinsics (C written in place), the only C. Nothing here may be collected
+// while it is read: the compiler holds the collector around a call.
 
 module value {
     // a value's kind, as its descriptor says (runtime/yel.h's Y_K_*, in order)

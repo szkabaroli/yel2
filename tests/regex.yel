@@ -1,6 +1,6 @@
 // regex literals, compiled with the program: each case's first match (its text, where it is in
-// bytes, its groups), every match, and each made <$&> (replace-all). The output is JavaScript's, by
-// node, for the same patterns and texts (flag u: code points), its offsets as UTF-8's
+// bytes, its groups), every match, and each made <$&> (replace-all). The output is a reference
+// engine's, for the same patterns and texts (flag u: code points), its offsets as UTF-8's
 
 show: func(m: regex-match) -> string {
     let groups: list<string> = [];

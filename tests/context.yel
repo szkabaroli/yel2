@@ -1,8 +1,7 @@
-// @(context): a global each task has its own value of (an async context's, as TC39's AsyncContext
-// and Node's AsyncLocalStorage carry one): set in a task, it stays that task's across its waits,
-// whatever the others set meanwhile; a task started takes its starter's as it is then. std's
-// reactive keeps its owner so: a task started under an owner adds its cleanups to that owner, even
-// after a wait
+// @(context): a global each task has its own value of (an async context's, carried with it): set in
+// a task, it stays that task's across its waits, whatever the others set meanwhile; a task started
+// takes its starter's as it is then. std's reactive keeps its owner so: a task started under an
+// owner adds its cleanups to that owner, even after a wait
 
 @(context) let request: string = "none";
 

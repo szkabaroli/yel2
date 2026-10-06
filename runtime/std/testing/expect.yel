@@ -1,4 +1,4 @@
-// Expectations: assertions that tell what they found, as Go's testing and Odin's core:testing do.
+// Expectations: assertions that tell what they found.
 // Each stops the program (a panic) where its expectation fails, telling the call's place
 // (#caller-location) and what it got against what it wanted. core's assert is the one that takes
 // a bool alone; this package is for what a test checks of values.
@@ -9,7 +9,7 @@
 package std:testing@0.1.0;
 
 module expect {
-    // got, which must equal want, as Jest's toEqual: by == (a number's value, a record's fields),
+    // got, which must equal want: by == (a number's value, a record's fields),
     // else by what each shows ({x:?}: a list's items, a map's entries, in their order, where == is
     // a list's or a resource's identity)
     equal: func<T>(got: T, want: T, location: source-location = #caller-location) {
@@ -21,7 +21,7 @@ module expect {
         if alike(got, unwanted) { failed(location, "expect.not-equal", "got {got:?}, which it must not be"); }
     }
 
-    // got, which must be want itself, as Jest's toBe: by == alone (a list, a resource: the same one)
+    // got, which must be want itself: by == alone (a list, a resource: the same one)
     same: func<T>(got: T, want: T, location: source-location = #caller-location) {
         if got != want { failed(location, "expect.same", "got {got:?}, not the same as {want:?}"); }
     }
@@ -105,7 +105,7 @@ module expect {
         }
     }
 
-    // got, which must be as the test's snapshot of it (its next one, as Jest's toMatchSnapshot):
+    // got, which must be as the test's snapshot of it (its next one):
     // one there is none of yet is written (once the test passes); one that differs fails, telling
     // how (YEL_SNAPSHOTS=update writes it instead). The runner yelc test makes keeps them
     snapshot: func(got: string, location: source-location = #caller-location) {

@@ -1,4 +1,4 @@
-// Porffor's bench/truthy.js: two !!s, 100 million times
+// Two !!s, 100 million times
 
 from "wasi:clocks" include monotonic-clock;
 

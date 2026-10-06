@@ -1,6 +1,6 @@
-// Porffor's bench/richards.js: Martin Richards's benchmark, an operating system's task dispatcher
-// (http://www.cl.cam.ac.uk/~mr10/Bench.html), run 100 times. JS's classes are records, its null
-// none, and a task's run is chosen by a match on its kind (the JS calls a method)
+// Martin Richards's benchmark, an operating system's task dispatcher
+// (http://www.cl.cam.ac.uk/~mr10/Bench.html), run 100 times. The original's classes are records,
+// its null none, and a task's run is chosen by a match on its kind (the original calls a method)
 
 from "wasi:clocks" include monotonic-clock;
 
@@ -60,7 +60,7 @@ state-suspended-runnable: func() -> s32 { 3 }
 
 data-size: func() -> s32 { 4 }
 
-// the Tcb an option holds (a JS null here is a bug in the port)
+// the Tcb an option holds (a null here is a bug in the port)
 tcb: func(o: option<Tcb>) -> Tcb {
     match o {
         some(t) => t,

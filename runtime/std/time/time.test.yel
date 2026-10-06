@@ -1,6 +1,6 @@
-// std:time, tested (yelc test runtime/std/time): what node's Date is not checked against for
-// (tests/time.yel is): durations, a date and time at an offset and back, the calendar's days, RFC
-// 3339 written, and what is no time refused
+// std:time, tested (yelc test runtime/std/time): what the reference date parser is not checked
+// against for (tests/time.yel is): durations, a date and time at an offset and back, the calendar's
+// days, RFC 3339 written, and what is no time refused
 
 package std:time@0.1.0;
 

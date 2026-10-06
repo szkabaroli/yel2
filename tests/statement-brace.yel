@@ -1,4 +1,4 @@
-// an if, a match or a block that starts a statement is the statement, as Rust's: what follows its
+// an if, a match or a block that starts a statement is the statement: what follows its
 // } is the next statement (if c { … } -64 is an if, then -64), and in parens it is an operand
 
 value: func(c: bool) -> s32 {

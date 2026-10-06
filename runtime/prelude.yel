@@ -7,6 +7,8 @@
 @c(name = "yel_eprint") eprint: extern func(s: string);
 // the target triple the runtime was built for (yelc's default for --backend bitcode)
 @c(name = "yel_host_triple") host-triple: extern func() -> string;
+// the running program's own file, every symlink followed ("": the system does not say)
+@c(name = "yel_executable_path") executable-path: extern func() -> string;
 // whether stderr may be colored: a terminal, and NO_COLOR not set
 @c(name = "yel_stderr_color") stderr-color: extern func() -> bool;
 @c(name = "yel_panic") panic: extern func(message: string) -> never;
@@ -31,7 +33,7 @@
 to-string: func<T>(v: T) -> string { "{v}" }
 
 // v, which the C compiler must take as unknown (it cannot drop what makes it, nor see through
-// it): a benchmark's barrier, as Rust's std::hint::black_box and Porffor's asm volatile
+// it): a benchmark's barrier
 @c(name = "yel_black_box") black-box: extern func<T>(v: T) -> T;
 
 // lists

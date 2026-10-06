@@ -1491,7 +1491,7 @@ module gen {
 
     // ================================================================ imports
 
-    // the std func that gives a WIT import natively (std's host: yel, as Porffor's host/native), by
+    // the std func that gives a WIT import natively (std's host: yel), by
     // its names: interface wasi:filesystem/types is module wasi-filesystem-types, func
     // [method]descriptor.stat is descriptor-stat ([constructor]x x-new, [resource-drop]x
     // x-drop); its key, or "" for none

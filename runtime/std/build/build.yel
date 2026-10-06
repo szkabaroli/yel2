@@ -1,4 +1,4 @@
-// The build system, as Zig's: a project's build.yel is a program (no build.sh), its main handing
+// The build system: a project's build.yel is a program (no build.sh), its main handing
 // build.run what the project is made of, and `yelc build [step]... [-Dname=value]... [--help]`
 // compiles it and runs it. The program declares, the runner here does: what was declared runs as
 // steps, each after those it depends on, each made once.
@@ -25,7 +25,7 @@
 // default), and each the program declares (b.option). Paths are the project's (the directory
 // build.yel is in).
 //
-// A step may make files, as Zig's: an output of a command (step.output-file(name),
+// A step may make files: an output of a command (step.output-file(name),
 // step.output-dir(name): its path given to the command as an argument, in the step's own
 // directory of .yel-cache) is a path the rest of the build takes as it takes the project's (an
 // artifact's root, its wit and include, another command's argument or input, install-file), and
@@ -33,7 +33,7 @@
 // what goes into it (its arguments, the files its input names), like an artifact; one that makes
 // none runs each time. b.write-files() makes files the build program writes itself.
 //
-// A run or a command may check what it does, as Zig's run steps: step.expect-output(file) (what it
+// A run or a command may check what it does: step.expect-output(file) (what it
 // prints, its standard output and error, must be what file holds), step.expect-exit(code) (how it
 // ends: 0 where neither is asked), and step.set-environment(name, value) gives it a variable.
 //
@@ -42,9 +42,9 @@
 // depend on it, and no others: the rest go on, the build fails at the end (--summary: how many
 // ran, and failed).
 //
-//   let generator = b.command(["node", "generate.mjs", "--out",]);
+//   let generator = b.command(["sh", "generate.sh", "--out",]);
 //   let made = generator.output-dir("widgets");
-//   generator.input("generate.mjs");
+//   generator.input("generate.sh");
 //   app.include(made);
 
 package std:build@0.1.0;
@@ -139,7 +139,7 @@ module build {
         yelc: option<place>,
         // the files #embed(name) reads in it, by name (yelc --embed)
         embeds: list<tuple<string, place>>,
-        // a component's: Binaryen's wasm-opt's flags for its core module (none: not run)
+        // a component's: wasm-opt's flags for its core module (none: not run)
         wasm-opt: list<string>,
         // the backend yelc builds it with: "c" (C, then clang or cc) or "bitcode" (LLVM's, then
         // clang: a component's only)
@@ -196,14 +196,14 @@ module build {
         needs(a.compile, yelc);
     }
 
-    // the file (one of the project's, or one a step makes) #embed(name) reads in the artifact, as
-    // Zig's addAnonymousImport: a file the build makes, embedded, made again where it changes
+    // the file (one of the project's, or one a step makes) #embed(name) reads in the artifact: a
+    // file the build makes, embedded, made again where it changes
     embed: func(a: artifact, name: string, file: place) {
         a.embeds.push((name, file));
         needs(a.compile, file);
     }
 
-    // a component's core module optimized by Binaryen's wasm-opt with flags (as -Oz) before it is
+    // a component's core module optimized by wasm-opt with flags (as -Oz) before it is
     // made a component (wasm-opt reads core modules only: clang links one, wasm-opt optimizes it,
     // wasm-tools embeds the component's WIT in it and makes the component of it)
     wasm-opt: func(a: artifact, flags: list<string>) { a.wasm-opt = flags; }
@@ -501,7 +501,7 @@ module build {
         b
     }
 
-    // the steps and options, as zig build --help tells them
+    // the steps and options, as yelc build --help tells them
     @(private) told: func(b: builder) {
         print("Steps:\n");
         for one in b.steps {

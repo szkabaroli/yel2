@@ -1,4 +1,4 @@
-// Codegen: a checked func to the IR (ir.yel), as Porffor's codegen.js builds its IR from the AST.
+// Codegen: a checked func to the IR (ir.yel), built from the checked tree.
 // Part of the generator's module: it reads the types (c-type, and the helpers they make) as the C
 // does. An expression's node is pure (ir.yel): anything that calls or reads what may change is
 // bound to a local where it is met, so what runs runs in order.
@@ -22,8 +22,8 @@ resource Codegen {
 resource Var { local: s64, env: option<Env>, field: string, ty: Type, }
 
 // an environment: the record the closures made in one unit (a func's, a closure's or a for's body;
-// a for's, one each turn) share, holding its captured bindings and (up) the environment around it,
-// as Porffor's EnvAlloc; rec: the record's key, its fields known once the unit is built
+// a for's, one each turn) share, holding its captured bindings and (up) the environment around it;
+// rec: the record's key, its fields known once the unit is built
 resource Env { rec: string, up: option<Env>, fields: list<string>, types: list<Type>, }
 
 // an environment a func holds in a local: one it made (up-value: its up, to store), or (a

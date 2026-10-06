@@ -1,6 +1,6 @@
 //+build native
 
-// wasi:filesystem natively, as Porffor's host/native: what a component asks its host for, given
+// wasi:filesystem natively: what a component asks its host for, given
 // here over the system's calls (POSIX's *at calls on a descriptor; a descriptor's handle is its fd
 // + 1). WASI's async funcs finish at once here; a file's stream is yel's, a task between the file
 // and the stream. A program's calls of wasi:filesystem bind to these natively (compiler/abi.yel's

@@ -3793,7 +3793,7 @@ module regexp {
 
     // body min times, then up to max more (any more: a loop), the ones past min each a choice (a
     // greedy one tried first, a lazy one last); a loop whose body may match nothing ends where it
-    // does (as JavaScript's)
+    // does
     @(private) repeated: func(program: RegexProgram, x: RegexRepeat) {
         for index in 0..x.min { compile-node(program, x.body); }
         if x.max < 0 {

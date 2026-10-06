@@ -1,10 +1,10 @@
-// Regular expressions, as JavaScript's: a literal /pattern/flags (flags i: letters in either case,
-// m: ^ and $ at each line, s: . a line break too) is compiled with the program, as Porffor compiles
-// one: the compiler reads the pattern (a bad one is an error where it is written) and makes a
-// matcher of it, a func of its own whose states are the pattern's (a backtracking machine: a choice
-// kept, gone back to where what follows fails). Its value is a regex: the pattern, its flags, its
-// groups' count and names, and that matcher. Matched by code point (a string's UTF-8: . and a class
-// take one, however many bytes it is).
+// Regular expressions: a literal /pattern/flags (flags i: letters in either case, m: ^ and $ at
+// each line, s: . a line break too) is compiled with the program: the compiler reads the pattern (a
+// bad one is an error where it is written) and makes a matcher of it, a func of its own whose
+// states are the pattern's (a backtracking machine: a choice kept, gone back to where what follows
+// fails). Its value is a regex: the pattern, its flags, its groups' count and names, and that
+// matcher. Matched by code point (a string's UTF-8: . and a class take one, however many bytes it
+// is).
 //
 //   /\d+/.test("a12")                      true
 //   /(?<year>\d{4})-(\d\d)/.find("2026-10")  some(a match: its groups "2026", "10")

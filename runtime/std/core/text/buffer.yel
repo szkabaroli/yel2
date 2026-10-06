@@ -1,7 +1,7 @@
-// Buffers: bytes gathered, append-only, as Porffor's builtins make a string (its size at once, then
-// filled): built once, handed out as a string (sharing its bytes: none is written again) or a
-// list<u8> (copied: a list's items change). Written over memory.yel's intrinsics; the runtime only makes one (runtime/yel.h's ybuffer). A buffer is
-// no WIT type: at a component's boundary, give its to-string() or to-bytes().
+// Buffers: bytes gathered, append-only (a string's size at once, then filled): built once, handed
+// out as a string (sharing its bytes: none is written again) or a list<u8> (copied: a list's items
+// change). Written over memory.yel's intrinsics; the runtime only makes one (runtime/yel.h's
+// ybuffer). A buffer is no WIT type: at a component's boundary, give its to-string() or to-bytes().
 
 module buffer {
     // an empty buffer, room for capacity bytes before it grows
@@ -67,7 +67,7 @@ module buffer {
         out
     }
 
-    // room for count more bytes without growing again (as Rust's reserve): twice the room, 16 at
+    // room for count more bytes without growing again: twice the room, 16 at
     // least, the bytes moved
     reserve: func(b: buffer, count: s64) {
         let length = memory.buffer-length(b);

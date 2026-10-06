@@ -1,5 +1,6 @@
-// std:url, tested (yelc test runtime/std/url): what node's URL is not checked against for (tests/url.yel
-// is): a query's parameters, a component encoded and decoded, an origin, a URL's parts made and written
+// std:url, tested (yelc test runtime/std/url): what the reference URL parser is not checked against
+// for (tests/url.yel is): a query's parameters, a component encoded and decoded, an origin, a URL's
+// parts made and written
 
 package std:url@0.1.0;
 

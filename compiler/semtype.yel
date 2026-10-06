@@ -1,7 +1,7 @@
-// Types as sets of values (semantic subtyping, as Ballerina's, Luau's and Elixir's checkers have
-// it): a type is the set of values it holds, a subtype a subset, and union, intersection and
-// difference are the set operations. Whether a match covers its value is whether the value's type
-// minus its arms' patterns is empty; what is left names a value no arm fits.
+// Types as sets of values (semantic subtyping): a type is the set of values it holds, a subtype a
+// subset, and union, intersection and difference are the set operations. Whether a match covers its
+// value is whether the value's type minus its arms' patterns is empty; what is left names a value
+// no arm fits.
 //
 // The values are partitioned by kind: (), the bools, each number type's, the chars, the strings,
 // the tagged products (a tuple, some and none, ok and err, a declared record, a declared variant's

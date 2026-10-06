@@ -881,7 +881,7 @@ module grammar {
             wrap(g, begun, kind);
             return;
         }
-        // an if, a match or a block that starts a statement is the statement (as Rust's): what
+        // an if, a match or a block that starts a statement is the statement: what
         // follows its } is the next one, not an operator's other side
         let start = here(g);
         if at(g, "if") || at(g, "match") || at(g, "\{") { postfix(g); } else { expr(g); }

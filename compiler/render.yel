@@ -1,6 +1,6 @@
-// Render: a func's IR (ir.yel) as C, as Porffor's render.js: render-expr for a value, render-stmt
-// for a statement, a body cut at its first terminator, a label written only where a goto names
-// it. Part of the generator's module. Where yel adds to it: the func's frame, the collector's
+// Render: a func's IR (ir.yel) as C: render-expr for a value, render-stmt for a statement, a body
+// cut at its first terminator, a label written only where a goto names it. Part of the
+// generator's module. Besides: the func's frame, the collector's
 // roots (a slot for each pointer of a rooted local, written where the local is assigned).
 
 // the func being written: its C lines; each local's C name, and its pointers (as C) and where their
@@ -210,7 +210,7 @@ module gen {
         out
     }
 
-    // a value where any expression fits (Porffor's rx(node, P_COMMA)): an operator's outer
+    // a value where any expression fits (at the comma's precedence): an operator's outer
     // parentheses dropped
     top-expr: func(r: Render, n: Node) -> string {
         match n.kind {

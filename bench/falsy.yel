@@ -1,4 +1,4 @@
-// Porffor's bench/falsy.js: two !s, a billion times
+// Two !s, a billion times
 
 from "wasi:clocks" include monotonic-clock;
 

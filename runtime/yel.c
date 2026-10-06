@@ -235,7 +235,7 @@ uint8_t y_class_of[8192 / 16 + 1];
 y_page *y_pages[Y_NCLASS], *y_tails[Y_NCLASS], *y_cursor[Y_NCLASS], *y_larges;
 // a collection runs once the heap has doubled (tripled or quadrupled: see y_collect) since the last
 // one left it, and never below
-// y_heap_min (YEL_GC_MIN_MB, default 4, as Go's): a program that keeps most of what it makes (a compile)
+// y_heap_min (YEL_GC_MIN_MB, default 4): a program that keeps most of what it makes (a compile)
 // runs faster with more (fewer collections), a component stays smaller with less
 size_t y_heap_bytes, y_heap_min = (size_t)4 << 20, y_heap_limit = (size_t)4 << 20;
 long y_stress, y_stress_left, y_collections, y_verbose;
@@ -1172,6 +1172,41 @@ ystr yel_host_triple(void) {
 	return (ystr){ (int64_t)strlen(triple), triple };
 }
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+#if defined(__APPLE__) || defined(__linux__)
+#include <limits.h>
+#include <stdlib.h>
+#endif
+
+/**
+ * The running program's own file, every symlink followed (a link on PATH, Homebrew's in bin/),
+ * found once; "" where the system does not say (WASI, another one).
+ */
+ystr yel_executable_path(void) {
+#if defined(__APPLE__) || defined(__linux__)
+	static char resolved[PATH_MAX];
+	static int found = -1;
+
+	if (found < 0) {
+		found = 0;
+#if defined(__APPLE__)
+		char raw[PATH_MAX];
+		uint32_t size = sizeof raw;
+
+		if (_NSGetExecutablePath(raw, &size) == 0 && realpath(raw, resolved)) found = 1;
+#else
+		if (realpath("/proc/self/exe", resolved)) found = 1;
+#endif
+	}
+	const char *path = found ? resolved : "";
+#else
+	const char *path = "";
+#endif
+	return (ystr){ (int64_t)strlen(path), path };
+}
+
 /** What main does last: stdout flushed, main's value the exit code. */
 int y_finish(int64_t code) {
 	y_out_flush();
@@ -1246,7 +1281,7 @@ Y_NORETURN void y_abi_bad(int32_t what) {
 static max_align_t y_abi_nothing;
 
 /** What the host wrote (len bytes or items, from cabi_realloc) freed, once lifted: an empty one's
- *  never (the host may not have asked for memory: its pointer is then any, jco's 1). */
+ *  never (the host may not have asked for memory: its pointer is then anything: 1, say). */
 void y_abi_free_host(void *ptr, size_t len) {
 	if (len > 0 && ptr != (void *)&y_abi_nothing) free(ptr);
 }

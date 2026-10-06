@@ -1,5 +1,4 @@
-// Porffor's bench/strcmp.js: two long strings of one length, one byte apart, compared 10 million
-// times
+// Two long strings of one length, one byte apart, compared 10 million times
 
 from "wasi:clocks" include monotonic-clock;
 

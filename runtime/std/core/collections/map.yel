@@ -1,8 +1,8 @@
 // Maps: values by keys of any type (K: equal as == says, hashed to match), in the order they were
-// set, as JS's Map and Rust's HashMap: map.new(), m.has(k), m.get(k) (an option), m[k] (a panic
-// where it has none), m.set(k, v), m.remove(k), m.keys(), m.values(), m.len(); sets (set.yel) are maps whose values are (). The table is here, over memory.yel's
-// intrinsics: entries in the order they were made, and an index (open addressing) from a key's
-// hash to its entry. The runtime only makes a map's memory.
+// set: map.new(), m.has(k), m.get(k) (an option), m[k] (a panic where it has none), m.set(k, v),
+// m.remove(k), m.keys(), m.values(), m.len(); sets (set.yel) are maps whose values are (). The
+// table is here, over memory.yel's intrinsics: entries in the order they were made, and an index
+// (open addressing) from a key's hash to its entry. The runtime only makes a map's memory.
 
 module map {
     // a new map, empty (map.new())

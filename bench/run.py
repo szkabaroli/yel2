@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Porffor's benchmarks (external/porffor/bench) against their ports to yel (bench/*.yel), as
-Porffor's bench/ci.mjs runs its own: each program compiled to C (yelc here, Porffor's CLI there),
-built by the same C compiler (clang -O3), then each run RUNS times one after another; the median
-wall time, the compile time, the C's size and the binary's.
+"""The benchmarks' original programs against their ports to yel (bench/*.yel): each program
+compiled to C (yelc for the port, the other compiler's CLI for the original), built by the same C
+compiler (clang -O3), then each run RUNS times one after another; the median wall time, the
+compile time, the C's size and the binary's.
 
   bench/run.py [name...]        (default: every bench/*.yel)
 
-BENCH_RUNS=n runs each n times (default 3); CC picks the C compiler; PORFFOR=<dir> is Porffor's
-checkout (default ../porffor, beside yel2 in external/). A program Porffor has no .js for, or a
-Porffor that does not build it, has its column empty. Writes the table as Markdown to stdout and the
-numbers as JSON to build/bench/results.json.
+BENCH_RUNS=n runs each n times (default 3); CC picks the C compiler; PORFFOR=<dir> is the other
+compiler's checkout (default: the one beside yel2 in external/). A program with no original there,
+or one the other compiler does not build, has its column empty. Writes the table as Markdown to
+stdout and the numbers as JSON to build/bench/results.json.
 """
 import json, os, shutil, statistics, subprocess, sys, time
 

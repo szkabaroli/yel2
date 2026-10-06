@@ -1,6 +1,5 @@
 // The collector's roots: which funcs can collect, and which locals the collector must see (a slot
-// in the func's frame). Porffor has no counterpart (its collector runs between turns); yel may
-// collect in any call that allocates.
+// in the func's frame). yel may collect in any call that allocates, not only between turns.
 
 // what the walk over a func learns: the positions (two for each statement: its uses, then what it
 // allocates) of each local's first def and last use, where allocations happen, and, for each loop

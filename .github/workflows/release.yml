@@ -1,10 +1,10 @@
 name: Release
 
-# A pre-alpha release of each push to main (as Porffor's alpha releases): the next pre-alpha-<n>
-# tag, its version ("pre-alpha 3 (1a2b3c4 2026-10-06)", what yelc --version says: build.yel's
-# -Dversion, from YEL_VERSION, embedded in the compiler), the compiler bootstrapped and tested on
-# each target's own runner at -O2, each archive made and checked by tools/package.sh, then a
-# GitHub pre-release with every archive and the commits since the last one.
+# A pre-alpha release of each push to main: the next pre-alpha-<n> tag, its version ("pre-alpha 3
+# (1a2b3c4 2026-10-06)", what yelc --version says: build.yel's -Dversion, from YEL_VERSION, embedded
+# in the compiler), the compiler bootstrapped and tested on each target's own runner at -O2, each
+# archive made and checked by tools/package.sh, then a GitHub pre-release with every archive and
+# the commits since the last one, and the Homebrew formula (Formula/yel.rb) written for it.
 on:
   push:
     branches: [main]
@@ -147,3 +147,32 @@ jobs:
             --notes-file release-notes.md \
             --prerelease \
             *.tar.gz
+
+  # the Homebrew formula (this repository is its tap) for the release: its archives' URLs and
+  # SHA-256s, committed to main (a push by the workflow's own token starts no workflow)
+  formula:
+    needs: [prepare, release]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: download archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: out
+          merge-multiple: true
+      - name: write and commit the formula
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir -p Formula
+          tools/formula.sh "$TAG" out > Formula/yel.rb
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/yel.rb
+          if git diff --cached --quiet; then echo 'formula: unchanged'; exit 0; fi
+          git commit -m "chore: Homebrew formula for $TAG"
+          git push origin HEAD:main
+

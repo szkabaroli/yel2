@@ -1,4 +1,4 @@
-// Diagnostics: what the compiler tells about a program it does not compile, as rustc does. An error
+// Diagnostics: what the compiler tells about a program it does not compile. An error
 // is its message, where it is (its primary span, underlined ^^^, with a label of its own), other
 // places that explain it (secondary labels, underlined ---), and notes and help after:
 //
@@ -15,7 +15,7 @@
 // Colored on a terminal (red for the error, blue for the gutter), plain when stderr is not one or
 // NO_COLOR is set.
 //
-// Errors are kept, not shown at once (as rustc's DiagCtxt, clang's): a phase reports each one it
+// Errors are kept, not shown at once: a phase reports each one it
 // finds and goes on (the parser past the statement, the checker with an error type that fits
 // anything), so one run tells them all. Where a phase ends, any found are shown in the order of
 // their places and the compiler stops: a later phase never sees a program with an error. Past

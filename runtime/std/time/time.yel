@@ -1,7 +1,7 @@
 // Time: an instant (seconds and nanoseconds since 1970-01-01T00:00:00Z, as wasi:clocks' system clock
 // and Unix time count them: no leap seconds), a duration, and the calendar (proleptic Gregorian):
 // an instant's date and time at an offset from UTC, and back. Written and read as ISO 8601 / RFC
-// 3339 (2026-10-05T12:34:56.789Z, as JavaScript's toISOString; an offset as +02:00). Time zones
+// 3339 (2026-10-05T12:34:56.789Z; an offset as +02:00). Time zones
 // beyond a fixed offset are not here: WASI's timezone interface is not in hosts yet.
 //
 // One of std's packages: from "std:time" include time; then time.now(), time.parse(text),
@@ -36,7 +36,7 @@ module time {
 
     // ---- instants and durations
 
-    // an instant milliseconds after the epoch (before it: negative), as JavaScript's Date counts
+    // an instant milliseconds after the epoch (before it: negative)
     from-unix-millis: func(milliseconds: s64) -> instant { normalized(floor-div(milliseconds, 1000), floor-mod(milliseconds, 1000) * 1000000) }
 
     // an instant's milliseconds after the epoch (rounded down)
@@ -108,7 +108,7 @@ module time {
 
     // ---- ISO 8601
 
-    // an instant as JavaScript's toISOString writes it: 2026-10-05T12:34:56.789Z (milliseconds; a
+    // an instant in ISO 8601 with milliseconds: 2026-10-05T12:34:56.789Z (milliseconds; a
     // year past 0..9999 as ±YYYYYY)
     to-iso: func(at: instant) -> string {
         let when = to-date-time(at, 0);
@@ -332,7 +332,7 @@ module time {
 
 // how a duration shows (a module of its own: time's display is an instant's)
 module durations {
-    // a duration as Go shows one: 1h2m3.5s, 1.5ms, 0s
+    // a duration shown by its units: 1h2m3.5s, 1.5ms, 0s
     display: func(length: time.duration) -> string {
         let n = length.nanoseconds;
         if n == 0 { return "0s"; }
