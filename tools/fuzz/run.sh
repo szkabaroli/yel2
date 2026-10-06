@@ -53,7 +53,8 @@ if [ "$mode" = full ] || [ "$mode" = bitcode ]; then
 	clang -O2 -c -emit-llvm -Iruntime -Iruntime/libuv/include -o build/fuzz/runtime.bc runtime/yel.c || exit 1
 fi
 start=$(date +%s)
-seq "$first" $((first + count - 1)) | xargs -P "$jobs" -I{} sh tools/fuzz/case.sh {} "$size" "$mode" > build/fuzz/last.txt
+# (each case told as it is done, "ok <seed>" or what was kept: a run that is going shows it)
+seq "$first" $((first + count - 1)) | xargs -P "$jobs" -I{} sh tools/fuzz/case.sh {} "$size" "$mode" | tee build/fuzz/last.txt
 seconds=$(( $(date +%s) - start ))
 kept=$(grep -vc '^ok ' build/fuzz/last.txt)
 echo "$count cases ($mode, seeds $first to $((first + count - 1)), size $size, $jobs jobs) in ${seconds}s: $kept kept"

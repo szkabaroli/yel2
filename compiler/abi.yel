@@ -1026,7 +1026,7 @@ module gen {
                 ];
                 out.push(assign(i, int-const(0, s64)));
                 out.push(loop-stmt(some(bin("<", bool, local(i, s64), local(length, s64))), some(assign(i, bin("+", s64, local(i, s64), int-const(1, s64)))), body, -1));
-                out.push(runtime-call("free", [abi-field(src(), ["ptr",], Type.address-type),], Type.unit-type));
+                out.push(runtime-call("y_abi_free_host", [abi-field(src(), ["ptr",], Type.address-type), abi-field(src(), ["len",], Type.num("usize")),], Type.unit-type));
                 out.push(return-stmt(local(l, t)));
             }
             option-type(x) => {
@@ -1609,6 +1609,10 @@ module gen {
 // ================================================================ exports
 
 module gen {
+    // what an export calls first, the component made ready: and (its funcs keeping no frames,
+    // context.turns) told it collects only between turns, before anything allocates
+    ready: func(g: Gen) -> string { if g.context.turns { "y_ready_turns" } else { "y_ready" } }
+
     // a func of an exported module (`export module api`), as IR: the component's export
     // <package>/<module>[@version]#<func> (y_exp_<name>), which lifts its arguments, calls it, and
     // lowers its result; and its post-return (cabi_post_…), which frees what the result was
@@ -1634,7 +1638,7 @@ module gen {
         if by-memory { p.push(helper-local(e, usize, "p0", true)); }
         else { for index in 0..pflat.len() { p.push(helper-local(e, core-type(pflat[index]), "p{index}", true)); } }
         let out = e.body;
-        out.push(runtime-call("y_ready", [], Type.unit-type));
+        out.push(runtime-call(ready(g), [], Type.unit-type));
         for n in globals-start(g) { out.push(n); }
         let args = lift-export-args(g, e, iface, fname, pts, pflat, by-memory, p);
         let key = if g.funcs.has(f.name) { f.name } else { "u_" + k };
@@ -1729,7 +1733,7 @@ module gen {
         let p: list<s64> = [];
         if by-memory { p.push(helper-local(e, usize, "p0", true)); }
         else { for index in 0..pflat.len() { p.push(helper-local(e, core-type(pflat[index]), "p{index}", true)); } }
-        e.body.push(runtime-call("y_ready", [], Type.unit-type));
+        e.body.push(runtime-call(ready(g), [], Type.unit-type));
         for n in globals-start(g) { e.body.push(n); }
         let args = lift-export-args(g, e, iface, fname, pts, pflat, by-memory, p);
         let started = helper-local(e, root-type, "root", false);
@@ -1745,7 +1749,7 @@ module gen {
         let event = helper-local(cb, s32, "event", true);
         let waitable = helper-local(cb, s32, "waitable", true);
         let code = helper-local(cb, s32, "code", true);
-        cb.body.push(runtime-call("y_ready", [], Type.unit-type));
+        cb.body.push(runtime-call(ready(g), [], Type.unit-type));
         for n in globals-start(g) { cb.body.push(n); }
         let woken = runtime-call("y_async_host_event", [convert(u32, local(event, s32)), convert(u32, local(waitable, s32)), convert(u32, local(code, s32)),], root-type);
         let runner-again = func-ref("yel:std/async.run-ready-of", run, run, address);
@@ -1962,6 +1966,23 @@ module gen {
         }
     }
 
+    // whether the type named n is a WIT interface's (used from it), not yel's (defined where it
+    // is used)
+    @(private) from-wit: func(g: Gen, n: Name) -> bool {
+        let scope = if g.symbols.records.has(n) {
+            g.symbols.records[n].scope
+        } else if g.symbols.variants.has(n) {
+            g.symbols.variants[n].scope
+        } else if g.symbols.flags.has(n) {
+            g.symbols.flags[n].scope
+        } else if g.symbols.resources.has(n) {
+            g.symbols.resources[n].scope
+        } else {
+            return false;
+        };
+        scope.pkg.wit
+    }
+
     wit-interface: func(g: Gen, m: string, funcs: list<Func>, out: list<string>) {
         let types: list<string> = [];
         for f in funcs {
@@ -1971,7 +1992,7 @@ module gen {
         out.push(c"interface {wit-ident(m)} {");
         for n in types {
             let type-name = intern(n);
-            if find-byte(n, 58).unwrap-or(-1) > 0 {
+            if from-wit(g, type-name) {
                 // a WIT interface's type: used from it
                 let dot = n.len() - base-name(n).len() - 1;
                 let iface = n.substring(0, dot);

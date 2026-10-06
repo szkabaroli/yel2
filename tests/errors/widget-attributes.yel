@@ -1,0 +1,13 @@
+// error: 8:9: items: a widget's attribute is a string (or strings: "a" | "b"), bool, s32, f64 or dom.color
+// error: 9:12: on.press is an event: give it a func's type (on.click: func(click-event);)
+// error: 10:12: on.check gives nothing back: func(T), no -> T
+// error: 11:12: on.pick: an event carries an event-payload, or one of its cases' values (click-event, selection, string, drop-event, key-event, input-change, clipboard-data, grid-cell, grid-range), not s32
+// a widget's attributes are what the host takes, its events what it sends
+module ui {
+    widget Picker {
+        items: list<string>;
+        on.press: s32;
+        on.check: func() -> bool;
+        on.pick: func(s32);
+    }
+}

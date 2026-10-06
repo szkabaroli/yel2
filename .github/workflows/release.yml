@@ -1,0 +1,148 @@
+name: Release
+
+# A pre-alpha release of each push to main (as Porffor's alpha releases): the next pre-alpha-<n>
+# tag, its version ("pre-alpha 3 (1a2b3c4 2026-10-06)", what yelc --version says: build.yel's
+# -Dversion, from YEL_VERSION, embedded in the compiler), the compiler bootstrapped and tested on
+# each target's own runner at -O2, each archive made and checked by tools/package.sh, then a
+# GitHub pre-release with every archive and the commits since the last one.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    # releases only from the repository itself, never from a fork
+    if: github.repository == 'szkabaroli/yel2'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: determine version
+        id: version
+        shell: bash
+        run: |
+          latest=$(git tag --list 'pre-alpha-*' | sed 's/^pre-alpha-//' | grep -E '^[0-9]+$' | sort -n | tail -1)
+          latest=${latest:-0}
+          next=$((latest + 1))
+          sha=${GITHUB_SHA::7}
+          date=$(date -u +%Y-%m-%d)
+          {
+            echo "tag=pre-alpha-$next"
+            echo "version=pre-alpha $next ($sha $date)"
+            if [ "$latest" -gt 0 ]; then echo "previous_tag=pre-alpha-$latest"; else echo "previous_tag="; fi
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: darwin-arm64
+            runner: macos-15
+          - target: darwin-x64
+            runner: macos-15-intel
+    env:
+      YEL_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      # (the bitcode tests: clang and LLVM's opt, whose verifier checks every module yelc writes)
+      - name: install LLVM 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          echo /usr/lib/llvm-22/bin >> "$GITHUB_PATH"
+      - name: install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      # (-O2, as --full builds it, without the GC-stress self-compiles test.yml runs)
+      - name: bootstrap and test
+        shell: bash
+        run: OPT=-O2 ./bootstrap.sh 2>&1 | tee bootstrap.log
+      - name: package and check
+        run: tools/package.sh '${{ matrix.target }}' "$YEL_VERSION" out
+      - name: upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: out/yel-${{ matrix.target }}.tar.gz
+          retention-days: 1
+      - name: upload log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-${{ matrix.target }}
+          path: bootstrap.log
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: download archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: out
+          merge-multiple: true
+      - name: release notes
+        env:
+          PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          if [ -n "$PREVIOUS_TAG" ]; then range="$PREVIOUS_TAG..$GITHUB_SHA"; else range="$GITHUB_SHA"; fi
+          {
+            echo "yel2 $VERSION: a pre-alpha. Anything may change, the language included."
+            echo
+            echo '### Install'
+            echo
+            echo '```sh'
+            echo "curl -sSfL https://github.com/$GITHUB_REPOSITORY/releases/download/${{ needs.prepare.outputs.tag }}/yel-linux-x64.tar.gz | tar -xz"
+            echo 'yel-linux-x64/bin/yelc --version'
+            echo '```'
+            echo
+            echo 'Each archive is yelc and yel-lsp with the runtime they read and link: keep its directory whole (yelc finds its home as the directory above its own), or set YEL_HOME. A C compiler (cc, or CC) builds what yelc makes.'
+            echo
+            echo '### Commits'
+            echo
+            git log --first-parent --format="- [\`%h\`](https://github.com/$GITHUB_REPOSITORY/commit/%H) %s" "$range"
+          } > out/release-notes.md
+      - name: create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out
+          gh release create '${{ needs.prepare.outputs.tag }}' \
+            --repo '${{ github.repository }}' \
+            --target '${{ github.sha }}' \
+            --title 'yel2 ${{ needs.prepare.outputs.version }}' \
+            --notes-file release-notes.md \
+            --prerelease \
+            *.tar.gz

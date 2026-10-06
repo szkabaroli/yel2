@@ -22,11 +22,39 @@ resource Lowerer {
     testing: bool,
     observable: bool,
     in-context: bool,
+    // @(container): the widget being lowered takes items (parts: only those, @(container(Tab));
+    // none: any); @(base): it is only other widgets' base, drawn by none
+    container: bool,
+    parts: list<string>,
+    base: bool,
 }
 
 module lower {
     // a reader of sources[source]: its tree parsed (kept in the context's trees), its scope its
     // file's (a first line //+build <target>: what its funcs are made for)
+    // the names the file's #embed directives give (each a string written out; another is the
+    // checker's error), in order
+    embedded: func(l: Lowerer) -> list<string> {
+        let out: list<string> = [];
+        embedded-in(l, l.root, out);
+        out
+    }
+
+    @(private) embedded-in: func(l: Lowerer, n: SyntaxNode, out: list<string>) {
+        for child in tree.child-nodes(n) {
+            if tree.kind(child) == NodeKind.directive && tokens(child)[0].green.text == "#embed" {
+                match args(l, child).get(0) {
+                    some(given) => match given.kind {
+                        str-lit(name) => out.push(name),
+                        _ => {}
+                    },
+                    none => {}
+                }
+            }
+            embedded-in(l, child, out);
+        }
+    }
+
     reader: func(context: Context, source: s64) -> Lowerer {
         let green = grammar.parse-file(context, source);
         lowerer(context, source, green)
@@ -48,6 +76,9 @@ module lower {
             made: [],
             testing: false,
             observable: false,
+            container: false,
+            parts: [],
+            base: false,
             in-context: false,
         };
         if starts-with(text, "//+build ") {
@@ -1095,7 +1126,7 @@ module lower {
     }
 
     // a regex literal: its pattern compiled (regexp's: a bad one told where it is written), its
-    // matcher a func made (yel, parsed: the next declaration's place's), and its value std's
+    // matcher a func made (as nodes: the next declaration's place's), and its value std's
     // regex.compiled(…) of them
     regex: func(l: Lowerer, n: SyntaxNode) -> Expr {
         let t = tokens(n)[0];
@@ -1111,29 +1142,20 @@ module lower {
                 return node(ExprKind.unit, at);
             }
         };
+        // (its matcher's name: the file's, and where in it the literal is)
         let name = "regex-at-{l.source}-{at.line}-{at.col}";
-        let text = regexp.matcher(program, name, flags.contains("m"));
-        l.context.sources.push({ path: "{l.context.sources[l.source].path} (regex at {at.line}:{at.col})", text: text, origin: some(at), });
-        let sub = reader(l.context, l.context.sources.len() - 1);
-        sub.scope = l.scope;
-        declarations(sub, l.made);
-        let names = program.names.map({ named -> quoted(named) });
-        let call = "regex.compiled({quoted(pattern)}, {quoted(flags)}, {program.groups}, {program.slots}, [{names.join(", ")}{if names.len() > 0 { "," } else { "" }}], {name})";
-        l.context.sources.push({ path: "{l.context.sources[l.source].path} (regex at {at.line}:{at.col})", text: call, origin: some(at), });
-        expression-source(l.context, l.context.sources.len() - 1)
-    }
-
-    // text as a yel string literal ("…": its \, " and braces escaped)
-    quoted: func(text: string) -> string {
-        let out = buffer(text.len() + 2);
-        out.push-byte(34);
-        for index in 0..text.len() {
-            let b = text.byte-at(index);
-            if b == 92 || b == 34 || b == 123 || b == 125 { out.push-byte(92); }
-            out.push-byte(b);
-        }
-        out.push-byte(34);
-        out.to-string()
+        l.made.push(Decl.func-decl(regexp.matcher(program, name, flags.contains("m"), l.scope)));
+        let value = build.module-call("regex", "compiled", [
+            build.text(pattern),
+            build.text(flags),
+            build.int(program.groups),
+            build.int(program.slots),
+            build.list-of(program.names.map({ named -> build.text(named) })),
+            build.name(name),
+        ]);
+        // (the literal's value where it is written)
+        value.span = at;
+        value
     }
 
     // ================================================================ statements
@@ -1326,6 +1348,8 @@ module lower {
     declaration: func(l: Lowerer, n: SyntaxNode, out: list<Decl>) {
         let kind = tree.kind(n);
         if kind == NodeKind.error { return; }
+        // (a cache kept: what other declarations' checks read of it, its interface, noted)
+        if l.context.cache.is-some() && kind != NodeKind.module-decl { l.context.interface.push("{l.scope.module}|{kind:?}|{interface-text(l, n)}"); }
         let attributes = nodes-of(n, NodeKind.attribute);
         if attributes.len() == 0 {
             declared(l, n, kind, out);
@@ -1335,6 +1359,9 @@ module lower {
         let outer-observable = l.observable;
         let outer-testing = l.testing;
         let outer-context = l.in-context;
+        let outer-container = l.container;
+        let outer-parts = l.parts;
+        let outer-base = l.base;
         let level = outer.private;
         for a in attributes {
             let words = tokens(a);
@@ -1349,6 +1376,19 @@ module lower {
                     l.testing = true;
                 } else if is-word(word, "context") {
                     l.in-context = true;
+                } else if is-word(word, "container") {
+                    l.container = true;
+                    // (container(Tab, …): its parts' names, up to the ))
+                    if index + 1 < words.len() && is-word(words[index + 1], "(") {
+                        let parts: list<string> = [];
+                        for at in index + 2..words.len() {
+                            if is-word(words[at], ")") { break; }
+                            if words[at].green.kind == TokenKind.id { parts.push(token-name(words[at])); }
+                        }
+                        l.parts = parts;
+                    }
+                } else if is-word(word, "base") {
+                    l.base = true;
                 }
             }
         }
@@ -1365,7 +1405,51 @@ module lower {
         l.observable = outer-observable;
         l.testing = outer-testing;
         l.in-context = outer-context;
+        l.container = outer-container;
+        l.parts = outer-parts;
+        l.base = outer-base;
         l.scope = outer;
+    }
+
+    // what other declarations' checks read of a declaration: a func's text but its body, any
+    // other's whole text
+    @(private) interface-text: func(l: Lowerer, n: SyntaxNode) -> string {
+        let end = tree.end-offset(n);
+        if tree.kind(n) == NodeKind.func-decl {
+            match first-of(n, NodeKind.block) {
+                some(body) => { end = body.offset; }
+                none => {}
+            }
+        }
+        l.text.substring(n.offset, end)
+    }
+
+    // a declaration's keyword: its first own token (record, resource, variant, enum: its
+    // attributes are nodes of their own)
+    @(private) keyword: func(n: SyntaxNode) -> string {
+        let own = tokens(n);
+        if own.len() > 0 { own[0].green.text } else { "" }
+    }
+
+    // the text of n's own token right after its first token v ("" for none)
+    @(private) word-after: func(n: SyntaxNode, v: string) -> string {
+        let own = tokens(n);
+        for index in 0..own.len() - 1 {
+            if is-word(own[index], v) { return own[index + 1].green.text; }
+        }
+        ""
+    }
+
+    // the words of n's own tokens between its first token from and the next to after it
+    @(private) between-words: func(n: SyntaxNode, from: string, to: string) -> list<string> {
+        let out: list<string> = [];
+        let inside = false;
+        for t in tokens(n) {
+            if inside && is-word(t, to) { return out; }
+            if inside { out.push(t.green.text); }
+            if !inside && is-word(t, from) { inside = true; }
+        }
+        out
     }
 
     // a declaration's name, noted (where a language server takes a definition to)
@@ -1489,14 +1573,18 @@ module lower {
             l.scope = outer;
             return;
         }
+        if kind == NodeKind.widget-decl {
+            widget-declaration(l, n, out);
+            return;
+        }
         if kind == NodeKind.view-decl {
             view-declaration(l, n, out);
             return;
         }
         let decl-span = keyword-span(l, n);
         if kind == NodeKind.record-decl {
-            let value = has(n, "record");
-            let (rname, _) = declared-name(l, n, if value { "record" } else { "resource" });
+            let value = keyword(n) == "record";
+            let (rname, _) = declared-name(l, n, keyword(n));
             let fields: list<string> = [];
             let types: list<Type> = [];
             let ignored: list<string> = [];
@@ -1530,7 +1618,7 @@ module lower {
                 name: tname,
                 target: type-of(l, if parts.len() > 0 { some(parts[0]) } else { none }),
                 resolved: Type.unit-type,
-                distinct: has(n, "distinct"),
+                distinct: word-after(n, "=") == "distinct",
             }));
             return;
         }
@@ -1572,7 +1660,7 @@ module lower {
             return;
         }
         if kind == NodeKind.variant-decl {
-            let (tname, _) = declared-name(l, n, if has(n, "variant") { "variant" } else { "enum" });
+            let (tname, _) = declared-name(l, n, keyword(n));
             let cases: list<CaseDecl> = [];
             for c in nodes-of(n, NodeKind.case-decl) {
                 match first-name(c) {
@@ -1625,8 +1713,10 @@ module lower {
             some(t) => token-span(l, t),
             none => node-span(l, n),
         };
-        let is-extern = has(n, "extern");
-        let is-async = has(n, "async");
+        // (what is written between its name's : and func: a func named async is none)
+        let qualifiers = between-words(n, ":", "func");
+        let is-extern = qualifiers.contains("extern");
+        let is-async = qualifiers.contains("async");
         let tps: list<string> = [];
         match first-of(n, NodeKind.type-params) {
             some(tp) => {
@@ -1689,7 +1779,7 @@ module lower {
             }));
             return;
         }
-        out.push(Decl.func-decl({
+        let made: Func = {
             span: decl-span,
             scope: l.scope,
             name: fname,
@@ -1708,11 +1798,211 @@ module lower {
             bindings: { exprs: map.new(), assigns: map.new(), },
             defaults: defaults,
             is-test: l.testing,
-        }));
+        };
+        // (a cache kept: its text as written, where it is: what its checked body is kept by)
+        if l.context.cache.is-some() {
+            l.context.func-texts.set(made, "{l.context.sources[l.source].path}@{n.offset}:{l.text.substring(n.offset, tree.end-offset(n))}");
+        }
+        out.push(Decl.func-decl(made));
     }
 
-    // view Name { fields; its element }: its fields and element as written, then the yel it is
-    // (lower-view)
+    // widget Name { attributes; events }: what an element of it is made of, as funcs of its module
+    // (a view of any package that includes the module calls them): widget-Name-make; for each
+    // attribute a set (its type the attribute's: what a view gives it, checked); for each event an
+    // on (what the event carries, by the type it is declared with, given to the view's closure);
+    // and, @(container), container (a view gives a widget items only where it has it)
+    @(private) widget-declaration: func(l: Lowerer, n: SyntaxNode, out: list<Decl>) {
+        let named = first-name-after(n, "widget");
+        let wname = match named {
+            some(t) => token-name(t),
+            none => "",
+        };
+        let named-at = match named {
+            some(t) => token-span(l, t),
+            none => nowhere(),
+        };
+        let made = { f: string, params: list<string>, param-types: list<Type>, result: Type, body: list<Stmt> ->
+            out.push(Decl.func-decl(build.func(l.scope, named-at, "widget-{wname}-{f}", params, param-types, result, body)));
+        };
+        // (its module a widget set's: no interface of the component)
+        if l.scope.module != "" { l.scope.pkg.modules.set(l.scope.module, "widgets"); }
+        // (a base: its fields other widgets', nothing of its own)
+        if l.base { return; }
+        let node-type = Type.num("u32");
+        made("make", [], [], node-type, [build.value(build.module-call("dom", "create-element", [build.text(wname),])),]);
+        if l.container {
+            made("container", [], [], Type.unit-type, []);
+            // (what it holds: its parts, each by name, and none else; else anything)
+            if l.parts.len() == 0 { made("holds-any", [], [], Type.unit-type, []); }
+            for part in l.parts { made("holds-{part}", [], [], Type.unit-type, []); }
+        }
+        let fields: list<SyntaxNode> = [];
+        widget-fields(l, n, wname, [], fields);
+        let names: list<string> = [];
+        for c in fields {
+            let field-name = name-before(c, ":");
+            if field-name.len() == 0 { continue; }
+            let written = token-name(field-name[0]);
+            let at = token-span(l, field-name[0]);
+            let shown = if after-on(c, field-name[0]) { "on.{written}" } else { written };
+            if names.contains(shown) {
+                view-error(l, at, "widget {wname} has {shown} already (one of its bases')");
+                continue;
+            }
+            names.push(shown);
+            let parts = nodes(c);
+            let ty = if parts.len() > 0 { parse-type(l, parts[0]) } else { Type.unit-type };
+            if after-on(c, field-name[0]) {
+                // (on: a closure given the value, run for its case; when: one that takes none, run
+                // whatever the event carries)
+                let listen = { run: list<Stmt> -> [
+                    build.bind("id", build.module-call("view-events", "owned-handler", [build.closure-of(["payload",], run),])),
+                    build.run(build.module-call("dom", "add-event-listener", [build.name("node"), build.text(written), build.name("id"),])),
+                ] };
+                match widget-event(l, ty, written, at, false) {
+                    some(dispatched) => made("on-{written}", ["node", "run",], [node-type, ty,], Type.unit-type, listen(dispatched)),
+                    none => { continue; }
+                }
+                match widget-event(l, ty, written, at, true) {
+                    some(dispatched) => made("when-{written}", ["node", "run",], [node-type, Type.func-type({ params: [], result: Type.unit-type, }),], Type.unit-type, listen(dispatched)),
+                    none => {}
+                }
+                continue;
+            }
+            let case = attribute-case(ty);
+            if case == "" {
+                view-error(l, at, "{written}: a widget's attribute is a string (or strings: \"a\" | \"b\"), bool, s32, f64 or dom.color");
+                continue;
+            }
+            let value = build.method(build.field(build.name("dom"), "attribute-value"), case, [build.name("value"),]);
+            made("set-{written}", ["node", "value",], [node-type, ty,], Type.unit-type, [
+                build.run(build.module-call("dom", "set-attribute", [build.name("node"), build.text(written), value,])),
+            ]);
+            // (a value of the attribute's type, as itself: what reads one kept current is typed
+            // by, its literals ("bold") the attribute's; and as the host takes it)
+            made("as-{written}", ["value",], [ty,], ty, [build.value(build.name("value")),]);
+            // (as std's view-nodes.Value; a color's kept only as a style is)
+            let as-value = if case == "str" { "text" } else if case == "bool" { "flag" } else if case == "s32" { "whole" } else if case == "f64" { "real" } else { "" };
+            if as-value != "" {
+                made("value-{written}", ["value",], [ty,], Type.named(intern("view-nodes.Value")), [
+                    build.value(build.method(build.field(build.name("view-nodes"), "Value"), as-value, [build.name("value"),])),
+                ]);
+            }
+        }
+    }
+
+    // a widget's fields, each base's (Name: Base, …: a widget of its module, in this file) and
+    // then its own (one declared again told there), into out; seen: the widgets on the way (a
+    // base of itself is told)
+    @(private) widget-fields: func(l: Lowerer, n: SyntaxNode, wname: string, seen: list<string>, out: list<SyntaxNode>) {
+        let own = tokens(n);
+        let after = false;
+        for t in own {
+            if is-word(t, "\{") { break; }
+            if is-word(t, ":") {
+                after = true;
+                continue;
+            }
+            if !after || t.green.kind != TokenKind.id { continue; }
+            let base = token-name(t);
+            if base == wname || seen.contains(base) {
+                view-error(l, token-span(l, t), "widget {wname} is a base of itself, through {base}");
+                continue;
+            }
+            match widget-named(n, base) {
+                some(found) => {
+                    let further: list<string> = [];
+                    for s in seen { further.push(s); }
+                    further.push(wname);
+                    widget-fields(l, found, base, further, out);
+                }
+                none => view-error(l, token-span(l, t), "no widget {base} in this module, in this file: a widget's base is one of its own"),
+            }
+        }
+        for c in nodes(n) { if tree.kind(c) == NodeKind.view-field { out.push(c); } }
+    }
+
+    // the widget named name in the module n is declared in (none: none there)
+    @(private) widget-named: func(n: SyntaxNode, name: string) -> option<SyntaxNode> {
+        let module = tree.ancestors(n).filter({ a -> tree.kind(a) == NodeKind.module-decl });
+        if module.len() == 0 { return none; }
+        widget-in(module[0], name)
+    }
+
+    @(private) widget-in: func(n: SyntaxNode, name: string) -> option<SyntaxNode> {
+        for c in nodes(n) {
+            if tree.kind(c) == NodeKind.widget-decl {
+                match first-name-after(c, "widget") {
+                    some(t) => { if token-name(t) == name { return some(c); } }
+                    none => {}
+                }
+            }
+            match widget-in(c, name) {
+                some(found) => { return some(found); }
+                none => {}
+            }
+        }
+        none
+    }
+
+    // what a widget's event gives the view's closure (run), from what the event carries (payload):
+    // nothing (unread: a closure that takes nothing, run whatever the event carries); the
+    // event-payload itself; or the value of the case its type is (run only for that case)
+    @(private) widget-event: func(l: Lowerer, t: Type, event: string, at: Span, unread: bool) -> option<list<Stmt>> {
+        let shape = match t {
+            func-type(f) => f,
+            _ => {
+                view-error(l, at, "on.{event} is an event: give it a func's type (on.click: func(click-event);)");
+                return none;
+            }
+        };
+        match shape.result {
+            unit-type => {}
+            _ => {
+                view-error(l, at, "on.{event} gives nothing back: func(T), no -> T");
+                return none;
+            }
+        }
+        // (a closure that takes nothing: run whatever the event carries)
+        if unread || shape.params.len() == 0 { return some([build.run(build.call("run", [])),]); }
+        if shape.params.len() > 1 {
+            view-error(l, at, "on.{event} gives one value, what the event carries: func(T)");
+            return none;
+        }
+        let written = written-type(shape.params[0]);
+        if written == "event-payload" { return some([build.run(build.call("run", [build.name("payload"),])),]); }
+        let types = ["click-event", "selection", "string", "drop-event", "key-event", "input-change", "clipboard-data", "grid-cell", "grid-range",];
+        let cases = ["click", "select", "value", "drop", "key", "input", "paste", "cell", "range",];
+        let index = types.index-of(written);
+        if index < 0 {
+            view-error(l, at, "on.{event}: an event carries an event-payload, or one of its cases' values ({types.join(", ")}), not {written}");
+            return none;
+        }
+        let only = Pattern.case({ name: cases[index], sub: name-pattern("value", true, nowhere()), span: nowhere(), name-span: nowhere(), });
+        let given = build.match-values(build.name("payload"), [only, Pattern.wild,], [build.call("run", [build.name("value"),]), node(ExprKind.block(empty-block()), nowhere()),]);
+        some([build.run(given),])
+    }
+
+    // the case of dom.attribute-value an attribute of type t is set as ("": none)
+    @(private) attribute-case: func(t: Type) -> string {
+        match t {
+            string-type => "str",
+            bool-type => "bool",
+            num(n) => if n == "s32" || n == "f64" { n } else { "" },
+            named(n) => if name-text(n) == "dom.color" { "color" } else { "" },
+            singleton(x) => attribute-case(x.base),
+            union-type(members) => {
+                if members.len() == 0 { return ""; }
+                let first = attribute-case(members[0]);
+                for member in members { if attribute-case(member) != first { return ""; } }
+                first
+            }
+            _ => "",
+        }
+    }
+
+    // view Name { fields; its element }: its fields and element as written, then what it is, as
+    // nodes (lower-view)
     @(private) view-declaration: func(l: Lowerer, n: SyntaxNode, out: list<Decl>) {
         let named = first-name-after(n, "view");
         let vname = match named {
@@ -1732,12 +2022,34 @@ module lower {
                 let field-name = name-before(c, ":");
                 if field-name.len() == 0 { continue; }
                 note-member(l, vname, field-name[0]);
-                fields.push({
-                    name: token-name(field-name[0]),
-                    ty: if parts.len() > 0 { parse-type(l, parts[0]) } else { Type.unit-type },
-                    value: if parts.len() > 1 { expr(l, parts[1]) } else { node(ExprKind.unit, nowhere()) },
-                    private: has(c, "private"),
-                });
+                let written = token-name(field-name[0]);
+                let at = token-span(l, field-name[0]);
+                let ty = if parts.len() > 0 { parse-type(l, parts[0]) } else { Type.unit-type };
+                // (a callback: on.name, a func's type; none given, it does nothing. Its field's name
+                // on-name: what the view it is in sets, and what on.name in it reads)
+                let declared-on = after-on(c, field-name[0]);
+                let shown = if declared-on { "on.{written}" } else { written };
+                let callback = is-callback(ty);
+                if callback && !declared-on { view-error(l, at, "{written} is a callback (a func's type): declare it on.{written}: func(…);"); }
+                if !callback && declared-on { view-error(l, at, "{shown} is a callback: give it a func's type (on.pick: func(string);)"); }
+                if !declared-on && written.starts-with("on-") { view-error(l, at, "{written}: a callback is on.{written.substring(3, written.len())}"); }
+                let value = if parts.len() > 1 {
+                    expr(l, parts[1])
+                } else if callback {
+                    doing-nothing(l, ty, shown, at)
+                } else {
+                    view-error(l, at, "{shown} needs a value to start with: {shown}: T = value;");
+                    node(ExprKind.unit, nowhere())
+                };
+                let fname = if declared-on { "on-{written}" } else { written };
+                // (@(private): the view's own state; @(mount): a prop mount is given, set before the
+                // view is first built; let: made of what it reads; @(once) let: made once)
+                let mounted = has(c, "mount");
+                if mounted && callback { view-error(l, at, "{shown} is a callback: mount takes values (@(mount) intent: string)"); }
+                let is-let = has(c, "let");
+                let once = is-let && has(c, "once");
+                let again = if parts.len() > 1 { let written-value = parts[1]; { -> expr(l, written-value) } } else { let made = value; { -> made } };
+                fields.push({ name: fname, ty: ty, value: value, private: has(c, "private"), mount: mounted, derived: is-let && !once, once: once, again: again, span: at, });
             } else if kind == NodeKind.view-element {
                 top = some(view-element(l, c));
             }
@@ -1748,13 +2060,16 @@ module lower {
         }
     }
 
-    // Name { items }: an element as written
+    // Name { items }: an element as written; module.View { props }: another view's (its module)
     @(private) view-element: func(l: Lowerer, n: SyntaxNode) -> ViewElement {
-        let tag = match first-name(n) {
-            some(t) => token-name(t),
-            none => "",
-        };
-        let element: ViewElement = { tag: tag, attributes: [], items: [], handlers: [], };
+        let named = tokens(n).filter({ t -> t.green.kind == TokenKind.id });
+        let dotted = tokens(n).len() > 1 && is-word(tokens(n)[1], ".");
+        let tag = if named.len() > 0 { token-name(named[if dotted && named.len() > 1 { 1 } else { 0 }]) } else { "" };
+        let module = if dotted && named.len() > 1 { token-name(named[0]) } else { "" };
+        // (another view's place its tag, View of module.View: where a hover or a jump finds it)
+        let at = if named.len() > 0 { token-span(l, named[if dotted && named.len() > 1 { 1 } else { 0 }]) } else { nowhere() };
+        let module-at = if dotted && named.len() > 1 { token-span(l, named[0]) } else { nowhere() };
+        let element: ViewElement = { tag: tag, module: module, span: at, module-span: module-at, attributes: [], items: [], };
         view-items(l, n, some(element), element.items);
         element
     }
@@ -1767,28 +2082,21 @@ module lower {
             else if kind == NodeKind.view-if { items.push(ViewItem.if-item(view-if(l, c))); }
             else if kind == NodeKind.view-for { items.push(ViewItem.for-item(view-for(l, c))); }
             else if kind == NodeKind.view-element { items.push(ViewItem.element(view-element(l, c))); }
-            else if kind == NodeKind.view-handler {
+            else if kind == NodeKind.view-children { items.push(ViewItem.children(node-span(l, c))); }
+            else if kind == NodeKind.view-attribute {
                 match where {
                     some(element) => {
-                        let event = match first-name-after(c, "on") {
-                            some(t) => token-name(t),
-                            none => "",
-                        };
-                        let body = match first-node(c) {
-                            some(b) => block(l, b),
-                            none => empty-block(),
-                        };
-                        element.handlers.push({ event: event, body: body, span: node-span-first-token(l, c), });
-                    }
-                    none => {}
-                }
-            } else if kind == NodeKind.view-attribute {
-                match where {
-                    some(element) => {
-                        let style = has(c, "style");
-                        let named = tokens(c).filter({ t -> t.green.kind == TokenKind.id && !(style && is-word(t, "style")) });
-                        let aname = if named.len() > 0 { token-name(named[0]) } else { "" };
-                        element.attributes.push({ name: aname, style: style, value: expr-of(l, first-node(c)), });
+                        let own = tokens(c);
+                        let style = own.len() > 1 && is-word(own[0], "style") && is-word(own[1], ".");
+                        // (on.name: a handler, or another view's callback)
+                        let event = own.len() > 1 && is-word(own[0], "on") && is-word(own[1], ".");
+                        let ids = own.filter({ t -> t.green.kind == TokenKind.id });
+                        let named = ids.slice(if style || event { 1 } else { 0 }, ids.len());
+                        // (a style's name its segments, as the vocabulary writes it: pad.x)
+                        let aname = if named.len() == 0 { "" } else if style { named.map({ t -> token-name(t) }).join(".") } else { token-name(named[0]) };
+                        let at = if named.len() > 0 { token-span(l, named[0]) } else { nowhere() };
+                        if !style && !event && aname.starts-with("on-") { view-error(l, at, "{aname}: a handler is on.{aname.substring(3, aname.len())}"); }
+                        element.attributes.push({ name: aname, style: style, event: event, value: expr-of(l, first-node(c)), span: at, });
                     }
                     none => {}
                 }
@@ -1830,6 +2138,7 @@ module lower {
         else if kind == NodeKind.view-if { out.push(ViewItem.if-item(view-if(l, c))); }
         else if kind == NodeKind.view-for { out.push(ViewItem.for-item(view-for(l, c))); }
         else if kind == NodeKind.view-element { out.push(ViewItem.element(view-element(l, c))); }
+        else if kind == NodeKind.view-children { out.push(ViewItem.children(node-span(l, c))); }
     }
 
     // for name in items key(key) { body }
@@ -1847,152 +2156,293 @@ module lower {
             key: if parts.len() > 1 { expr(l, parts[1]) } else { node(ExprKind.unit, nowhere()) },
             body: body,
             span: node-span-first-token(l, n),
+            name-span: match named {
+                some(t) => token-span(l, t),
+                none => nowhere(),
+            },
         }
     }
 
-    // ================================================================ views (lowered to yel)
+    // ================================================================ views (lowered to nodes)
 
-
-    // the yel a view is (see view-declaration), parsed into out: its resource, observable (an effect for
-    // each binding that reads a field: the host told only of what changed), and its funcs
+    // what a view is (see view-declaration), into out: its resource, observable (an effect for
+    // each binding that reads a field: the host told only of what changed), and its funcs, built
+    // as nodes (build: no text written and parsed)
     lower-view: func(l: Lowerer, vname: string, named-at: Span, fields: list<ViewField>, top: ViewElement, out: list<Decl>) {
-        let w: ViewWriter = { lines: [], holes: map.new(), types: map.new(), fields: [], count: 0, };
-        for f in fields { w.fields.push(f.name); }
-        let r = vname;
-        view-line(w, "@(observable) resource {r} \{");
-        for f in fields { view-line(w, "{f.name}: {view-type(w, f.ty)},"); }
-        // the owner of what mount made (unmount lets it go), the top node, whether mounted
-        view-line(w, "@(ignored) view-owner: reactive.Owner,");
-        view-line(w, "@(ignored) view-tree: u32,");
-        view-line(w, "@(ignored) view-mounted: bool,");
-        view-line(w, "\}");
-        let starts: list<string> = [];
-        for f in fields { starts.push("{f.name}: {view-hole(w, f.value)}, "); }
-        view-line(w, "new: func() -> {r} \{ \{ {starts.join("")}view-owner: reactive.new-owner(), view-tree: 0, view-mounted: false, \} \}");
-        view-line(w, "mount: func(self: {r}, root: u32) \{");
-        view-line(w, "self.view-owner = reactive.new-owner();");
-        view-line(w, "self.view-mounted = true;");
-        view-line(w, "reactive.within(self.view-owner, \{ ->");
-        let tree = view-element-lines(l, w, top, { parent: "", anchor: "", nodes: "", });
-        view-line(w, "self.view-tree = {tree};");
-        view-line(w, "\});");
-        view-line(w, "dom.append-child(root, self.view-tree);");
-        view-line(w, "\}");
-        // (not mounted: what is let go removes no nodes of its own, the tree goes at once)
-        view-line(w, "unmount: func(self: {r}) \{ self.view-mounted = false; reactive.dispose(self.view-owner); dom.remove(self.view-tree); \}");
-        view-line(w, "dispatch: func(self: {r}, handler-id: u32) \{ view-events.dispatch(handler-id); \}");
-        for f in fields {
-            if f.private { continue; }
-            view-line(w, "get-{f.name}: func(self: {r}) -> {view-type(w, f.ty)} \{ self.{f.name} \}");
-            view-line(w, "set-{f.name}: func(self: {r}, value: {view-type(w, f.ty)}) \{ self.{f.name} = value; reactive.flush(); \}");
+        // (#children in its tree: a field of what it is given to build there, nothing to start
+        // with; once only, and never in a for's rows, which would build it again in each)
+        let placed = view-children-count(top.items);
+        if placed > 1 { view-error(l, view-children-span(top.items), "a view puts its children in one place: one #children"); }
+        if placed > 0 {
+            let nothing = { -> build.closure-of(["view-given-0", "view-given-1", "view-given-2",], []) };
+            fields.push({ name: "view-children", ty: view-children-type(), value: nothing(), private: false, mount: false, derived: false, once: false, again: nothing, span: nowhere(), });
         }
-        // a handler, let go with the owner it is made under
-        view-line(w, "@(private) view-listen: func(node: u32, event: string, run: func()) \{");
-        view-line(w, "let id = view-events.handler(run);");
-        view-line(w, "reactive.on-cleanup(\{ -> view-events.release(id); \});");
-        view-line(w, "dom.add-event-listener(node, event, id);");
-        view-line(w, "\}");
-        // an attribute's or a style's value as the host takes it
-        view-line(w, "@(private) view-value: func(v: string | bool | s32 | f64 | dom.color) -> dom.attribute-value \{");
-        view-line(w, "match v \{");
-        view-line(w, "let s: string => dom.attribute-value.str(s),");
-        view-line(w, "let b: bool => dom.attribute-value.bool(b),");
-        view-line(w, "let n: s32 => dom.attribute-value.s32(n),");
-        view-line(w, "let x: f64 => dom.attribute-value.f64(x),");
-        view-line(w, "let c: dom.color => dom.attribute-value.color(c),");
-        view-line(w, "\}");
-        view-line(w, "\}");
-        let text = w.lines.join("\n");
-        l.context.sources.push({ path: "{l.context.sources[l.source].path} (view {vname})", text: text, origin: some(named-at), });
-        let sub = reader(l.context, l.context.sources.len() - 1);
-        sub.scope = l.scope;
-        let made: list<Decl> = [];
-        declarations(sub, made);
-        for d in made {
-            match d {
-                record-decl(x) => { for i in 0..x.field-types.len() { x.field-types[i] = view-typed(w, x.field-types[i]); } }
-                func-decl(f) => {
-                    for i in 0..f.param-types.len() { f.param-types[i] = view-typed(w, f.param-types[i]); }
-                    f.result = view-typed(w, f.result);
-                    view-fill-block(w, f.body);
-                }
-                _ => {}
+        // (its lets: their values in fields of their own, none until made; a let named reads its
+        // getter, view-get-name)
+        let stored = fields.filter({ f -> !f.derived && !f.once });
+        let lets = fields.filter({ f -> f.derived || f.once });
+        let w: ViewWriter = { fields: [], lets: [], getters: [], count: 0, };
+        for f in stored { w.fields.push(f.name); }
+        for f in lets { w.lets.push(f.name); }
+        let r = Type.named(intern(vname));
+        let self = { -> build.name("self") };
+        // the owner of what mount made (unmount lets it go), the top node, whether mounted
+        let names: list<string> = [];
+        let types: list<Type> = [];
+        for f in stored {
+            names.push(f.name);
+            types.push(f.ty);
+        }
+        for f in lets {
+            names.push("view-let-{f.name}");
+            types.push(Type.option-type(f.ty));
+            if f.derived {
+                names.push("view-watch-{f.name}");
+                types.push(Type.option-type(Type.named(intern("observe.Watch"))));
             }
-            out.push(d);
+        }
+        let own = ["view-owner", "view-tree", "view-mounted",];
+        for n in own { names.push(n); }
+        types.push(Type.named(intern("reactive.Owner")));
+        types.push(Type.num("u32"));
+        types.push(Type.named(intern("view-nodes.Mounted")));
+        out.push(Decl.record-decl({ span: named-at, scope: l.scope, name: vname, fields: names, field-types: types, value: false, observable: true, ignored: own, }));
+        // (what each field's value reads of the view's: only what is declared before it)
+        let known = fields.map({ f -> f.name });
+        let read-by: list<list<string>> = [];
+        for index in 0..fields.len() {
+            let found: list<string> = [];
+            view-names(fields[index].value, known, found);
+            for n in found {
+                let at = known.index-of(n);
+                let what = if at == index { "itself" } else { "{n}, declared after it" };
+                if at >= index { view-error(l, fields[index].value.span, "{fields[index].name} reads {what}: a field's value reads only those declared before it"); }
+            }
+            read-by.push(found);
+        }
+        // new: each field's value to start with, in order; one a later one reads made first, a
+        // local of its name (a let read so too)
+        let read: list<bool> = fields.map({ f -> false });
+        let index = fields.len();
+        loop {
+            if index == 0 { break; }
+            index -= 1;
+            let f = fields[index];
+            if (f.derived || f.once) && !read[index] { continue; }
+            for n in read-by[index] { read[known.index-of(n)] = true; }
+        }
+        let making: list<Stmt> = [];
+        for index in 0..fields.len() {
+            if read[index] { making.push(build.typed-let(fields[index].name, fields[index].ty, fields[index].value)); }
+        }
+        let starts: list<Expr> = [];
+        for f in stored { starts.push(if read[known.index-of(f.name)] { build.name(f.name) } else { f.value }); }
+        for f in lets {
+            starts.push(build.name("none"));
+            if f.derived { starts.push(build.name("none")); }
+        }
+        starts.push(build.module-call("reactive", "new-owner", []));
+        starts.push(build.int(0));
+        starts.push(build.module-call("view-nodes", "unmounted", []));
+        making.push(build.value(build.record-of(names, starts)));
+        let made = { n: string, params: list<string>, param-types: list<Type>, result: Type, body: list<Stmt> ->
+            out.push(Decl.func-decl(build.func(l.scope, named-at, n, params, param-types, result, body)));
+        };
+        made("new", [], [], r, making);
+        // as it is first built: the state whose value reads the view's fields made again (its props
+        // set by now), and each @(once) let made, in order, nothing of it tracked
+        let first: list<Stmt> = [];
+        for index in 0..fields.len() {
+            let f = fields[index];
+            let again = f.again;
+            if f.once {
+                let e = again();
+                let _ = view-bind(l, w, e);
+                first.push(build.run(build.module-call("observe", "untracked", [build.closure([build.set-field(self(), "view-let-{f.name}", build.call("some", [e,])),]),])));
+            } else if f.private && !f.derived && read-by[index].len() > 0 {
+                let e = again();
+                let _ = view-bind(l, w, e);
+                first.push(build.run(build.module-call("observe", "untracked", [build.closure([build.set-field(self(), f.name, e),]),])));
+            }
+        }
+        let inside: list<Stmt> = [];
+        // (what std does with this program's dom: templates, a for's rows)
+        inside.push(build.bind("view-host-dom", build.module-call("view-host", "host", [])));
+        // (its package then has the compiler's view-host module, its dom where this file's is:
+        // packages.yel)
+        l.scope.pkg.views = true;
+        for request in l.scope.requests {
+            if request.names.contains("dom") { l.scope.pkg.views-dom = request.spec; }
+        }
+        let tree = view-element-stmts(l, w, top, { parent: "", anchor: "", nodes: "", }, inside);
+        inside.push(build.set-field(self(), "view-tree", build.name(tree)));
+        // (what a view that has this one in its tree calls, the package's own: its tree made under
+        // an owner of its own, its top node given; let go, its nodes the parent's to remove; a prop
+        // set, the parent's flush to run what it changed)
+        // (the root package's own, never its WIT's; an included package's for any view in another
+        // package to use: what includes it composes its views)
+        let own-scope = if l.scope.pkg.included { l.scope } else { build.private(l.scope) };
+        let package-own = { n: string, params: list<string>, param-types: list<Type>, result: Type, body: list<Stmt> ->
+            out.push(Decl.func-decl(build.func(own-scope, named-at, n, params, param-types, result, body)));
+        };
+        let building: list<Stmt> = [];
+        for s in first { building.push(s); }
+        building.push(build.set-field(self(), "view-owner", build.module-call("reactive", "new-owner", [])));
+        building.push(build.set-field(build.field(self(), "view-mounted"), "on", build.truth(true)));
+        building.push(build.run(build.module-call("reactive", "within", [build.field(self(), "view-owner"), build.closure(inside),])));
+        building.push(build.value(build.field(self(), "view-tree")));
+        package-own("view-build", ["self",], [r,], Type.num("u32"), building);
+        // (not mounted: what is let go removes no nodes of its own)
+        // (its derived lets' watches let go, each made again when next read)
+        let releasing = [
+            build.set-field(build.field(self(), "view-mounted"), "on", build.truth(false)),
+            build.run(build.module-call("reactive", "dispose", [build.field(self(), "view-owner"),])),
+        ];
+        for f in lets {
+            if !f.derived { continue; }
+            releasing.push(build.run(build.module-call("observe", "stop-held", [build.field(self(), "view-watch-{f.name}"),])));
+            releasing.push(build.set-field(self(), "view-watch-{f.name}", build.name("none")));
+            releasing.push(build.set-field(self(), "view-let-{f.name}", build.name("none")));
+        }
+        package-own("view-release", ["self",], [r,], Type.unit-type, releasing);
+        // each let's getter: a derived one made when read with none made, or with what it read
+        // changed since (its watch then sets it none, telling its readers); its maker runs its value
+        // tracked, keeping the watch
+        // (a let's getter where the let is written: what reads it there, as a hover or a jump finds it)
+        let getter = { f: ViewField, body: list<Stmt> ->
+            out.push(Decl.func-decl(build.func(own-scope, f.span, "view-get-{f.name}", ["self",], [r,], f.ty, body)));
+        };
+        for f in lets {
+            let held = build.field(self(), "view-let-{f.name}");
+            let given = build.value(build.module-call("reactive", "made-value", [build.field(self(), "view-let-{f.name}"),]));
+            if f.once {
+                getter(f, [given,]);
+                continue;
+            }
+            let stale = build.method(build.module-call("observe", "peek", [build.closure([build.value(held),]),]), "is-none", []);
+            getter(f, [
+                build.when(stale, [build.run(build.call("view-make-{f.name}", [self(),])),], []),
+                given,
+            ]);
+            let again = f.again;
+            let e = again();
+            let _ = view-bind(l, w, e);
+            package-own("view-make-{f.name}", ["self",], [r,], Type.unit-type, [
+                build.run(build.module-call("observe", "stop-held", [build.field(self(), "view-watch-{f.name}"),])),
+                build.typed-let("view-made", Type.option-type(f.ty), build.name("none")),
+                build.set-field(self(), "view-watch-{f.name}", build.call("some", [build.module-call("observe", "track", [
+                    build.closure([build.set("view-made", build.call("some", [e,])),]),
+                    build.closure([build.set-field(self(), "view-let-{f.name}", build.name("none")),]),
+                ]),])),
+                build.set-field(self(), "view-let-{f.name}", build.name("view-made")),
+            ]);
+        }
+        // (a view in another's tree: built, and let go with the owner it is built under)
+        package-own("view-owned", ["self",], [r,], Type.num("u32"), [
+            build.bind("node", build.call("view-build", [self(),])),
+            build.run(build.module-call("reactive", "on-cleanup", [build.closure([build.run(build.call("view-release", [self(),])),]),])),
+            build.value(build.name("node")),
+        ]);
+        for f in stored {
+            if f.private { continue; }
+            package-own("view-set-{f.name}", ["self", "value",], [r, f.ty,], Type.unit-type, [build.set-field(self(), f.name, build.name("value")),]);
+            // (a prop kept current by the view it is in: read, set, and set again each time what
+            // read reads changes to a value it was not)
+            if !is-callback(f.ty) {
+                package-own("view-keep-{f.name}", ["self", "read",], [r, Type.func-type({ params: [], result: f.ty, }),], Type.unit-type, [
+                    build.bind("last", build.call("read", [])),
+                    build.set-field(self(), f.name, build.name("last")),
+                    build.run(build.module-call("reactive", "watch", [build.name("read"), build.name("last"), build.closure-of(["now",], [build.set-field(self(), f.name, build.name("now")),]),])),
+                ]);
+            }
+            // (a value of the prop's type, as itself: what reads one kept current is typed by, its
+            // literals the prop's)
+            package-own("view-as-{f.name}", ["value",], [f.ty,], f.ty, [build.value(build.name("value")),]);
+        }
+        // (mount given the root, then each @(mount) prop: set before the tree is first built, as
+        // the host's mount(root, intent) gives a page where it opens)
+        let mount-names = ["self", "root",];
+        let mount-types = [r, Type.num("u32"),];
+        let mounting: list<Stmt> = [];
+        for f in fields {
+            if !f.mount { continue; }
+            mount-names.push(f.name);
+            mount-types.push(f.ty);
+            mounting.push(build.set-field(self(), f.name, build.name(f.name)));
+        }
+        mounting.push(build.run(build.module-call("dom", "append-child", [build.name("root"), build.call("view-build", [self(),]),])));
+        made("mount", mount-names, mount-types, Type.unit-type, mounting);
+        // (the tree goes at once)
+        made("unmount", ["self",], [r,], Type.unit-type, [
+            build.run(build.call("view-release", [self(),])),
+            build.run(build.module-call("dom", "remove", [build.field(self(), "view-tree"),])),
+        ]);
+        made("dispatch", ["self", "handler-id", "payload",], [r, Type.num("u32"), Type.named(intern("event-payload")),], Type.unit-type, [
+            build.run(build.module-call("view-events", "dispatch", [build.name("handler-id"), build.name("payload"),])),
+        ]);
+        for f in stored {
+            // (a callback's, a func: no WIT value, a prop for views only)
+            if f.private || is-callback(f.ty) { continue; }
+            made("get-{f.name}", ["self",], [r,], f.ty, [build.value(build.field(self(), f.name)),]);
+            made("set-{f.name}", ["self", "value",], [r, f.ty,], Type.unit-type, [
+                build.set-field(self(), f.name, build.name("value")),
+                build.run(build.module-call("reactive", "flush", [])),
+            ]);
         }
     }
-
-    view-line: func(w: ViewWriter, line: string) { w.lines.push(line); }
 
     // an error in what a view names (the view still lowered: each such error told)
     view-error: func(l: Lowerer, at: Span, message: string) {
         diagnostics.report(l.context, diagnostics.error(at, message, ""));
     }
 
-    // a new name of the view's yel (view-<what><n>)
+    // a new local of a view's funcs (view-<what><n>)
     view-local: func(w: ViewWriter, what: string) -> string {
         w.count += 1;
         "view-{what}{w.count}"
     }
 
-    // where e goes in the view's yel (its name there)
-    view-hole: func(w: ViewWriter, e: Expr) -> string {
-        let at = "view-hole-{w.holes.len()}";
-        w.holes.set(at, e);
-        at
-    }
-
-    view-type: func(w: ViewWriter, t: Type) -> string {
-        let at = "view-type-{w.types.len()}";
-        w.types.set(at, t);
-        at
-    }
-
-    // a type of the view's yel: the view's own, where it holds its place
-    view-typed: func(w: ViewWriter, t: Type) -> Type {
-        match t {
-            named(n) => w.types.get(name-text(n)).unwrap-or(t),
-            _ => t,
-        }
-    }
-
-    // what the view's yel holds in place of its expressions, put in
-    view-fill-expr: func(w: ViewWriter, e: Expr) {
+    // e, each field it names bare (count) the view's (self.count); whether it names one, or reads
+    // a for's row's item (its getter's call), so reads what changes: a binding of it is kept current
+    view-bind: func(l: Lowerer, w: ViewWriter, e: Expr) -> bool {
+        let reads-item = false;
         match e.kind {
-            name(n) => {
-                match w.holes.get(name-text(n)) {
-                    some(h) => {
-                        e.kind = h.kind;
-                        e.span = h.span;
-                        return;
-                    }
-                    none => {}
+            call(c) => {
+                if w.getters.contains(c.name) { reads-item = true; }
+                // (untracked(x): x read, nothing of it kept: what reads it is not made again when it
+                // changes)
+                if c.name == "untracked" && c.args.len() == 1 {
+                    let inner = c.args[0];
+                    let _ = view-bind(l, w, inner);
+                    e.kind = build.module-call("observe", "peek", [build.closure([build.value(inner),]),]).kind;
+                    return false;
                 }
             }
-            _ => {}
-        }
-        let xs: list<Expr> = [];
-        let bs: list<Block> = [];
-        walk.expr-parts(e, xs, bs);
-        for x in xs { view-fill-expr(w, x); }
-        for b in bs { view-fill-block(w, b); }
-    }
-
-    view-fill-block: func(w: ViewWriter, b: Block) {
-        for s in b.stmts {
-            let xs: list<Expr> = [];
-            let bs: list<Block> = [];
-            walk.stmt-parts(s, xs, bs);
-            for x in xs { view-fill-expr(w, x); }
-            for inner in bs { view-fill-block(w, inner); }
-        }
-    }
-
-    // e, each field it names bare (count) the view's (self.count); whether it names one (so reads
-    // the view's state: a binding of it is kept current)
-    view-bind: func(l: Lowerer, w: ViewWriter, e: Expr) -> bool {
-        match e.kind {
+            // (on.name(args): the view's callback called, { let f = self.on-name; f(args) })
+            method(m) => {
+                let callback = "on-{m.name}";
+                if is-on(m.target) && w.fields.contains(callback) {
+                    let held = view-local(w, "callback");
+                    for x in m.args { let _ = view-bind(l, w, x); }
+                    let called = node(ExprKind.call({ name: held, args: m.args, type-args: [], name-span: m.name-span, }), e.span);
+                    let target = node(ExprKind.name(intern("self")), nowhere());
+                    e.kind = ExprKind.block(build.block([build.bind(held, build.field(target, callback)), build.value(called),]));
+                    return true;
+                }
+            }
+            // (on.name: the view's callback, as a value: given along to another view)
+            field(f) => {
+                if is-on(f.target) && w.fields.contains("on-{f.name}") {
+                    e.kind = ExprKind.field({ target: node(ExprKind.name(intern("self")), nowhere()), name: "on-{f.name}", name-span: f.name-span, });
+                    return true;
+                }
+            }
             name(n) => {
+                // (a let: its getter's value)
+                if w.lets.contains(name-text(n)) {
+                    e.kind = ExprKind.call({ name: "view-get-{name-text(n)}", args: [node(ExprKind.name(intern("self")), nowhere()),], type-args: [], name-span: e.span, });
+                    return true;
+                }
                 if w.fields.contains(name-text(n)) {
                     e.kind = ExprKind.field({ target: node(ExprKind.name(intern("self")), nowhere()), name: name-text(n), name-span: e.span, });
                     return true;
@@ -2002,6 +2452,7 @@ module lower {
             closure(cl) => {
                 for q in cl.params {
                     if w.fields.contains(q) { view-error(l, e.span, "{q} is a field of the view: name the parameter otherwise"); }
+                    if w.lets.contains(q) { view-error(l, e.span, "{q} is a let of the view: name the parameter otherwise"); }
                 }
             }
             _ => {}
@@ -2009,7 +2460,7 @@ module lower {
         let xs: list<Expr> = [];
         let bs: list<Block> = [];
         walk.expr-parts(e, xs, bs);
-        let named = false;
+        let named = reads-item;
         for x in xs { if view-bind(l, w, x) { named = true; } }
         for b in bs { if view-bind-block(l, w, b) { named = true; } }
         named
@@ -2022,13 +2473,14 @@ module lower {
             match b.stmts[i] {
                 assign(a) => {
                     let field = name-text(a.name);
+                    if w.lets.contains(field) { view-error(l, b.spans[i], "{field} is a let, made of what it reads: it is never assigned"); }
                     if w.fields.contains(field) {
                         b.stmts[i] = Stmt.assign-field({ target: node(ExprKind.name(intern("self")), nowhere()), name: field, op: a.op, value: a.value, name-span: a.name-span, });
                         named = true;
                     }
                 }
                 let-stmt(x) => {
-                    if w.fields.contains(x.name) { view-error(l, b.spans[i], "{x.name} is a field of the view: name the local otherwise"); }
+                    if w.fields.contains(x.name) || w.lets.contains(x.name) { view-error(l, b.spans[i], "{x.name} is a field of the view: name the local otherwise"); }
                 }
                 for-stmt(x) => {
                     if w.fields.contains(x.name) { view-error(l, b.spans[i], "{x.name} is a field of the view: name the for's variable otherwise"); }
@@ -2044,170 +2496,551 @@ module lower {
         named
     }
 
-    // n where it goes
-    view-place: func(w: ViewWriter, n: string, at: ViewPlace) {
-        if at.parent == "" { return; }
-        if at.anchor == "" {
-            view-line(w, "dom.append-child({at.parent}, {n});");
-        } else {
-            view-line(w, "dom.insert-before({at.parent}, {n}, {at.anchor});");
-            view-line(w, "{at.nodes}.push({n});");
+    // whether e is the name on (on.name: a view's callback)
+    is-on: func(e: Expr) -> bool {
+        match e.kind {
+            name(n) => name-text(n) == "on",
+            _ => false,
         }
     }
 
-    // an element: made, its attributes set, its children made in it, its handlers added, and it
-    // put where it goes; its node's name
-    view-element-lines: func(l: Lowerer, w: ViewWriter, element: ViewElement, at: ViewPlace) -> string {
-        let n = view-local(w, "node");
-        view-line(w, "let {n} = dom.create-element(\"{element.tag}\");");
-        for a in element.attributes {
-            let set = if a.style { "dom.set-style" } else { "dom.set-attribute" };
-            let reads = view-bind(l, w, a.value);
-            let value = view-hole(w, a.value);
-            if !reads {
-                view-line(w, "{set}({n}, \"{a.name}\", view-value({value}));");
+    // whether a view's field is written on.name (named: its name's token)
+    after-on: func(n: SyntaxNode, named: SyntaxToken) -> bool {
+        let own = tokens(n);
+        for index in 2..own.len() {
+            if own[index].offset == named.offset { return is-word(own[index - 1], ".") && is-word(own[index - 2], "on"); }
+        }
+        false
+    }
+
+    // whether a field's type is a func's (a callback)
+    is-callback: func(t: Type) -> bool {
+        match t {
+            func-type(_) => true,
+            _ => false,
+        }
+    }
+
+    // a callback none was given: a closure of its parameters doing nothing (one that gives a
+    // value needs one to start with)
+    doing-nothing: func(l: Lowerer, t: Type, name: string, at: Span) -> Expr {
+        let shape = match t {
+            func-type(f) => f,
+            _ => { return node(ExprKind.unit, nowhere()); }
+        };
+        match shape.result {
+            unit-type => {}
+            _ => { view-error(l, at, "{name} gives a value: give it one to start with ({name}: func(…) -> T = \{ … \};)"); }
+        }
+        let params: list<string> = [];
+        for index in 0..shape.params.len() { params.push("view-given-{index}"); }
+        build.closure-of(params, [])
+    }
+
+    // n where it goes: appended to its parent, or put before the anchor of the branch or row it is
+    // in and kept as one of its parts (inner: the parts an if's or a for's anchor shows, "" for a
+    // node of its own)
+    view-place: func(n: string, inner: string, at: ViewPlace, out: list<Stmt>) {
+        if at.parent == "" { return; }
+        if at.anchor == "" {
+            out.push(build.run(build.module-call("dom", "append-child", [build.name(at.parent), build.name(n),])));
+        } else {
+            out.push(build.run(build.module-call("dom", "insert-before", [build.name(at.parent), build.name(n), build.name(at.anchor),])));
+            let part = if inner == "" {
+                build.module-call("view-nodes", "node", [build.name(n),])
             } else {
-                // its value again each time what it reads changes, the host told only where it differs
-                let f = view-local(w, "value");
-                let last = view-local(w, "last");
-                view-line(w, "let {f} = \{ -> view-value({value}) \};");
-                view-line(w, "let {last} = {f}();");
-                view-line(w, "{set}({n}, \"{a.name}\", {last});");
-                view-line(w, "let _ = reactive.effect(\{ -> let now = {f}(); if now != {last} \{ {set}({n}, \"{a.name}\", now); {last} = now; \} \{ -> \} \});");
+                build.module-call("view-nodes", "shown", [build.name(n), build.name(inner),])
+            };
+            out.push(build.run(build.method(build.name(at.nodes), "push", [part,])));
+        }
+    }
+
+    // a widget's element (Tag { … }, the widget Tag of a widget set in scope: its module's
+    // widget-Tag-* funcs, the checker's to find): made, each attribute set (one that reads what
+    // changes kept current), its handlers added (on.event: a closure, given what the event carries
+    // as the widget says), its items made in it (a container's only), and put where it goes; its
+    // node's name
+    view-element-stmts: func(l: Lowerer, w: ViewWriter, element: ViewElement, at: ViewPlace, out: list<Stmt>) -> string {
+        if element.module != "" { return view-component-stmts(l, w, element, at, out); }
+        let widget = { f: string, args: list<Expr>, span: Span ->
+            let made = node(ExprKind.call({ name: "widget-{element.tag}-{f}", args: args, type-args: [], name-span: span, }), span);
+            made
+        };
+        let n = view-local(w, "node");
+        // (its static part a template, view-nodes.template's: the element made with its constant
+        // attributes and styles, and, every part of it constant, what it holds; the calls that
+        // would have made them kept where they never run, the checker's to check)
+        let full = view-static(element);
+        let statics = element.attributes.filter({ a -> !a.event && template-value(a.value, a.style) != "" });
+        if full || statics.len() > 0 {
+            let ops = if full { template-ops(element) } else { "E{template-text(element.tag)}{template-attributes(statics)}U" };
+            out.push(build.bind(n, build.module-call("view-nodes", "template", [build.name("view-host-dom"), build.text(ops),])));
+            let checks: list<Stmt> = [];
+            view-checks(l, element, if full { element.attributes } else { statics }, full, checks);
+            out.push(build.when(build.truth(false), checks, []));
+            if full {
+                view-place(n, "", at, out);
+                return n;
+            }
+        } else {
+            out.push(build.bind(n, widget("make", [], element.span)));
+        }
+        for a in element.attributes {
+            if !a.event && template-value(a.value, a.style) != "" { continue; }
+            if a.event {
+                let _ = view-bind(l, w, a.value);
+                // (a closure that takes nothing: run for the event, what it carries not given)
+                let unread = match a.value.kind {
+                    closure(x) => x.params.len() == 0,
+                    _ => false,
+                };
+                out.push(build.run(widget("{if unread { "when" } else { "on" }}-{a.name}", [build.name(n), a.value,], a.span)));
+                continue;
+            }
+            let reads = view-bind(l, w, a.value);
+            if !reads {
+                out.push(if a.style {
+                    build.run(build.module-call("view-host", "style", [build.name(n), build.text(a.name), a.value,]))
+                } else {
+                    build.run(widget("set-{a.name}", [build.name(n), a.value,], a.span))
+                });
+            } else {
+                // its value again each time what it reads changes, the host told only where it
+                // differs: one call, its read a closure giving the value as the host takes it (an
+                // attribute's by widget-Tag-value-name, typed as the attribute)
+                if a.style {
+                    out.push(build.run(build.module-call("view-host", "keep-style", [build.name(n), build.text(a.name), build.closure([build.value(a.value),]),])));
+                } else {
+                    out.push(build.run(build.module-call("view-nodes", "keep-attribute", [build.name("view-host-dom"), build.name(n), build.text(a.name), build.closure([build.value(widget("value-{a.name}", [a.value,], a.span)),]),])));
+                }
             }
         }
-        for item in element.items { view-item-lines(l, w, item, { parent: n, anchor: "", nodes: "", }); }
-        for h in element.handlers {
-            view-bind-block(l, w, h.body);
-            let run = node(ExprKind.closure({ params: [], types: [], body: h.body, marks: new-marks([], []), unit: { env: false, }, }), h.span);
-            view-line(w, "view-listen({n}, \"{h.event}\", {view-hole(w, run)});");
+        if element.items.len() > 0 {
+            out.push(build.run(widget("container", [], element.span)));
+            // (what it holds, each kind once, where it first is: the checker's to find in what it
+            // may hold)
+            let held: list<string> = [];
+            let places: list<Span> = [];
+            view-held(element.items, held, places);
+            for index in 0..held.len() { out.push(build.run(widget("holds-{held[index]}", [], places[index]))); }
         }
-        view-place(w, n, at);
+        for item in element.items { view-item-stmts(l, w, item, { parent: n, anchor: "", nodes: "", }, out); }
+        view-place(n, "", at, out);
         n
     }
 
-    view-item-lines: func(l: Lowerer, w: ViewWriter, item: ViewItem, at: ViewPlace) {
-        match item {
-            text(e) => {
-                let reads = view-bind(l, w, e);
-                let value = view-hole(w, e);
-                let t = view-local(w, "text");
-                if !reads {
-                    view-line(w, "let {t} = dom.create-text({value});");
-                } else {
-                    let f = view-local(w, "value");
-                    let last = view-local(w, "last");
-                    view-line(w, "let {f} = \{ -> {value} \};");
-                    view-line(w, "let {last} = {f}();");
-                    view-line(w, "let {t} = dom.create-text({last});");
-                    view-line(w, "let _ = reactive.effect(\{ -> let now = {f}(); if now != {last} \{ dom.set-text-content({t}, now); {last} = now; \} \{ -> \} \});");
-                }
-                view-place(w, t, at);
+    // whether a widget's element is constant through and through: its attributes and styles
+    // literals, no handlers, what it holds constant text and such elements
+    view-static: func(element: ViewElement) -> bool {
+        if element.module != "" { return false; }
+        for a in element.attributes {
+            if a.event || template-value(a.value, a.style) == "" { return false; }
+        }
+        for item in element.items {
+            match item {
+                text(e) => match e.kind {
+                    str-lit(_) => {}
+                    _ => { return false; }
+                },
+                element(x) => { if !view-static(x) { return false; } }
+                _ => { return false; }
             }
-            element(x) => { let _ = view-element-lines(l, w, x, at); }
-            if-item(x) => view-if-lines(l, w, x, at),
-            for-item(x) => view-for-lines(l, w, x, at),
+        }
+        true
+    }
+
+    // a constant attribute's or style's value as a template writes it ("": not one it writes: an
+    // integer an attribute's, whose type may be f64, or anything computed)
+    template-value: func(e: Expr, style: bool) -> string {
+        match e.kind {
+            str-lit(x) => "s{template-text(x)}",
+            bool-lit(b) => if b { "t" } else { "f" },
+            float-lit(x) => "d{template-text(hex-bits(f64-bits(parse-f64(x))))}",
+            int-lit(x) => if style && x.len() > 0 && x.bytes().all({ b -> b >= 48 && b <= 57 }) { "i{template-text(x)}" } else { "" },
+            _ => "",
         }
     }
 
-    // if: an anchor where its branch goes, and an effect showing the branch its condition picks
-    // (made again only when that changes: what the branch made let go with it)
-    view-if-lines: func(l: Lowerer, w: ViewWriter, x: ViewIf, at: ViewPlace) {
-        let anchor = view-local(w, "anchor");
-        let shown = view-local(w, "shown");
-        let nodes = view-local(w, "nodes");
-        let owner = view-local(w, "owner");
-        let cond = view-local(w, "cond");
-        let want = view-local(w, "want");
-        let gone = view-local(w, "gone");
-        view-line(w, "let {anchor} = dom.create-comment(\"if\");");
-        view-place(w, anchor, at);
-        view-line(w, "let {shown} = 0;");
-        view-line(w, "let {nodes}: list<u32> = [];");
-        view-line(w, "let {owner} = reactive.new-owner();");
-        view-line(w, "reactive.on-cleanup(\{ -> reactive.dispose({owner}); if self.view-mounted \{ for {gone} in {nodes} \{ dom.remove({gone}); \} \} \});");
-        view-bind(l, w, x.cond);
-        view-line(w, "let {cond} = \{ -> {view-hole(w, x.cond)} \};");
-        view-line(w, "let _ = reactive.effect(\{ ->");
-        view-line(w, "let {want} = if {cond}() \{ 1 \} else \{ 2 \};");
-        view-line(w, "if {want} != {shown} \{");
-        view-line(w, "reactive.dispose({owner});");
-        view-line(w, "for {gone} in {nodes} \{ dom.remove({gone}); \}");
-        view-line(w, "{nodes} = [];");
-        view-line(w, "{shown} = {want};");
-        view-line(w, "observe.untracked(\{ -> reactive.within({owner}, \{ ->");
-        view-line(w, "if {want} == 1 \{");
-        let inside: ViewPlace = { parent: at.parent, anchor: anchor, nodes: nodes, };
-        for item in x.then { view-item-lines(l, w, item, inside); }
-        view-line(w, "\} else \{");
-        for item in x.otherwise { view-item-lines(l, w, item, inside); }
-        view-line(w, "\}");
-        view-line(w, "\}); \});");
-        view-line(w, "\}");
-        view-line(w, "\{ -> \}");
-        view-line(w, "\});");
+    // bits as 16 hex digits
+    hex-bits: func(bits: u64) -> string {
+        let digits = "0123456789abcdef";
+        let out = buffer.buffer(16);
+        for place in 0..16 { out.push-byte(digits.byte-at(((bits >> ((15 - place) * 4) as u64) & 15) as s64)); }
+        out.to-string()
     }
 
-    // for: an anchor where its rows go, and an effect keeping a row for each item (by its key: a
-    // row kept, moved where its item now is; one made for a new key; one let go for a key gone)
-    view-for-lines: func(l: Lowerer, w: ViewWriter, x: ViewFor, at: ViewPlace) {
-        if w.fields.contains(x.name) { view-error(l, x.span, "{x.name} is a field of the view: name the for's variable otherwise"); }
+    // a text in a template: its length in bytes, a colon, its bytes
+    template-text: func(x: string) -> string { "{x.len()}:{x}" }
+
+    template-attributes: func(attributes: list<ViewAttribute>) -> string {
+        let out = buffer.buffer(64);
+        for a in attributes {
+            out.push(if a.style { "S" } else { "A" });
+            out.push(template-text(a.name));
+            out.push(template-value(a.value, a.style));
+        }
+        out.to-string()
+    }
+
+    // a constant element's template: it, its attributes and styles, what it holds
+    template-ops: func(element: ViewElement) -> string {
+        let out = buffer.buffer(128);
+        out.push("E{template-text(element.tag)}");
+        out.push(template-attributes(element.attributes));
+        for item in element.items {
+            match item {
+                text(e) => match e.kind {
+                    str-lit(x) => out.push("T{template-text(x)}"),
+                    _ => {}
+                },
+                element(x) => out.push(template-ops(x)),
+                _ => {}
+            }
+        }
+        out.push("U");
+        out.to-string()
+    }
+
+    // the calls a template stands for, for the checker (they never run): the widget made, each
+    // attribute set and style given as written, and, all of it a template, what it holds
+    view-checks: func(l: Lowerer, element: ViewElement, attributes: list<ViewAttribute>, deep: bool, out: list<Stmt>) {
+        let widget = { f: string, args: list<Expr>, span: Span ->
+            let made = node(ExprKind.call({ name: "widget-{element.tag}-{f}", args: args, type-args: [], name-span: span, }), span);
+            made
+        };
+        out.push(build.run(widget("make", [], element.span)));
+        for a in attributes {
+            out.push(build.run(if a.style {
+                build.module-call("view-host", "style", [build.int(0), build.text(a.name), a.value,])
+            } else {
+                widget("set-{a.name}", [build.int(0), a.value,], a.span)
+            }));
+        }
+        if !deep { return; }
+        if element.items.len() > 0 {
+            out.push(build.run(widget("container", [], element.span)));
+            let held: list<string> = [];
+            let places: list<Span> = [];
+            view-held(element.items, held, places);
+            for index in 0..held.len() { out.push(build.run(widget("holds-{held[index]}", [], places[index]))); }
+        }
+        for item in element.items {
+            match item {
+                element(x) => view-checks(l, x, x.attributes, true, out),
+                _ => {}
+            }
+        }
+    }
+
+    // what a widget's element holds directly (its items, an if's branches' and a for's rows'):
+    // each widget's tag, and text; another view's element is not told (its tree is its own)
+    view-held: func(items: list<ViewItem>, held: list<string>, places: list<Span>) {
+        let add = { kind: string, at: Span ->
+            if !held.contains(kind) {
+                held.push(kind);
+                places.push(at);
+            }
+        };
+        for item in items {
+            match item {
+                text(e) => add("text", e.span),
+                element(x) => { if x.module == "" { add(x.tag, x.span); } }
+                if-item(x) => {
+                    view-held(x.then, held, places);
+                    view-held(x.otherwise, held, places);
+                }
+                for-item(x) => view-held(x.body, held, places),
+                // (what the view is given is the giver's: not told)
+                children(_) => {}
+            }
+        }
+    }
+
+    // another view (module.View { props }): made, each prop given (one that reads what changes
+    // kept current), its tree made and put where it goes, and let go with the owner it is made
+    // under (its nodes removed with the branch, row or view they are in)
+    view-component-stmts: func(l: Lowerer, w: ViewWriter, element: ViewElement, at: ViewPlace, out: list<Stmt>) -> string {
+        let child = view-local(w, "view");
+        let n = view-local(w, "node");
+        let named = "{element.module}.{element.tag}";
+        // (each call where what it is for is written: an error in it told there)
+        let call = { f: string, args: list<Expr>, at: Span ->
+            let made = build.module-call(element.module, f, args);
+            made.span = at;
+            let module = build.name(element.module);
+            module.span = element.module-span;
+            match made.kind {
+                method(m) => { m.target = module; m.name-span = at; }
+                _ => {}
+            }
+            made
+        };
+        let typed = Type.named(intern(named));
+        out.push(build.typed-let(child, typed, call("new", [], element.span)));
+        for a in element.attributes {
+            if a.style {
+                view-error(l, element.span, "{named} takes props, not styles: style.{a.name} goes on an element in it");
+                continue;
+            }
+            // (on.name: the callback's field, on-name)
+            let prop = if a.event { "on-{a.name}" } else { a.name };
+            let setting = { value: Expr -> build.run(call("view-set-{prop}", [build.name(child), value,], a.span)) };
+            let reads = view-bind(l, w, a.value);
+            // (a callback, on.: given once; what it reads, read when it is called)
+            let given-once = a.event;
+            if !reads || given-once {
+                out.push(setting(a.value));
+            } else {
+                // (one call, its read a closure, read as the prop's type: view-as-name)
+                out.push(build.run(call("view-keep-{prop}", [build.name(child), build.closure([build.value(call("view-as-{prop}", [a.value,], a.span)),]),], a.span)));
+            }
+        }
+        // (items: its children, built where its #children is by a builder made here, in this
+        // view's scope: what they read and set this view's)
+        if element.items.len() > 0 {
+            let parent = view-local(w, "parent");
+            let anchor = view-local(w, "anchor");
+            let nodes = view-local(w, "nodes");
+            let made: list<Stmt> = [];
+            let inside: ViewPlace = { parent: parent, anchor: anchor, nodes: nodes, };
+            for item in element.items { view-item-stmts(l, w, item, inside, made); }
+            out.push(build.run(call("view-set-view-children", [build.name(child), build.closure-of([parent, anchor, nodes,], made),], element.span)));
+        }
+        out.push(build.bind(n, call("view-owned", [build.name(child),], element.span)));
+        view-place(n, "", at, out);
+        n
+    }
+
+    view-item-stmts: func(l: Lowerer, w: ViewWriter, item: ViewItem, at: ViewPlace, out: list<Stmt>) {
+        match item {
+            text(e) => {
+                let reads = view-bind(l, w, e);
+                let t = view-local(w, "text");
+                if !reads {
+                    out.push(build.bind(t, build.module-call("dom", "create-text", [e,])));
+                } else {
+                    out.push(build.bind(t, build.module-call("view-nodes", "kept-text", [build.name("view-host-dom"), build.closure([build.value(e),]),])));
+                }
+                view-place(t, "", at, out);
+            }
+            element(x) => { let _ = view-element-stmts(l, w, x, at, out); }
+            if-item(x) => view-if-stmts(l, w, x, at, out),
+            for-item(x) => view-for-stmts(l, w, x, at, out),
+            children(_) => view-children-stmts(w, at, out),
+        }
+    }
+
+    // #children: the items the view is given (its view-children field: a builder the view it is
+    // in made, which builds them in that view's scope), as a branch always shown (std's
+    // view-nodes.show): placed before its anchor, let go with what it is in
+    view-children-stmts: func(w: ViewWriter, at: ViewPlace, out: list<Stmt>) {
         let anchor = view-local(w, "anchor");
-        let keys = view-local(w, "keys");
-        let owners = view-local(w, "owners");
-        let rows = view-local(w, "rows");
-        let items = view-local(w, "items");
-        let now = view-local(w, "now");
-        let next-keys = view-local(w, "next-keys");
-        let next-owners = view-local(w, "next-owners");
-        let next-rows = view-local(w, "next-rows");
-        let used = view-local(w, "used");
-        let key = view-local(w, "key");
-        let found = view-local(w, "found");
-        let i = view-local(w, "i");
-        let gone = view-local(w, "gone");
+        let nodes = view-local(w, "nodes");
+        let given = view-local(w, "children");
+        let before = if at.anchor == "" { build.int(0) } else { build.name(at.anchor) };
+        let outer = if at.nodes == "" { build.empty-list() } else { build.name(at.nodes) };
+        out.push(build.run(build.module-call("view-nodes", "show", [
+            build.name("view-host-dom"),
+            build.field(build.name("self"), "view-mounted"),
+            build.name(at.parent),
+            build.truth(at.anchor != ""),
+            before,
+            outer,
+            build.closure([build.value(build.truth(true)),]),
+            build.closure-of([anchor, nodes,], [
+                build.bind(given, build.field(build.name("self"), "view-children")),
+                build.run(build.call(given, [build.name(at.parent), build.name(anchor), build.name(nodes),])),
+            ]),
+            build.closure-of([anchor, nodes,], []),
+        ])));
+    }
+
+    // how many times items place #children (an if's branches, a for's rows, elements' items)
+    view-children-count: func(items: list<ViewItem>) -> s64 {
+        let count = 0;
+        for item in items {
+            match item {
+                element(x) => { count += view-children-count(x.items); }
+                if-item(x) => { count += view-children-count(x.then) + view-children-count(x.otherwise); }
+                for-item(x) => { count += view-children-count(x.body); }
+                children(_) => { count += 1; }
+                text(_) => {}
+            }
+        }
+        count
+    }
+
+    // a view's #children's span (the first; nowhere for none)
+    view-children-span: func(items: list<ViewItem>) -> Span {
+        for item in items {
+            match item {
+                children(at) => { return at; }
+                element(x) => { let found = view-children-span(x.items); if found.source >= 0 { return found; } }
+                if-item(x) => {
+                    let found = view-children-span(x.then);
+                    if found.source >= 0 { return found; }
+                    let other = view-children-span(x.otherwise);
+                    if other.source >= 0 { return other; }
+                }
+                for-item(x) => { let found = view-children-span(x.body); if found.source >= 0 { return found; } }
+                text(_) => {}
+            }
+        }
+        nowhere()
+    }
+
+    // what a view's children are built by: given the parent, the node they go before, and the
+    // list their parts go in
+    view-children-type: func() -> Type {
+        Type.func-type({ params: [Type.num("u32"), Type.num("u32"), view-parts(),], result: Type.unit-type, })
+    }
+
+    // if: an anchor where its branch goes, and an effect showing the branch its condition picks
+    // (made again only when that changes: what the branch made let go with it). Its anchor's part
+    // holds what it shows (a row it is in moves it all)
+    view-if-stmts: func(l: Lowerer, w: ViewWriter, x: ViewIf, at: ViewPlace, out: list<Stmt>) {
+        // (std's view-nodes.show does it: what is shown made by its branch, given where it goes)
+        let anchor = view-local(w, "anchor");
+        let nodes = view-local(w, "nodes");
+        view-bind(l, w, x.cond);
+        let inside: ViewPlace = { parent: at.parent, anchor: anchor, nodes: nodes, };
+        let then: list<Stmt> = [];
+        for item in x.then { view-item-stmts(l, w, item, inside, then); }
+        let otherwise: list<Stmt> = [];
+        for item in x.otherwise { view-item-stmts(l, w, item, inside, otherwise); }
+        let before = if at.anchor == "" { build.int(0) } else { build.name(at.anchor) };
+        let outer = if at.nodes == "" { build.empty-list() } else { build.name(at.nodes) };
+        out.push(build.run(build.module-call("view-nodes", "show", [
+            build.name("view-host-dom"),
+            build.field(build.name("self"), "view-mounted"),
+            build.name(at.parent),
+            build.truth(at.anchor != ""),
+            before,
+            outer,
+            build.closure([build.value(x.cond),]),
+            build.closure-of([anchor, nodes,], then),
+            build.closure-of([anchor, nodes,], otherwise),
+        ])));
+    }
+
+    // list<view-nodes.Part>: what a branch or a row placed
+    view-parts: func() -> Type { Type.list-type(Type.named(intern("view-nodes.Part"))) }
+
+    // for: an anchor where its rows go, and an effect keeping a row for each item by its key. A
+    // row kept is given its item (the body reads it through a getter: what read it is told when
+    // it changes); the rows whose old places run in order stay (view-nodes.in-place), the others
+    // move; a row is made for a new key where it goes, and let go for a key gone. The anchor's part
+    // holds every row's parts (a row this for is in moves them all)
+    view-for-stmts: func(l: Lowerer, w: ViewWriter, x: ViewFor, at: ViewPlace, out: list<Stmt>) {
+        if w.fields.contains(x.name) { view-error(l, x.span, "{x.name} is a field of the view: name the for's variable otherwise"); }
+        // (std's view-nodes.rows does it: a row made by the body, given its getter, the node it goes
+        // before and its parts)
+        // (its getter named for the item, view-item<n>-<name>, its place the item's: a hover there,
+        // or on a read of it, tells the item)
+        let getter = "{view-local(w, "item")}-{x.name}";
+        let before = view-local(w, "before");
         let row = view-local(w, "row");
-        let owner = view-local(w, "owner");
-        view-line(w, "let {anchor} = dom.create-comment(\"for\");");
-        view-place(w, anchor, at);
-        view-line(w, "let {keys} = [];");
-        view-line(w, "let {owners}: list<reactive.Owner> = [];");
-        view-line(w, "let {rows}: list<list<u32>> = [];");
-        view-line(w, "reactive.on-cleanup(\{ -> for {owner} in {owners} \{ reactive.dispose({owner}); \} if self.view-mounted \{ for {row} in {rows} \{ for {gone} in {row} \{ dom.remove({gone}); \} \} \} \});");
         view-bind(l, w, x.items);
-        view-line(w, "let {items} = \{ -> {view-hole(w, x.items)} \};");
-        view-line(w, "let _ = reactive.effect(\{ ->");
-        view-line(w, "let {now} = {items}();");
-        view-line(w, "observe.untracked(\{ ->");
-        view-line(w, "let {next-keys} = [];");
-        view-line(w, "let {next-owners}: list<reactive.Owner> = [];");
-        view-line(w, "let {next-rows}: list<list<u32>> = [];");
-        view-line(w, "let {used}: list<bool> = [];");
-        view-line(w, "for {i} in 0..{keys}.len() \{ {used}.push(false); \}");
-        view-line(w, "for {x.name} in {now} \{");
         view-bind(l, w, x.key);
-        view-line(w, "let {key} = {view-hole(w, x.key)};");
-        view-line(w, "let {found} = -1;");
-        view-line(w, "for {i} in 0..{keys}.len() \{ if {found} < 0 && !{used}[{i}] && {keys}[{i}] == {key} \{ {found} = {i}; \} \}");
-        view-line(w, "if {found} >= 0 \{");
-        view-line(w, "{used}[{found}] = true;");
-        view-line(w, "for {gone} in {rows}[{found}] \{ dom.insert-before({at.parent}, {gone}, {anchor}); \}");
-        view-line(w, "{next-keys}.push({key}); {next-owners}.push({owners}[{found}]); {next-rows}.push({rows}[{found}]);");
-        view-line(w, "\} else \{");
-        view-line(w, "let {owner} = reactive.new-owner();");
-        view-line(w, "let {row}: list<u32> = [];");
-        view-line(w, "reactive.within({owner}, \{ ->");
-        let inside: ViewPlace = { parent: at.parent, anchor: anchor, nodes: row, };
-        for item in x.body { view-item-lines(l, w, item, inside); }
-        view-line(w, "\});");
-        view-line(w, "{next-keys}.push({key}); {next-owners}.push({owner}); {next-rows}.push({row});");
-        view-line(w, "\}");
-        view-line(w, "\}");
-        view-line(w, "for {i} in 0..{keys}.len() \{ if !{used}[{i}] \{ reactive.dispose({owners}[{i}]); for {gone} in {rows}[{i}] \{ dom.remove({gone}); \} \} \}");
-        view-line(w, "{keys} = {next-keys}; {owners} = {next-owners}; {rows} = {next-rows};");
-        view-line(w, "\});");
-        view-line(w, "\{ -> \}");
-        view-line(w, "\});");
+        if view-children-count(x.body) > 0 { view-error(l, view-children-span(x.body), "#children goes in one place, not in a for's rows (it would be built again in each)"); }
+        // (a row's body reads its item through the row's getter: the item it has now)
+        view-rename-items(x.body, x.name, getter);
+        w.getters.push(getter);
+        let made: list<Stmt> = [];
+        let inside: ViewPlace = { parent: at.parent, anchor: before, nodes: row, };
+        for item in x.body { view-item-stmts(l, w, item, inside, made); }
+        let placed-before = if at.anchor == "" { build.int(0) } else { build.name(at.anchor) };
+        let outer = if at.nodes == "" { build.empty-list() } else { build.name(at.nodes) };
+        out.push(build.run(build.module-call("view-nodes", "rows", [
+            build.name("view-host-dom"),
+            build.field(build.name("self"), "view-mounted"),
+            build.name(at.parent),
+            build.truth(at.anchor != ""),
+            placed-before,
+            outer,
+            build.closure([build.value(x.items),]),
+            build.closure-of([x.name,], [build.value(x.key),]),
+            build.closure-at([getter, before, row,], [x.name-span, nowhere(), nowhere(),], made),
+        ])));
+    }
+
+    // the items of a for's row, each read of its item (from) a call of the row's getter (to): the
+    // item the row has now. A for in them of the same name reads its own
+    view-rename-items: func(items: list<ViewItem>, from: string, to: string) {
+        for item in items {
+            match item {
+                text(e) => view-rename(e, from, to),
+                element(x) => {
+                    for a in x.attributes { view-rename(a.value, from, to); }
+                    view-rename-items(x.items, from, to);
+                }
+                if-item(x) => {
+                    view-rename(x.cond, from, to);
+                    view-rename-items(x.then, from, to);
+                    view-rename-items(x.otherwise, from, to);
+                }
+                for-item(x) => {
+                    view-rename(x.items, from, to);
+                    if x.name != from {
+                        view-rename(x.key, from, to);
+                        view-rename-items(x.body, from, to);
+                    }
+                }
+                children(_) => {}
+            }
+        }
+    }
+
+    // the names of known e reads (each once)
+    view-names: func(e: Expr, known: list<string>, out: list<string>) {
+        match e.kind {
+            name(n) => {
+                let text = name-text(n);
+                if known.contains(text) && !out.contains(text) { out.push(text); }
+                return;
+            }
+            _ => {}
+        }
+        let xs: list<Expr> = [];
+        let bs: list<Block> = [];
+        walk.expr-parts(e, xs, bs);
+        for x in xs { view-names(x, known, out); }
+        for b in bs { view-names-block(b, known, out); }
+    }
+
+    view-names-block: func(b: Block, known: list<string>, out: list<string>) {
+        for s in b.stmts {
+            let xs: list<Expr> = [];
+            let bs: list<Block> = [];
+            walk.stmt-parts(s, xs, bs);
+            for x in xs { view-names(x, known, out); }
+            for inner in bs { view-names-block(inner, known, out); }
+        }
+    }
+
+    view-rename: func(e: Expr, from: string, to: string) {
+        match e.kind {
+            name(n) => {
+                if name-text(n) == from { e.kind = ExprKind.call({ name: to, args: [], type-args: [], name-span: e.span, }); }
+                return;
+            }
+            _ => {}
+        }
+        let xs: list<Expr> = [];
+        let bs: list<Block> = [];
+        walk.expr-parts(e, xs, bs);
+        for x in xs { view-rename(x, from, to); }
+        for b in bs { view-rename-block(b, from, to); }
+    }
+
+    view-rename-block: func(b: Block, from: string, to: string) {
+        for s in b.stmts {
+            let xs: list<Expr> = [];
+            let bs: list<Block> = [];
+            walk.stmt-parts(s, xs, bs);
+            for x in xs { view-rename(x, from, to); }
+            for inner in bs { view-rename-block(inner, from, to); }
+        }
     }
 }
 
@@ -2218,39 +3051,216 @@ record KeptBytes { from: s64, marks: list<bool>, }
 // an escape in a string's or char's text: its bytes, and how many bytes of the text it takes
 record Escape { text: string, width: s64, }
 
-// a view as written (view Name { fields; its element }), before it is lowered to the yel it is
-// (parser.view-decl): its fields (each a prop, but those @(private)), and its element's tree
-resource ViewField { name: string, ty: Type, value: Expr, private: bool, }
+// a view as written (view Name { fields; its element }), before it is lowered to its resource and
+// funcs (lower-view): its fields (each a prop, but those @(private)), and its element's tree
+// derived: a let (made of what it reads, made again when that changes); once: a let made once, as
+// the view is first built; again: its value parsed again (what view-build makes it with)
+// span: its name's (where what lowering makes of a let says it is written)
+resource ViewField { name: string, ty: Type, value: Expr, private: bool, mount: bool, derived: bool, once: bool, again: func() -> Expr, span: Span, }
 
-resource ViewElement { tag: string, attributes: list<ViewAttribute>, items: list<ViewItem>, handlers: list<ViewHandler>, }
+// module: the module of the view it is ("": the host's element, tag its name); span: its tag's
+// module-span: its module's name's (another view's)
+resource ViewElement { tag: string, module: string, span: Span, module-span: Span, attributes: list<ViewAttribute>, items: list<ViewItem>, }
 
-// name: value (style: style.name: value, a style of the host's vocabulary)
-resource ViewAttribute { name: string, style: bool, value: Expr, }
-
-// on event { … }
-resource ViewHandler { event: string, body: Block, span: Span, }
+// name: value; style.name: value (style: a style of the host's vocabulary); on.name: value
+// (event: a widget's handler, or another view's callback)
+resource ViewAttribute { name: string, style: bool, event: bool, value: Expr, span: Span, }
 
 record ViewIf { cond: Expr, then: list<ViewItem>, otherwise: list<ViewItem>, }
 
 // for name in items key(key) { body }
-resource ViewFor { name: string, items: Expr, key: Expr, body: list<ViewItem>, span: Span, }
+resource ViewFor { name: string, items: Expr, key: Expr, body: list<ViewItem>, span: Span, name-span: Span, }
 
-variant ViewItem { text(Expr), element(ViewElement), if-item(ViewIf), for-item(ViewFor), }
+variant ViewItem { text(Expr), element(ViewElement), if-item(ViewIf), for-item(ViewFor), children(Span), }
 
-// what lowering a view writes: its yel's lines, what is written where each view-hole-N and
-// view-type-N is (the view's own expressions and types, put in once its yel is parsed), its
-// fields' names, and how many names it has made
-resource ViewWriter {
-    lines: list<string>,
-    holes: map<string, Expr>,
-    types: map<string, Type>,
-    fields: list<string>,
-    count: s64,
-}
+// what lowering a view keeps: its fields' names, its for rows' item getters' names (a read of one
+// reads what changes), and how many locals it has made
+resource ViewWriter { fields: list<string>, lets: list<string>, getters: list<string>, count: s64, }
 
 // where a node goes: appended to parent ("": the view's top), or (anchor) put before anchor in
-// parent and kept in the list nodes names (what a branch or a row shows, let go with it)
+// parent and kept as a part in the list nodes names (what a branch or a row shows: let go and
+// moved with it)
 record ViewPlace { parent: string, anchor: string, nodes: string, }
+
+// Yel the compiler makes, as nodes: what a view is (its resource and funcs) and a regex literal's
+// matcher, built as the AST's values (written nowhere: no source holds them, so no note or place
+// of a language server's is made of them), never written as text and parsed
+
+module build {
+    // a name, an integer, a string, a bool, -1, [], a list
+    name: func(n: string) -> Expr { lower.node(ExprKind.name(intern(n)), nowhere()) }
+
+    int: func(value: s64) -> Expr { lower.node(ExprKind.int-lit("{value}"), nowhere()) }
+
+    text: func(value: string) -> Expr { lower.node(ExprKind.str-lit(value), nowhere()) }
+
+    truth: func(value: bool) -> Expr { lower.node(ExprKind.bool-lit(value), nowhere()) }
+
+    minus-one: func() -> Expr { lower.node(ExprKind.unary({ op: "-", value: int(1), }), nowhere()) }
+
+    empty-list: func() -> Expr { lower.node(ExprKind.list-lit([]), nowhere()) }
+
+    list-of: func(items: list<Expr>) -> Expr { lower.node(ExprKind.list-lit(items), nowhere()) }
+
+    // f(args), by its name (a func, or a local holding one)
+    call: func(f: string, args: list<Expr>) -> Expr {
+        lower.node(ExprKind.call({ name: f, args: args, type-args: [], name-span: nowhere(), }), nowhere())
+    }
+
+    // target.f(args): a module's func (dom.remove(n)), or one taking target first (xs.push(x))
+    method: func(target: Expr, f: string, args: list<Expr>) -> Expr {
+        lower.node(ExprKind.method({ target: target, name: f, args: args, type-args: [], name-span: nowhere(), }), nowhere())
+    }
+
+    // module.f(args)
+    module-call: func(module: string, f: string, args: list<Expr>) -> Expr { method(name(module), f, args) }
+
+    field: func(target: Expr, n: string) -> Expr {
+        lower.node(ExprKind.field({ target: target, name: n, name-span: nowhere(), }), nowhere())
+    }
+
+    binary: func(op: string, left: Expr, right: Expr) -> Expr {
+        lower.node(ExprKind.binary({ op: op, left: left, right: right, }), nowhere())
+    }
+
+    negated: func(value: Expr) -> Expr { lower.node(ExprKind.unary({ op: "!", value: value, }), nowhere()) }
+
+    // xs[index], a list's item
+    item: func(list: Expr, index: Expr) -> Expr { method(list, "at", [index,]) }
+
+    // { -> stmts }, a closure of no params; { a, b -> stmts }, of params (their types inferred)
+    closure: func(stmts: list<Stmt>) -> Expr { closure-of([], stmts) }
+
+    closure-of: func(params: list<string>, stmts: list<Stmt>) -> Expr {
+        let spans: list<Span> = [];
+        for p in params { spans.push(nowhere()); }
+        closure-at(params, spans, stmts)
+    }
+
+    // the same, each param where spans says it is written
+    closure-at: func(params: list<string>, spans: list<Span>, stmts: list<Stmt>) -> Expr {
+        let types: list<option<Type>> = [];
+        for p in params { types.push(none); }
+        lower.node(ExprKind.closure({ params: params, types: types, body: block(stmts), marks: lower.new-marks(params, spans), unit: { env: false, }, }), nowhere())
+    }
+
+    // if cond { yes } else { no }, as a value
+    choice: func(cond: Expr, yes: list<Stmt>, no: list<Stmt>) -> Expr {
+        lower.node(ExprKind.if-else({ cond: cond, then: block(yes), otherwise: some(block(no)), }), nowhere())
+    }
+
+    block: func(stmts: list<Stmt>) -> Block {
+        let spans: list<Span> = [];
+        for s in stmts { spans.push(nowhere()); }
+        { stmts: stmts, spans: spans, span: nowhere(), }
+    }
+
+    // ---- statements
+
+    // let n = value (bind); let n: ty = value; let _ = value;
+    bind: func(n: string, value: Expr) -> Stmt { Stmt.let-stmt({ name: n, ty: none, value: value, mark: lower.new-mark(n, nowhere()), }) }
+
+    typed-let: func(n: string, ty: Type, value: Expr) -> Stmt { Stmt.let-stmt({ name: n, ty: some(ty), value: value, mark: lower.new-mark(n, nowhere()), }) }
+
+    discard: func(value: Expr) -> Stmt { Stmt.let-pattern({ pattern: Pattern.wild, ty: none, value: value, }) }
+
+    // n = value; n op= value
+    set: func(n: string, value: Expr) -> Stmt { set-with(n, "=", value) }
+
+    set-with: func(n: string, op: string, value: Expr) -> Stmt {
+        Stmt.assign({ name: intern(n), op: op, value: value, name-span: nowhere(), })
+    }
+
+    // target.f = value
+    set-field: func(target: Expr, f: string, value: Expr) -> Stmt {
+        Stmt.assign-field({ target: target, name: f, op: "=", value: value, name-span: nowhere(), })
+    }
+
+    // xs[index] = value (xs.set(index, value))
+    set-item: func(list: Expr, index: Expr, value: Expr) -> Stmt { run(method(list, "set", [index, value,])) }
+
+    // e; (its value let go) and e (a block's value)
+    run: func(e: Expr) -> Stmt { Stmt.expr-stmt({ value: e, is-value: false, }) }
+
+    value: func(e: Expr) -> Stmt { Stmt.expr-stmt({ value: e, is-value: true, }) }
+
+    // if cond { yes } (else { no }: none for an empty no)
+    when: func(cond: Expr, yes: list<Stmt>, no: list<Stmt>) -> Stmt {
+        let otherwise: option<Block> = if no.len() == 0 { none } else { some(block(no)) };
+        run(lower.node(ExprKind.if-else({ cond: cond, then: block(yes), otherwise: otherwise, }), nowhere()))
+    }
+
+    // for n in items { body }; for n in from..to { body }
+    each: func(n: string, items: Expr, body: list<Stmt>) -> Stmt {
+        Stmt.for-stmt({ name: n, start: items, stop: none, inclusive: false, body: block(body), mark: lower.new-mark(n, nowhere()), unit: { env: false, }, })
+    }
+
+    count: func(n: string, from: Expr, to: Expr, body: list<Stmt>) -> Stmt {
+        Stmt.for-stmt({ name: n, start: from, stop: some(to), inclusive: false, body: block(body), mark: lower.new-mark(n, nowhere()), unit: { env: false, }, })
+    }
+
+    // loop { body }, break, return value
+    forever: func(body: list<Stmt>) -> Stmt { Stmt.loop-stmt({ body: block(body), unit: { env: false, }, }) }
+
+    stop: func() -> Stmt { Stmt.break-stmt }
+
+    give: func(value: Expr) -> Stmt { Stmt.return-stmt(value) }
+
+    // match value { arms }, each arm a pattern and its statements
+    match-of: func(value: Expr, patterns: list<Pattern>, bodies: list<list<Stmt>>) -> Expr {
+        let arms: list<Arm> = [];
+        for index in 0..patterns.len() {
+            arms.push({ pattern: patterns[index], guard: none, body: lower.node(ExprKind.block(block(bodies[index])), nowhere()), span: nowhere(), });
+        }
+        lower.node(ExprKind.match-expr({ value: value, arms: arms, }), nowhere())
+    }
+
+    // match value { arms }, each arm a pattern and its value
+    match-values: func(value: Expr, patterns: list<Pattern>, values: list<Expr>) -> Expr {
+        let arms: list<Arm> = [];
+        for index in 0..patterns.len() { arms.push({ pattern: patterns[index], guard: none, body: values[index], span: nowhere(), }); }
+        lower.node(ExprKind.match-expr({ value: value, arms: arms, }), nowhere())
+    }
+
+    // { name: value, … }, a record literal
+    record-of: func(names: list<string>, values: list<Expr>) -> Expr {
+        let inits: list<FieldInit> = [];
+        for index in 0..names.len() { inits.push({ name: names[index], value: values[index], name-span: nowhere(), }); }
+        lower.node(ExprKind.record-lit(inits), nowhere())
+    }
+
+    // a func of scope: its name, its params' names and types, its result, its body
+    func: func(scope: Scope, span: Span, n: string, params: list<string>, types: list<Type>, result: Type, body: list<Stmt>) -> Func {
+        let spans: list<Span> = [];
+        let defaults: list<option<Expr>> = [];
+        for p in params {
+            spans.push(nowhere());
+            defaults.push(none);
+        }
+        {
+            span: span,
+            scope: scope,
+            name: n,
+            type-params: [],
+            params: params,
+            param-types: types,
+            result: result,
+            body: block(body),
+            marks: lower.new-marks(params, spans),
+            unit: { env: false, },
+            is-async: false,
+            is-generator: false,
+            bindings: { exprs: map.new(), assigns: map.new(), },
+            defaults: defaults,
+            is-test: false,
+        }
+    }
+
+    // a scope as @(private) makes it (its package's own)
+    private: func(sc: Scope) -> Scope {
+        { pkg: sc.pkg, module: sc.module, file: sc.file, build: sc.build, includes: sc.includes, requests: sc.requests, private: "package", }
+    }
+}
 
 // a regex's tree: the empty pattern; a code point; any (.); a class (its ranges, closed, as code
 // points: lo, hi, ...); ^ and $ (at a line's too, under m); \b (\B: not); a group (index -1: not
@@ -2833,82 +3843,126 @@ module regexp {
 
     // ---- writing
 
-    // program's matcher as yel: name(text, start, slots) -> bool, its states a match on pc. A
-    // choice is kept on a stack of threes (where to go on, at, and -1), as is a slot's value before
-    // it was set (-1, the slot, its value): a failure goes back to the last choice, the slots set
-    // since given back their values
-    matcher: func(program: RegexProgram, name: string, lines: bool) -> string {
-        let out: list<string> = [
-            "@(private) {name}: func(text: string, start: s64, slots: list<s64>) -> bool \{",
-            "    let stack: list<s64> = [];",
-            "    let pc = 0;",
-            "    let at = start;",
-            "    let size = text.len();",
-            "    loop \{",
-            "        match pc \{",
-        ];
+    // program's matcher, as nodes: name(text, start, slots) -> bool, @(private) in scope, its
+    // states a match on pc. Its choices and the slots it sets are kept on a stack, as std's regex
+    // keeps them (choose, save): a failure goes back to the last choice (back)
+    matcher: func(program: RegexProgram, name: string, lines: bool, scope: Scope) -> Func {
+        let patterns: list<Pattern> = [];
+        let arms: list<list<Stmt>> = [];
         for index in 0..program.insts.len() {
-            let inst = program.insts[index];
-            let next = index + 1;
-            let arm = if inst.op == CODE {
-                code-test(inst.a, next)
-            } else if inst.op == CLASS {
-                "if at < size \{ let step = regex.next-code(text, at); let c = step >> 3; if {ranges-test(inst.ranges)} \{ at += step & 7; pc = {next}; \} else \{ pc = -1; \} \} else \{ pc = -1; \}"
-            } else if inst.op == SPLIT {
-                "stack.push({inst.b}); stack.push(at); stack.push(-1); pc = {inst.a};"
-            } else if inst.op == JUMP {
-                "pc = {inst.a};"
-            } else if inst.op == SAVE || inst.op == ENTER {
-                "stack.push(-1); stack.push({inst.a}); stack.push(slots[{inst.a}]); slots[{inst.a}] = at; pc = {next};"
-            } else if inst.op == PROGRESS {
-                "pc = if at == slots[{inst.a}] \{ -1 \} else \{ {next} \};"
-            } else if inst.op == LINE-START {
-                if lines { "pc = if at == 0 || text.byte-at(at - 1) == 10 \{ {next} \} else \{ -1 \};" } else { "pc = if at == 0 \{ {next} \} else \{ -1 \};" }
-            } else if inst.op == LINE-END {
-                if lines { "pc = if at == size || text.byte-at(at) == 10 \{ {next} \} else \{ -1 \};" } else { "pc = if at == size \{ {next} \} else \{ -1 \};" }
-            } else if inst.op == BOUNDARY {
-                "pc = if regex.boundary(text, at) {if inst.a == 1 { "!=" } else { "==" }} true \{ {next} \} else \{ -1 \};"
-            } else {
-                "return true;"
-            };
-            out.push("            {index} => \{ {arm} \}");
+            patterns.push(Pattern.literal(build.int(index)));
+            arms.push(state(program.insts[index], index + 1, lines));
         }
-        out.push("            _ => \{");
-        out.push("                // a failure: back to the last choice, the slots set since given back");
-        out.push("                loop \{");
-        out.push("                    if stack.len() == 0 \{ return false; \}");
-        out.push("                    let value = stack.pop();");
-        out.push("                    let where = stack.pop();");
-        out.push("                    let to = stack.pop();");
-        out.push("                    if to == -1 \{ slots[where] = value; \} else \{ pc = to; at = where; break; \}");
-        out.push("                \}");
-        out.push("            \}");
-        out.push("        \}");
-        out.push("    \}");
-        out.push("\}");
-        out.join("\n")
+        patterns.push(Pattern.wild);
+        // a failure: back to the last choice (none: no match)
+        arms.push([
+            build.set("pc", build.module-call("regex", "back", [build.name("stack"), build.name("slots"),])),
+            build.when(build.binary("<", build.name("pc"), build.int(0)), [build.give(build.truth(false)),], []),
+            build.set("at", popped()),
+        ]);
+        let body = [
+            build.typed-let("stack", Type.list-type(Type.num("s64")), build.empty-list()),
+            build.bind("pc", build.int(0)),
+            build.bind("at", build.name("start")),
+            build.bind("size", length("text")),
+            build.forever([build.run(build.match-of(build.name("pc"), patterns, arms)),]),
+        ];
+        build.func(
+            build.private(scope),
+            nowhere(),
+            name,
+            ["text", "start", "slots",],
+            [Type.string-type, Type.num("s64"), Type.list-type(Type.num("s64")),],
+            Type.bool-type,
+            body,
+        )
+    }
+
+    // one state's statements: what its instruction does, the state it goes on to (pc), -1 where
+    // it fails
+    @(private) state: func(inst: RegexInst, next: s64, lines: bool) -> list<Stmt> {
+        let go = { to: s64 -> build.set("pc", build.int(to)) };
+        let fail = { -> build.set("pc", build.minus-one()) };
+        let to = { yes: Expr -> build.set("pc", build.choice(yes, [build.value(build.int(next)),], [build.value(build.minus-one()),])) };
+        let at = build.name("at");
+        if inst.op == CODE { return [code-test(inst.a, next),]; }
+        if inst.op == CLASS {
+            return [build.when(
+                build.binary("<", at, build.name("size")),
+                [
+                    build.bind("step", build.module-call("regex", "next-code", [build.name("text"), build.name("at"),])),
+                    build.bind("c", build.binary(">>", build.name("step"), build.int(3))),
+                    build.when(ranges-test(inst.ranges), [build.set-with("at", "+=", build.binary("&", build.name("step"), build.int(7))), go(next),], [fail(),]),
+                ],
+                [fail(),],
+            ),];
+        }
+        if inst.op == SPLIT { return [build.run(build.module-call("regex", "choose", [build.name("stack"), build.int(inst.b), at,])), go(inst.a),]; }
+        if inst.op == JUMP { return [go(inst.a),]; }
+        if inst.op == SAVE || inst.op == ENTER {
+            return [build.run(build.module-call("regex", "save", [build.name("stack"), build.name("slots"), build.int(inst.a), at,])), go(next),];
+        }
+        if inst.op == PROGRESS {
+            return [build.set("pc", build.choice(build.binary("==", at, build.item(build.name("slots"), build.int(inst.a))), [build.value(build.minus-one()),], [build.value(build.int(next)),])),];
+        }
+        if inst.op == LINE-START {
+            let start = build.binary("==", at, build.int(0));
+            return [to(if lines { build.binary("||", start, build.binary("==", text-byte(build.binary("-", build.name("at"), build.int(1))), build.int(10))) } else { start }),];
+        }
+        if inst.op == LINE-END {
+            let end = build.binary("==", at, build.name("size"));
+            return [to(if lines { build.binary("||", end, build.binary("==", text-byte(build.name("at")), build.int(10))) } else { end }),];
+        }
+        if inst.op == BOUNDARY {
+            let boundary = build.module-call("regex", "boundary", [build.name("text"), build.name("at"),]);
+            return [to(build.binary(if inst.a == 1 { "!=" } else { "==" }, boundary, build.truth(true))),];
+        }
+        [build.give(build.truth(true)),]
     }
 
     // a code point's test: its UTF-8 bytes there, one after another
-    @(private) code-test: func(c: s64, next: s64) -> string {
+    @(private) code-test: func(c: s64, next: s64) -> Stmt {
         let bytes = "{c as char}".bytes();
-        let tests: list<string> = ["at + {bytes.len()} <= size",];
-        for index in 0..bytes.len() { tests.push("text.byte-at(at + {index}) == {bytes[index]}"); }
-        "if {tests.join(" && ")} \{ at += {bytes.len()}; pc = {next}; \} else \{ pc = -1; \}"
+        let test = build.binary("<=", build.binary("+", build.name("at"), build.int(bytes.len())), build.name("size"));
+        for index in 0..bytes.len() {
+            let there = text-byte(build.binary("+", build.name("at"), build.int(index)));
+            test = build.binary("&&", test, build.binary("==", there, build.int(bytes[index] as s64)));
+        }
+        build.when(test, [build.set-with("at", "+=", build.int(bytes.len())), build.set("pc", build.int(next)),], [build.set("pc", build.minus-one()),])
     }
 
-    // whether c is in ranges, as yel
-    @(private) ranges-test: func(ranges: list<s64>) -> string {
-        if ranges.len() == 0 { return "false"; }
-        let tests: list<string> = [];
+    // whether c is in ranges
+    @(private) ranges-test: func(ranges: list<s64>) -> Expr {
+        let test: option<Expr> = none;
+        let c = { -> build.name("c") };
         let index = 0;
         loop {
             if index + 1 >= ranges.len() { break; }
             let low = ranges[index];
             let high = ranges[index + 1];
-            tests.push(if low == high { "c == {low}" } else if low == 0 { "c <= {high}" } else if high == MAX-CODE { "c >= {low}" } else { "(c >= {low} && c <= {high})" });
+            let one = if low == high {
+                build.binary("==", c(), build.int(low))
+            } else if low == 0 {
+                build.binary("<=", c(), build.int(high))
+            } else if high == MAX-CODE {
+                build.binary(">=", c(), build.int(low))
+            } else {
+                build.binary("&&", build.binary(">=", c(), build.int(low)), build.binary("<=", c(), build.int(high)))
+            };
+            test = some(match test {
+                some(before) => build.binary("||", before, one),
+                none => one,
+            });
             index += 2;
         }
-        "({tests.join(" || ")})"
+        test.unwrap-or(build.truth(false))
     }
+
+    // text.byte-at(at), stack.pop(), a list's len() (not named as the methods:
+    // a func of the module would take their calls)
+    @(private) text-byte: func(at: Expr) -> Expr { build.method(build.name("text"), "byte-at", [at,]) }
+
+    @(private) popped: func() -> Expr { build.method(build.name("stack"), "pop", []) }
+
+    @(private) length: func(n: string) -> Expr { build.method(build.name(n), "len", []) }
 }

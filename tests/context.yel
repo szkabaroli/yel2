@@ -6,6 +6,10 @@
 
 @(context) let request: string = "none";
 
+// whether background has added its cleanup (main disposes its owner only then, however slow the
+// machine)
+let added: bool = false;
+
 // sets its own, then waits while the others run
 handle: async func(name: string, ms: s64) -> string {
     request = name;
@@ -23,6 +27,7 @@ inherits: async func() -> string {
 background: async func() {
     wait async.sleep(1);
     reactive.on-cleanup({ -> print("cleanup of a task started under the owner\n"); });
+    added = true;
 }
 
 main: async func() -> s32 {
@@ -39,7 +44,10 @@ main: async func() -> s32 {
 
     let owner = reactive.new-owner();
     reactive.within(owner, { -> let _ = start background(); });
-    wait async.sleep(10);
+    loop {
+        if added { break; }
+        wait async.sleep(1);
+    }
     reactive.dispose(owner);
     print("disposed\n");
     0

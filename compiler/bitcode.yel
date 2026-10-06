@@ -94,7 +94,8 @@ resource BcParamAttributes { index: s64, attributes: list<u64>, }
 resource BcGlobal { name: string, ty: s64, bytes: string, terminated: bool, external: bool, align: u64, elements: list<BcElement>, writable: bool, }
 
 // an element of a global's aggregate (a struct's field, an array's item): of type ty, an integer
-// (kind 0, value its bits), null (1), or another global's address (2, value its index)
+// (kind 0, value its bits), null (1: a value of zeros), another global's address (2, value its
+// index), or a func's (3, value its index)
 resource BcElement { ty: s64, kind: s64, value: u64, }
 
 // a func: its name and function type, whether it has a body (else it is declared: the C runtime's,
@@ -266,6 +267,13 @@ module bitcode {
     // a vector of count items (<2 x float>: one register's lanes)
     vector-type: func(m: BcModule, count: s64, item: s64) -> s64 { type-id(m, 12, [count as u64, item as u64,]) }
 
+    // a struct of fields packed (each at the next byte: padding its own fields)
+    packed-struct-type: func(m: BcModule, fields: list<s64>) -> s64 {
+        let operands: list<u64> = [1,];
+        for f in fields { operands.push(f as u64); }
+        type-id(m, 18, operands)
+    }
+
     // a struct of fields (not packed: each aligned as C's)
     struct-type: func(m: BcModule, fields: list<s64>) -> s64 {
         let operands: list<u64> = [0,];
@@ -362,6 +370,9 @@ module bitcode {
     // attributes: kind 0; memory an int one, kind 1: 0 for none)
     nounwind: func() -> list<u64> { [0, 18,] }
 
+    // a func built for size: optsize and minsize (enum attributes: kinds 19 and 6)
+    small: func() -> list<u64> { [0, 19, 0, 6,] }
+
     willreturn: func() -> list<u64> { [0, 61,] }
 
     nofree: func() -> list<u64> { [0, 62,] }
@@ -442,7 +453,7 @@ module bitcode {
     constant-count: func(m: BcModule) -> s64 {
         let count = 0;
         for g in m.globals {
-            if !g.external { count += 1 + g.elements.filter({ e -> e.kind != 2 }).len(); }
+            if !g.external { count += 1 + g.elements.filter({ e -> e.kind != 2 && e.kind != 3 }).len(); }
         }
         // (and with debug info, the module flags' four i32s)
         if m.debug { count += flag-values().len(); }
@@ -573,7 +584,7 @@ module bitcode {
             if g.external {
                 initializers.push(-1);
             } else {
-                next += g.elements.filter({ e -> e.kind != 2 }).len();
+                next += g.elements.filter({ e -> e.kind != 2 && e.kind != 3 }).len();
                 initializers.push(next);
                 next += 1;
             }
@@ -605,6 +616,9 @@ module bitcode {
                     for e in g.elements {
                         if e.kind == 2 {
                             ids.push(e.value);
+                        } else if e.kind == 3 {
+                            // (a func's value: after the globals')
+                            ids.push(globals as u64 + e.value);
                         } else {
                             emit-record(w, 1, [e.ty as u64,]);
                             if e.kind == 1 { emit-record(w, 2, []); } else { emit-record(w, 4, [signed(e.value),]); }

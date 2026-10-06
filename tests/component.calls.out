@@ -6,6 +6,8 @@ circle(3)
 dot
 {read, write}
 "hi yel, hi yel, hi yel"
+"hi , hi "
+[]
 [("a", 1), ("bcd", 3), ("", 0)]
 ok(3)
 err("division by zero")

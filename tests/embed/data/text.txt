@@ -1,0 +1,3 @@
+a "quoted" line, a back\slash, {braces} and $dollars
+tab	here, é and 字
+no newline at the end

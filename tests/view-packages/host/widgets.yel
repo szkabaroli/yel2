@@ -1,0 +1,39 @@
+package test:host;
+
+// the widgets the views of this test use, a widget set as yel:widgets' are (each an element the
+// host draws: here the test's dom, which prints what it is told)
+module ui {
+    // what each of them takes (a base: drawn by none)
+    @(base) widget Element {
+        on.click: func(click-event);
+    }
+
+    @(container) widget VStack: Element {}
+
+    @(container) widget HStack: Element {}
+
+    @(container) widget Text: Element {
+        weight: "normal" | "bold";
+    }
+
+    @(container) widget Badge: Element {}
+
+    @(container(Column, Row)) widget Table: Element {
+        label: string;
+    }
+
+    @(container) widget Column: Element {}
+
+    @(container) widget Row: Element {
+        value: string;
+    }
+
+    @(container) widget Button: Element {
+        variant: string;
+    }
+
+    widget Input: Element {
+        value: string;
+        on.input: func(input-change);
+    }
+}

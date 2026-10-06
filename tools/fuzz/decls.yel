@@ -5,8 +5,8 @@
 module decls {
     types-part: func(g: Gen, lines: list<string>, count: s64) {
         for i in 0..count {
-            let kind = dice.pick(g.dice, ["record", "record", "variant", "variant", "enum", "flags", "distinct", "strings", "range", "union",]);
-            let name = gen.fresh(g, if kind == "record" { "Rec" } else if kind == "variant" { "Var" } else if kind == "enum" { "Enu" } else { "Ty" });
+            let kind = dice.pick(g.dice, ["record", "record", "value", "variant", "variant", "enum", "flags", "distinct", "strings", "range", "union",]);
+            let name = gen.fresh(g, if kind == "record" { "Rec" } else if kind == "value" { "Val" } else if kind == "variant" { "Var" } else if kind == "enum" { "Enu" } else { "Ty" });
             let decl: TypeDecl = { kind: kind, name: name, names: [], types: [], base: Ty.unit-t, low: 0, high: 0, };
             if kind == "record" {
                 for k in 0..dice.between(g.dice, 1, 4) {
@@ -17,6 +17,15 @@ module decls {
                 for k in 0..decl.names.len() { fields.push("{decl.names[k]}: {types.show(decl.types[k])},"); }
                 // (a resource: a shared object, as the programs made assume)
                 lines.push("resource {name} {gen.lb()} {fields.join(" ")} {gen.rb()}");
+            } else if kind == "value" {
+                // a record: a value, copied where it goes (its fields read, never set)
+                for k in 0..dice.between(g.dice, 1, 3) {
+                    decl.names.push("f{k}");
+                    decl.types.push(pick.plain-type(g, 2));
+                }
+                let fields: list<string> = [];
+                for k in 0..decl.names.len() { fields.push("{decl.names[k]}: {types.show(decl.types[k])},"); }
+                lines.push("record {name} {gen.lb()} {fields.join(" ")} {gen.rb()}");
             } else if kind == "variant" {
                 let cases: list<string> = [];
                 for k in 0..dice.between(g.dice, 1, 4) {
@@ -86,8 +95,9 @@ module decls {
         let module-lines: list<string> = [];
         let module-name = gen.fresh(g, "mod");
         for i in 0..count {
-            let kind = dice.pick(g.dice, ["plain", "plain", "plain", "plain", "generic", "generator", "module",]);
-            let name = gen.fresh(g, "fn");
+            let kind = dice.pick(g.dice, ["plain", "plain", "plain", "plain", "generic", "generator", "module", "async",]);
+            let name = gen.func-name(g);
+            g.escaped = [];
             let type-params: list<string> = if kind == "generic" { ["T",] } else { [] };
             let params: list<Ty> = [];
             let readonly: list<bool> = [];
@@ -117,17 +127,22 @@ module decls {
             g.results = [result,];
             g.loops = [0,];
             g.yields = [if kind == "generator" { some(result) } else { none },];
+            g.asyncs = [kind == "async",];
             g.frozen = [];
             g.budget = g.width * 4;
+            // (an async func's params: none readonly, a started call's argument kept while it runs)
+            if kind == "async" { for k in 0..readonly.len() { readonly[k] = false; } }
+            let defaults = defaults-for(g, kind, params, readonly);
             let shown: list<string> = [];
             for k in 0..params.len() {
-                let pn = gen.fresh(g, "a");
+                let pn = gen.local-name(g, "a");
+                let given = if defaults[k] != "" { " = " + defaults[k] } else { "" };
                 if readonly[k] {
                     gen.bind-readonly(g, pn, params[k]);
-                    shown.push("{pn}: {types.show(params[k])} & readonly");
+                    shown.push("{pn}: {types.show(params[k])} & readonly{given}");
                 } else {
                     gen.bind(g, pn, params[k], false);
-                    shown.push("{pn}: {types.show(params[k])}");
+                    shown.push("{pn}: {types.show(params[k])}{given}");
                 }
             }
             let indent = if kind == "module" { "        " } else { "    " };
@@ -137,7 +152,7 @@ module decls {
                 unit-t => "",
                 _ => " -> {types.show(result)}",
             } };
-            let head = "{name}: func{generics}({shown.join(", ")}){returns} {gen.lb()}";
+            let head = "{name}: {if kind == "async" { "async " } else { "" }}func{generics}({shown.join(", ")}){returns} {gen.lb()}";
             let out = if kind == "module" { module-lines } else { lines };
             let pad = if kind == "module" { "    " } else { "" };
             out.push(pad + head);
@@ -153,6 +168,8 @@ module decls {
                 result: result,
                 type-params: type-params,
                 yields: kind == "generator",
+                defaults: defaults,
+                is-async: kind == "async",
             });
         }
         if module-lines.len() > 0 {
@@ -161,6 +178,58 @@ module decls {
             lines.push(gen.rb());
             lines.push("");
         }
+    }
+
+    // each param's default ("" for none): now and then the last ones of a plain, a module's or an
+    // async func, where a literal (or a directive: #line, #func) can be one
+    defaults-for: func(g: Gen, kind: string, params: list<Ty>, readonly: list<bool>) -> list<string> {
+        let out: list<string> = [];
+        for p in params { out.push(""); }
+        if (kind != "plain" && kind != "module" && kind != "async") || !dice.chance(g.dice, 35) { return out; }
+        for back in 0..params.len() {
+            let k = params.len() - 1 - back;
+            if readonly[k] || !dice.chance(g.dice, 70) { break; }
+            let given = match params[k] {
+                // (#line: a literal of the line it is on, past an 8-bit type's at times)
+                int-t(n) => dice.pick(g.dice, if types.bits(n) > 8 { ["0", "1", "7", "42", "#line",] } else { ["0", "1", "7", "42",] }),
+                bool-t => dice.pick(g.dice, ["true", "false",]),
+                string-t => dice.pick(g.dice, ["\"d\"", "\"\"", "#func",]),
+                char-t => "'q'",
+                _ => "",
+            };
+            if given == "" { break; }
+            out[k] = given;
+        }
+        out
+    }
+
+    // how many of f's arguments a call gives: all, or now and then without some of its defaulted
+    // last ones
+    given: func(g: Gen, f: FuncInfo) -> s64 {
+        let defaulted = f.defaults.filter({ x -> x != "" }).len();
+        if defaulted == 0 || !dice.chance(g.dice, 50) { return f.params.len(); }
+        f.params.len() - dice.between(g.dice, 1, defaulted)
+    }
+
+    // now and then a global of an async context's (@(context): each task its own), and a test (left
+    // out of the program, checked all the same)
+    extras-part: func(g: Gen, lines: list<string>) -> list<string> {
+        let context: list<string> = [];
+        if dice.chance(g.dice, 25) {
+            let name = gen.fresh(g, "ctx");
+            lines.push("@(context) let {name}: s64;");
+            lines.push("");
+            context.push(name);
+        }
+        if dice.chance(g.dice, 25) {
+            let name = gen.fresh(g, "check");
+            lines.push("@(test) {name}: func() {gen.lb()}");
+            lines.push("    let {name}-sum = 1 + 2;");
+            lines.push("    assert({name}-sum == 3);");
+            lines.push(gen.rb());
+            lines.push("");
+        }
+        context
     }
 
     // main: each func called (a generic one at s32 and string), what it gives printed
@@ -172,7 +241,16 @@ module decls {
         g.yields = [none,];
         g.frozen = [];
         g.budget = g.width * 6;
-        lines.push("main: func() -> s32 {gen.lb()}");
+        g.escaped = [];
+        let context = extras-part(g, lines);
+        // (async where it calls an async func: each waited for, or started and then waited for)
+        let waits = g.funcs.any({ f -> f.is-async });
+        g.asyncs = [waits,];
+        lines.push("main: {if waits { "async " } else { "" }}func() -> s32 {gen.lb()}");
+        for name in context {
+            lines.push("    {name} = 7;");
+            lines.push("    print(\"{name}: {gen.lb()}{name}{gen.rb()}\\n\");");
+        }
         for f in g.funcs {
             let targs: list<Ty> = if f.type-params.len() > 0 { [dice.pick(g.dice, [Ty.int-t("s32"), Ty.string-t, Ty.list-t(Ty.int-t("u8")),]),] } else { [] };
             let ps: list<Ty> = [];
@@ -180,13 +258,23 @@ module decls {
             for line in stmts.stmt(g, 0, "    ") { lines.push(line); }
             gen.push-pending(g);
             let args: list<string> = [];
-            for k in 0..ps.len() {
+            for k in 0..given(g, f) {
                 // a readonly param: a list made here (new, so readonly at once)
                 if f.readonly[k] { args.push(exprs.literal(g, ps[k], 0, true)); }
                 else { args.push(exprs.expr(g, ps[k], 0, f.type-params.len() == 0)); }
             }
             let r = gen.fresh(g, "r");
             let call = "{f.name}({args.join(", ")})";
+            // an async func's: waited for, or started (its future) and then waited for
+            if f.is-async {
+                if dice.chance(g.dice, 50) {
+                    call = "wait {call}";
+                } else {
+                    let future = gen.fresh(g, "fut");
+                    g.pending[g.pending.len() - 1].push("let {future} = start {call};");
+                    call = "wait {future}";
+                }
+            }
             for p in gen.pop-pending(g) { lines.push("    " + p); }
             if f.yields {
                 lines.push("    for {r} in {call} {gen.lb()} print(\"{f.name} yields {gen.lb()}{r}:?{gen.rb()}\\n\"); {gen.rb()}");
@@ -208,6 +296,7 @@ module decls {
             dice: { state: seed, },
             decls: [], funcs: [], consts: [],
             scopes: [[],], pending: [[],],
+            asyncs: [false,], escaped: [], worded: [],
             counter: 0,
             depth: 2 + size / 2,
             width: 2 + size,

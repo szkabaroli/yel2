@@ -3,3 +3,6 @@ build/
 # local scratch, never shared
 private/
 .DS_Store
+# what yelc build makes (std:build): each project's cache and what it installs
+.yel-cache/
+yel-out/

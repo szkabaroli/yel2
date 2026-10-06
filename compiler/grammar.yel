@@ -33,16 +33,37 @@ resource Grammar {
     // told where one is parsed)
     unknowns: list<Token>,
     // the module the parser is in ("" at the top), and the attributes on what it parses
-    // (@(observable), @(context): where they may go)
+    // (@(observable), @(context), @(container): where they may go)
     module: string,
     observable: bool,
     in-context: bool,
+    container: bool,
 }
 
 module grammar {
     // the syntax tree of sources[source], kept in the context's trees (an analysis's: a build
-    // lowers each file's as it is read, and keeps none)
+    // lowers each file's as it is read, and keeps none); one its cache has of the same text, not
+    // parsed again (its errors told again, as its parse told them)
     parse-file: func(context: Context, source: s64) -> GreenNode {
+        // (a file the cache has, its text the same: its tree, its errors told again)
+        let path = context.sources[source].path;
+        let text = context.sources[source].text;
+        match context.cache {
+            some(cache) => {
+                match cache.files.get(path) {
+                    some(parsed) => {
+                        if parsed.text == text {
+                            for d in parsed.errors { diagnostics.report(context, moved-diagnostic(d, parsed.source, source)); }
+                            if !context.exits { context.trees.set(source, parsed.green); }
+                            return parsed.green;
+                        }
+                    }
+                    none => {}
+                }
+            }
+            none => {}
+        }
+        let before = context.errors.len();
         let g = grammar(context, source);
         for step in 0..g.toks.len() {
             if is-kind(g, 0, TokenKind.eof) { break; }
@@ -50,6 +71,10 @@ module grammar {
         }
         let green = tree.finish-file(g.tree);
         if !context.exits { context.trees.set(source, green); }
+        match context.cache {
+            some(cache) => cache.files.set(path, { text: text, green: green, errors: context.errors.slice(before, context.errors.len()), source: source, }),
+            none => {}
+        }
         green
     }
 
@@ -93,6 +118,7 @@ module grammar {
             unknowns: unknowns,
             module: "",
             observable: false,
+            container: false,
             in-context: false,
         };
         g
@@ -1444,13 +1470,15 @@ module grammar {
 
     // a declaration (its attributes first): what it is
     declaration: func(g: Grammar) -> NodeKind {
-        // @(private), @(private="file"), @(observable), @(test), @(context): one or several
+        // @(private), @(private="file"), @(observable), @(test), @(context), @(container),
+        // @(container(Part, …)), @(base): one or several
         if at(g, "@") && at-off(g, "(", 1) {
             let attribute = mark(g);
             advance(g);
             advance(g);
             let observable = false;
             let in-context = false;
+            let container = false;
             loop {
                 if at(g, "private") {
                     advance(g);
@@ -1468,8 +1496,25 @@ module grammar {
                 } else if at(g, "context") {
                     advance(g);
                     in-context = true;
+                } else if at(g, "container") {
+                    advance(g);
+                    container = true;
+                    // (container(Tab, …): the parts it holds, no others; a comma after the last)
+                    if at(g, "(") {
+                        advance(g);
+                        loop {
+                            let _ = name(g);
+                            if !at(g, ",") { break; }
+                            advance(g);
+                            if at(g, ")") { break; }
+                        }
+                        expect(g, ")");
+                    }
+                } else if at(g, "base") {
+                    advance(g);
+                    container = true;
                 } else {
-                    fail(g, "an attribute @(...) is @(private), @(private=\"file\"), @(observable), @(test) or @(context)");
+                    fail(g, "an attribute @(...) is @(private), @(private=\"file\"), @(observable), @(test), @(context), @(container) or @(base)");
                     wrap(g, attribute, NodeKind.attribute);
                     return NodeKind.error;
                 }
@@ -1490,9 +1535,16 @@ module grammar {
             }
             let outer-context = g.in-context;
             g.in-context = outer-context || in-context;
+            if container && !at(g, "widget") && !at(g, "@") {
+                fail(g, "@(container) and @(base) go on a widget (widget Name \{ … \})");
+                return NodeKind.error;
+            }
+            let outer-container = g.container;
+            g.container = outer-container || container;
             let kind = declaration(g);
             g.observable = outer-observable;
             g.in-context = outer-context;
+            g.container = outer-container;
             return kind;
         }
         // name: … (a func, in member syntax): a declaration of that name, whatever word it is
@@ -1542,8 +1594,14 @@ module grammar {
         }
         // view Name { fields; its element }
         if !named && at(g, "view") && is-kind(g, 1, TokenKind.id) && at-off(g, "\{", 2) {
-            view-decl(g);
+            view-decl(g, false);
             return NodeKind.view-decl;
+        }
+        // widget Name { attributes; events }: an element the host draws (@(container): one that
+        // takes items); widget Name: Base, … { … }: with its bases' too
+        if !named && at(g, "widget") && is-kind(g, 1, TokenKind.id) && (at-off(g, "\{", 2) || at-off(g, ":", 2)) {
+            view-decl(g, true);
+            return NodeKind.widget-decl;
         }
         // record Name { fields }, resource Name { fields }
         if !named && (at(g, "record") || (at(g, "resource") && is-kind(g, 1, TokenKind.id) && at-off(g, "\{", 2))) {
@@ -1775,11 +1833,21 @@ module grammar {
 
     // view Name { fields; its element }: its fields (name: T = value;, @(private) or not) and one
     // element at its top
-    view-decl: func(g: Grammar) {
+    view-decl: func(g: Grammar, widget: bool) {
         let span = here(g);
         advance(g);
         let vname = name(g);
-        if g.module == "" { fail(g, "view {vname} goes in a module: the module is its WIT interface"); }
+        // (a widget's bases: Name: Base, …)
+        if widget && at(g, ":") {
+            advance(g);
+            loop {
+                let _ = name(g);
+                if !at(g, ",") { break; }
+                advance(g);
+            }
+        }
+        if widget && g.module == "" { fail(g, "widget {vname} goes in a module: a widget set's"); }
+        if !widget && g.module == "" { fail(g, "view {vname} goes in a module: the module is its WIT interface"); }
         expect(g, "\{");
         let top = false;
         for step in g.pos..g.toks.len() {
@@ -1793,27 +1861,65 @@ module grammar {
                 return;
             }
             let field = mark(g);
+            // (@(private): the view's own state; @(mount): a prop mount is given; @(once): a let
+            // made once, as the view is first built)
             let private = false;
-            if at(g, "@") && at-off(g, "(", 1) && at-off(g, "private", 2) && at-off(g, ")", 3) {
+            let mounted = false;
+            let once = false;
+            if at(g, "@") && at-off(g, "(", 1) && (at-off(g, "private", 2) || at-off(g, "mount", 2) || at-off(g, "once", 2)) && at-off(g, ")", 3) {
+                private = at-off(g, "private", 2);
+                once = at-off(g, "once", 2);
+                mounted = !private && !once;
                 for k in 0..4 { advance(g); }
-                private = true;
             }
-            // name: T = value; (a field: a prop, its value to start with)
-            if is-kind(g, 0, TokenKind.id) && at-off(g, ":", 1) {
-                name(g);
+            // let name: T = value; (a value made of what it reads, made again when that changes;
+            // @(once): made once)
+            if !widget && at(g, "let") && is-kind(g, 1, TokenKind.id) && at-off(g, ":", 2) {
+                advance(g);
+                let lname = name(g);
                 expect(g, ":");
                 parse-type(g);
                 expect(g, "=");
                 expr(g);
                 expect(g, ";");
                 wrap(g, field, NodeKind.view-field);
+                if private || mounted { fail-at(g, span, "let {lname} is the view's own, made of what it reads: no @(private), no @(mount)"); }
                 continue;
             }
-            if private {
-                fail(g, "@(private) in a view is a field's: @(private) name: T = value;");
+            if once {
+                fail(g, "@(once) in a view is a let's: @(once) let name: T = value;");
                 return;
             }
-            if is-kind(g, 0, TokenKind.id) && at-off(g, "\{", 1) {
+            // name: T = value; (a field: a prop, its value to start with); on.name: func(T); (a
+            // callback, none given: it does nothing)
+            let callback = at(g, "on") && at-off(g, ".", 1) && is-kind(g, 2, TokenKind.id) && at-off(g, ":", 3);
+            if callback || (is-kind(g, 0, TokenKind.id) && at-off(g, ":", 1)) {
+                if callback {
+                    advance(g);
+                    advance(g);
+                }
+                let fname = name(g);
+                expect(g, ":");
+                parse-type(g);
+                if at(g, "=") {
+                    if widget { fail(g, "{fname} is a widget's attribute: the host gives it its value to start with (no = value)"); }
+                    advance(g);
+                    expr(g);
+                }
+                expect(g, ";");
+                wrap(g, field, NodeKind.view-field);
+                if widget && (private || mounted) { fail-at(g, span, "a widget's attributes are all given: no @(private), no @(mount)"); }
+                continue;
+            }
+            if private || mounted {
+                fail(g, "@({if private { "private" } else { "mount" }}) in a view is a field's: @({if private { "private" } else { "mount" }}) name: T = value;");
+                return;
+            }
+            if widget {
+                fail(g, "expected an attribute (name: T;) or an event (on.name: func(T);): the host draws widget {vname}");
+                return;
+            }
+            if element-ahead(g) {
                 if top {
                     fail(g, "view {vname} has one element at its top: put its elements in one (a VStack)");
                     return;
@@ -1826,21 +1932,32 @@ module grammar {
             return;
         }
         if g.recovering { return; }
-        if !top { fail-at(g, span, "view {vname} has no element: what it shows"); }
+        if !top && !widget { fail-at(g, span, "view {vname} has no element: what it shows"); }
     }
 
-    // Name { items }: an element (the host's: Text, VStack)
+    // whether an element begins here: Tag { (the host's), or module.View { (another view)
+    element-ahead: func(g: Grammar) -> bool {
+        if !is-kind(g, 0, TokenKind.id) { return false; }
+        at-off(g, "\{", 1) || (at-off(g, ".", 1) && is-kind(g, 2, TokenKind.id) && at-off(g, "\{", 3))
+    }
+
+    // Tag { items }, or module.View { props }: an element, the host's or another view's
     view-element: func(g: Grammar) {
         let begun = mark(g);
         name(g);
+        // (another view's: module.View)
+        if at(g, ".") {
+            advance(g);
+            name(g);
+        }
         expect(g, "\{");
         view-items(g, true);
         wrap(g, begun, NodeKind.view-element);
     }
 
     // a view's items up to the } that closes them: text ("…"), an element, if, for; and in an
-    // element (in-element), its attributes (name: value, style.name: value) and handlers (on event
-    // { … })
+    // element (in-element), its attributes (name: value, style.name: value; a handler, on.event:
+    // { params -> … }, one of them)
     view-items: func(g: Grammar, in-element: bool) {
         for step in g.pos..g.toks.len() {
             if at(g, "\}") {
@@ -1856,26 +1973,45 @@ module grammar {
             if is-string(g, 0) {
                 expr(g);
                 wrap(g, item, NodeKind.view-text);
+            } else if at(g, "#children") {
+                // (where the view puts the items it is given)
+                advance(g);
+                wrap(g, item, NodeKind.view-children);
             } else if at(g, "if") {
                 view-if(g);
             } else if at(g, "for") && is-kind(g, 1, TokenKind.id) && at-off(g, "in", 2) {
                 view-for(g);
-            } else if at(g, "on") && is-kind(g, 1, TokenKind.id) && at-off(g, "\{", 2) {
+            } else if at(g, "on") && is-kind(g, 1, TokenKind.id) && (at-off(g, "\{", 2) || at-off(g, "(", 2)) {
+                // (a handler is an on. attribute, a closure: on.click: { -> … })
+                fail(g, "a handler is an on. attribute, a closure: on.{g.texts[index-at(g, 1)]}: \{ -> … \}");
+                return;
+            } else if at(g, "style") && at-off(g, ".", 1) && style-name-end(g) > 0 {
+                // (style.name: a style, its name of one segment or more: style.pad.x, the
+                // vocabulary's own)
+                let prefix = buffer.buffer(32);
+                prefix.push("style.");
                 advance(g);
-                let event = name(g);
-                block(g);
-                wrap(g, item, NodeKind.view-handler);
-                if !in-element { fail-at(g, start, "on {event} is an element's: put it in one"); }
-            } else if at(g, "style") && at-off(g, ".", 1) && is-kind(g, 2, TokenKind.id) && at-off(g, ":", 3) {
+                advance(g);
+                loop {
+                    if !(is-kind(g, 0, TokenKind.id) && at-off(g, ".", 1)) { break; }
+                    prefix.push(text(g));
+                    prefix.push(".");
+                    advance(g);
+                    advance(g);
+                }
+                view-attribute(g, item, in-element, start, prefix.to-string());
+            } else if at(g, "on") && at-off(g, ".", 1) && is-kind(g, 2, TokenKind.id) && at-off(g, ":", 3) {
+                // (on.name: a handler, or another view's callback)
+                let prefix = text(g) + ".";
                 advance(g);
                 advance(g);
-                view-attribute(g, item, in-element, start);
+                view-attribute(g, item, in-element, start, prefix);
             } else if is-kind(g, 0, TokenKind.id) && at-off(g, ":", 1) {
                 view-attribute(g, item, in-element, start);
-            } else if is-kind(g, 0, TokenKind.id) && at-off(g, "\{", 1) {
+            } else if element-ahead(g) {
                 view-element(g);
             } else {
-                fail(g, "expected text (\"…\"), an element (Name \{ … \}), an attribute (name: value), on event \{ … \}, if or for");
+                fail(g, "expected text (\"…\"), an element (Name \{ … \}), an attribute (name: value), on event \{ … \}, if, for or #children");
                 return;
             }
             if at(g, ",") { advance(g); }
@@ -1883,12 +2019,24 @@ module grammar {
         }
     }
 
-    view-attribute: func(g: Grammar, item: TreeMark, in-element: bool, start: Span) {
+    // where style.a.b…: ends (the offset of its last name; 0: no such name, ahead)
+    style-name-end: func(g: Grammar) -> s64 {
+        let at = 2;
+        loop {
+            if !is-kind(g, at, TokenKind.id) { return 0; }
+            if at-off(g, ":", at + 1) { return at; }
+            if !at-off(g, ".", at + 1) { return 0; }
+            at += 2;
+        }
+        0
+    }
+
+    view-attribute: func(g: Grammar, item: TreeMark, in-element: bool, start: Span, prefix: string = "") {
         let aname = name(g);
         expect(g, ":");
         expr(g);
         wrap(g, item, NodeKind.view-attribute);
-        if !in-element { fail-at(g, start, "{aname} is an element's attribute: put it in one"); }
+        if !in-element { fail-at(g, start, "{prefix}{aname} is an element's attribute: put it in one"); }
     }
 
     // if cond { items } else { items } (else if …: an if in the else's items)

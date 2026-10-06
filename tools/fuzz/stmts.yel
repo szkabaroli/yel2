@@ -70,7 +70,7 @@ module stmts {
         if k == "let" { return let-typed(g, d); }
         if k == "let-infer" {
             let t = pick.any-type(g, 2);
-            let name = gen.fresh(g, "x");
+            let name = gen.local-name(g, "x");
             let value = exprs.expr(g, t, d, false);
             gen.bind(g, name, t, true);
             return "let {name} = {value};";
@@ -120,7 +120,7 @@ module stmts {
 
     let-typed: func(g: Gen, d: s64) -> string {
         let t = pick.any-type(g, 2);
-        let name = gen.fresh(g, "x");
+        let name = gen.local-name(g, "x");
         let value = exprs.expr(g, t, d, true);
         gen.bind(g, name, t, true);
         "let {name}: {types.show(t)} = {value};"

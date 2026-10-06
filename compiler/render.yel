@@ -56,6 +56,8 @@ module gen {
         match n.kind {
             const(c) => constant-c(g, c, n.ty),
             scan(t) => scan-fn(g, t),
+            static-list(x) => if x.flat { "((void *){x.c-name}_items)" } else { "(&{x.c-name})" },
+            descriptor(x) => "(&{x.c-name})",
             global(k) => global-c(k),
             local(i) => r.names[i],
             bin(x) => "({render-expr(r, x.a)} {x.op} {render-expr(r, x.b)})",
@@ -257,14 +259,15 @@ module gen {
                     // std's writers fill a buffer (nothing collected meanwhile: the buffer is held
                     // only here)
                     interp(s) => {
+                        // (no hold where the collector runs only between turns)
                         line(r, c"{");
-                        line(r, "y_gc_hold++;");
+                        if !r.g.context.turns { line(r, "y_gc_hold++;"); }
                         line(r, "ybuffer *yb = yel_buffer_new(16);");
                         for k in 0..s.parts.len() {
                             line(r, format-line(r, s.formatters[k], s.parts[k]));
                         }
                         line(r, "{d} = yel_buffer_string(yb);");
-                        line(r, "y_gc_hold--;");
+                        if !r.g.context.turns { line(r, "y_gc_hold--;"); }
                         line(r, c"}");
                     }
                     _ => line(r, "{d} = {top-expr(r, x.value)};"),
@@ -474,7 +477,7 @@ module gen {
             let paths = ptr-paths(g, f.locals[i].ty, name);
             r.names.push(name);
             r.paths.push(paths);
-            let rooted = f.rooted.len() == 0 || f.rooted[i];
+            let rooted = !g.context.turns && (f.rooted.len() == 0 || f.rooted[i]);
             if paths.len() > 0 && rooted {
                 r.slot-at.push(r.slots);
                 r.slots += paths.len();
@@ -500,7 +503,7 @@ module gen {
                         alloc(a) => {
                             if a.stack {
                                 line(r, c"{a.ctype} yr{x.dest} = { 0 };");
-                                if a.trace != "NULL" { objs.push(c"{ &yr{x.dest}, {a.trace} }"); }
+                                if a.trace != "NULL" && !g.context.turns { objs.push(c"{ &yr{x.dest}, {a.trace} }"); }
                             }
                         }
                         _ => {}

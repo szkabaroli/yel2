@@ -79,6 +79,11 @@ void *y_alloc(size_t bytes);
 // in y_new, when the heap has doubled since the last one left it; YEL_GC_STRESS=n instead runs one
 // every n allocations (and fills what it frees with 0xAB), to find a missing root. Under Y_NO_GC
 // (C made before the collector, which keeps no frames) none runs.
+//
+// A component of exports only (a reactor) collects only between turns (y_turns, set by its
+// exports' y_ready_turns), where an export returns to the host and nothing of it is on the stack
+// (y_turn_end): its funcs keep no frames, which leaves their locals in wasm locals (a third of its
+// code). A turn's garbage lasts until the turn ends; under YEL_GC_STRESS every turn's end collects.
 
 typedef void (*y_trace)(void *obj);
 
@@ -343,6 +348,8 @@ ylist *y_list_new(int64_t cap, int64_t size, y_scan scan);
 
 /** A list literal: its n items. */
 ylist *y_list_of(int64_t n, int64_t size, const void *items, y_scan scan);
+ylist *y_list_static(const ylist *data, const struct ytype *t);
+ylist *y_list_of_data(int64_t n, int64_t size, const void *items, y_scan scan);
 
 void *y_list_push_slot(ylist *l);
 
@@ -476,6 +483,7 @@ extern size_t y_abi_ntemps, y_abi_captemps;
 void *y_abi_temp(size_t bytes);
 
 void y_abi_free_temps(void);
+void y_abi_free_host(void *ptr, size_t len);
 
 /* ================================================================ async: every target's, then the
 target's own reactor and host */
@@ -548,6 +556,8 @@ extern bool y_started;
 /** The program's arguments (argv after the program), for main. */
 ylist *y_start(int argc, char **argv);
 void y_ready(void);
+extern bool y_turns;
+void y_ready_turns(void);
 
 // a turn's end (an export's post-return: nothing of the component is on the stack): the
 // collector runs when the heap has grown past half of what starts one
@@ -559,6 +569,14 @@ long y_env_count(const char *s);
 // std:process: a child process, how one ended, and a process's end as it is
 int64_t yel_process_fork(void);
 int64_t yel_process_wait(int64_t child);
+int64_t yel_process_run(ystr arguments, int64_t count, ystr dir, ystr environment, int64_t variables, ystr output);
+int64_t yel_process_start(ystr arguments, int64_t count, ystr dir, ystr environment, int64_t variables, ystr output);
+bool yel_process_done(int64_t child);
+int64_t yel_process_status(int64_t child);
+yunit yel_process_free(int64_t child);
+ystr yel_build_entries(ystr dir);
+bool yel_build_runnable(ystr at);
+int64_t yel_build_parallelism(void);
 Y_NORETURN void yel_process_end(int64_t code);
 
 #endif

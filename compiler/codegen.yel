@@ -607,6 +607,13 @@ module gen {
                         none => displayed.push(part),
                     }
                 }
+                // ("{x}" of a string: x itself, no buffer)
+                if displayed.len() == 1 {
+                    match expr-type(g, displayed[0]) {
+                        string-type => { return gen-expr(l, displayed[0]); }
+                        _ => {}
+                    }
+                }
                 let nodes = gen-operands(l, displayed);
                 let formatters: list<Formatter> = [];
                 for part in displayed { formatters.push(display-fn(g, expr-type(g, part))); }
@@ -628,6 +635,22 @@ module gen {
                     list-type(x) => x,
                     _ => Type.unit-type,
                 };
+                // (every item a constant: static data, one call copying it)
+                if items.len() > 0 {
+                    match static-list(l, lt, items, false) {
+                        some(data) => {
+                            // (items holding no list: copied as they are; else each list in them too,
+                            // by the list's descriptor)
+                            if data.flat {
+                                scan-fn(g, it);
+                                return temp(l, runtime-call("y_list_of_data", [int-const(data.items.len(), Type.num("s64")), size-of(it), static-list-node(data), scan(it),], lt));
+                            }
+                            let desc = type-desc(g, lt);
+                            return temp(l, runtime-call("y_list_static", [static-list-node(data), descriptor-node(lt, desc),], lt));
+                        }
+                        none => {}
+                    }
+                }
                 let item = c-type(g, it);
                 let values = gen-operands(l, items);
                 let size = size-of(it);
@@ -2125,4 +2148,173 @@ module gen {
         }
     }
 
+
+    // ---- constants as static data
+
+    // a list literal every item of which is a constant (numbers, bools, chars, strings, and records,
+    // tuples and non-empty lists of them): its static data, defined for C (its items' definition
+    // among the helpers, and its header's but for a flat one); none where any item is computed
+    static-list: func(l: Codegen, lt: Type, items: list<Expr>, nested: bool) -> option<StaticList> {
+        let g = l.g;
+        let item = match resolve(lt) {
+            list-type(x) => x,
+            _ => { return none; }
+        };
+        let values: list<StaticValue> = [];
+        for one in items {
+            match static-value(l, item, one) {
+                some(v) => values.push(v),
+                none => { return none; }
+            }
+        }
+        let name = "Y_SL_{g.helper-bodies.len()}";
+        let ct = c-type(g, item);
+        let shown: list<string> = [];
+        for v in values { shown.push(static-c(g, item, v)); }
+        // (one in another's items: a header the other points at)
+        let flat = !nested && !holds-list(g, item);
+        g.helper-bodies.push(c"static {ct} {name}_items[{values.len()}] = { {shown.join(", ")} };");
+        if !flat { g.helper-bodies.push(c"static ylist {name} = { {values.len()}, {values.len()}, sizeof({ct}), (char *){name}_items, {scan-fn(g, item)} };"); }
+        some({ ty: lt, items: values, c-name: name, flat: flat, })
+    }
+
+    // whether a value of type t holds a list (static data of it then copied list by list)
+    holds-list: func(g: Gen, t0: Type) -> bool {
+        match resolve(t0) {
+            list-type(_) => true,
+            anon-record(x) => x.types.any({ one -> holds-list(g, one) }),
+            tuple-type(x) => x.any({ one -> holds-list(g, one) }),
+            _ => false,
+        }
+    }
+
+    // a constant of type t as static data holds it (none: e is computed, or of a type static data
+    // holds none of: an object, a variant, a map)
+    static-value: func(l: Codegen, t0: Type, e: Expr) -> option<StaticValue> {
+        let g = l.g;
+        let t = resolve(t0);
+        match e.kind {
+            record-lit(inits) => {
+                let fields = match t {
+                    anon-record(x) => x,
+                    _ => { return none; }
+                };
+                let parts: list<StaticValue> = [];
+                for index in 0..fields.fields.len() {
+                    let named = inits.filter({ one -> one.name == fields.fields[index] });
+                    if named.len() != 1 { return none; }
+                    match static-value(l, fields.types[index], named[0].value) {
+                        some(v) => parts.push(v),
+                        none => { return none; }
+                    }
+                }
+                some(StaticValue.parts(parts))
+            }
+            tuple-lit(members) => {
+                let types = match t {
+                    tuple-type(x) => x,
+                    _ => { return none; }
+                };
+                if types.len() != members.len() { return none; }
+                let parts: list<StaticValue> = [];
+                for index in 0..types.len() {
+                    match static-value(l, types[index], members[index]) {
+                        some(v) => parts.push(v),
+                        none => { return none; }
+                    }
+                }
+                some(StaticValue.parts(parts))
+            }
+            list-lit(items) => {
+                if items.len() == 0 { return none; }
+                match t {
+                    list-type(_) => {}
+                    _ => { return none; }
+                }
+                match static-list(l, t, items, true) {
+                    some(data) => some(StaticValue.list(data)),
+                    none => none,
+                }
+            }
+            // a func that only makes a record of its parameters, given constants: that record
+            call(c) => {
+                if !g.constructors.has(c.name) { return none; }
+                let f = g.constructors[c.name];
+                if c.args.len() != f.params.len() { return none; }
+                let made = match f.body.stmts[0] {
+                    expr-stmt(x) => x.value,
+                    _ => { return none; }
+                };
+                let inits = match made.kind {
+                    record-lit(x) => x,
+                    _ => { return none; }
+                };
+                let given: list<FieldInit> = [];
+                for init in inits {
+                    let value = match init.value.kind {
+                        name(n) => {
+                            let at = f.params.index-of(name-text(n));
+                            if at < 0 { return none; }
+                            c.args[at]
+                        }
+                        _ => init.value,
+                    };
+                    given.push({ name: init.name, value: value, name-span: init.name-span, });
+                }
+                static-value(l, t, { kind: ExprKind.record-lit(given), span: e.span, ty: e.ty, })
+            }
+            str-lit(_) => scalar(l, t, e),
+            int-lit(_) => scalar(l, t, e),
+            float-lit(_) => scalar(l, t, e),
+            bool-lit(_) => scalar(l, t, e),
+            char-lit(_) => scalar(l, t, e),
+            unary(u) => {
+                if u.op != "-" { return none; }
+                match u.value.kind {
+                    int-lit(_) => scalar(l, t, e),
+                    float-lit(_) => scalar(l, t, e),
+                    _ => none,
+                }
+            }
+            _ => none,
+        }
+    }
+
+    // a literal of a scalar type (a string a ystr: a literal union of strings too), as its
+    // constant gives it
+    scalar: func(l: Codegen, t: Type, e: Expr) -> option<StaticValue> {
+        let ct = c-type(l.g, t);
+        let n = gen-expr(l, e);
+        match n.kind {
+            const(c) => match c {
+                int(v) => if ct == "ystr" { none } else { some(StaticValue.int(v)) },
+                float(v) => some(StaticValue.float(v)),
+                bool(b) => some(StaticValue.int(if b { 1 } else { 0 })),
+                text(x) => if ct == "ystr" { some(StaticValue.text(x)) } else { none },
+                _ => none,
+            },
+            _ => none,
+        }
+    }
+
+    // a static value's C initializer (of type t)
+    static-c: func(g: Gen, t0: Type, v: StaticValue) -> string {
+        let t = resolve(t0);
+        match v {
+            int(bits) => int-c(g, bits, t),
+            float(x) => float-c(x, t),
+            text(x) => c"{ {x.len()}, \"{c-escape(x)}\" }",
+            list(data) => "&{data.c-name}",
+            parts(members) => {
+                let types: list<Type> = match t {
+                    anon-record(x) => x.types,
+                    tuple-type(x) => x,
+                    _ => [],
+                };
+                let shown: list<string> = [];
+                for index in 0..members.len() { shown.push(static-c(g, types[index], members[index])); }
+                c"{ {shown.join(", ")} }"
+            }
+        }
+    }
 }

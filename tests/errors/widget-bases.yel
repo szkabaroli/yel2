@@ -1,0 +1,17 @@
+// error: 10:33: no widget Missing in this module, in this file: a widget's base is one of its own
+// error: 12:18: widget Loop is a base of itself, through Loop
+// error: 15:9: widget Twice has value already (one of its bases')
+// a widget's bases are widgets of its module, each of their fields once
+module ui {
+    @(base) widget Element {
+        value: string;
+    }
+
+    @(container) widget Button: Missing {}
+
+    widget Loop: Loop {}
+
+    widget Twice: Element {
+        value: string;
+    }
+}

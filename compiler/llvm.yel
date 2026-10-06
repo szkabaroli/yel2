@@ -52,6 +52,8 @@ resource Lower {
     task: BcValue,
     task-type: s64,
     resumes: map<s64, s64>,
+    // where its result is written, given in memory (in-memory's sret: the hidden first param)
+    result-memory: option<BcValue>,
 }
 
 // what a module's types are made of: the module, the program's declarations, the target's C ABI
@@ -98,11 +100,15 @@ module llvm {
         let wasm = abi == "wasm32";
         funcs = funcs.filter({ f -> f.build == "" || (f.build == "native") != wasm });
         for f in funcs {
-            // a closure's C function takes its environment first (a func value's adapter: unused)
-            let params: list<s64> = if f.closure { [bitcode.pointer-type(m),] } else { [] };
+            // a result given in memory: where it goes first (in-memory's); a closure's C function
+            // takes its environment next (a func value's adapter: unused)
+            let params: list<s64> = [];
+            let result-in-memory = !f.async && in-memory(types, f, f.result);
+            if result-in-memory { params.push(bitcode.pointer-type(m)); }
+            if f.closure { params.push(bitcode.pointer-type(m)); }
             // (a () param passes nothing, as a call gives it)
             for q in f.params {
-                if gives-value(f.locals[q].ty) { params.push(value-type(types, f, f.locals[q].ty)); }
+                if gives-value(f.locals[q].ty) { params.push(param-type(types, f, f.locals[q].ty)); }
             }
             if f.async {
                 // an async func (a generator too): its step (its frame given: done 1, or waiting 0),
@@ -115,7 +121,8 @@ module llvm {
                 continue;
             }
             // a component's export: the host's to call (by its name, on wasm)
-            let at = bitcode.add-func(m, f.c-name, bitcode.func-type(m, result-type(types, f, f.result), params), params.len(), true, f.export-name == "");
+            let result = if result-in-memory { bitcode.void-type(m) } else { result-type(types, f, f.result) };
+            let at = bitcode.add-func(m, f.c-name, bitcode.func-type(m, result, params), params.len(), true, f.export-name == "");
             if f.export-name != "" && wasm {
                 bitcode.set-attributes(m, at, [{ index: -1, attributes: bitcode.string-attribute("wasm-export-name", f.export-name), },]);
             }
@@ -130,8 +137,12 @@ module llvm {
         // none of it unwinds (yel has no exceptions, the runtime's C none either); a C function
         // only ever called pure touches no memory and returns (so a call of it may be merged,
         // moved out of a loop, or dropped when its value is not used)
+        // (built for size, --opt size: each func the program defines says so, optsize and minsize,
+        // as clang's -Oz marks a C function: what LLVM inlines and unrolls by)
+        let small = g.context.mode == "size";
         for at in 0..m.funcs.len() {
             bitcode.add-function-attributes(m, at, bitcode.nounwind());
+            if small && m.funcs[at].defined { bitcode.add-function-attributes(m, at, bitcode.small()); }
             if !m.funcs[at].defined && made.pure.get-or(m.funcs[at].name, false) {
                 bitcode.add-function-attributes(m, at, concat(concat(bitcode.memory-none(), bitcode.nofree()), concat(bitcode.nosync(), bitcode.willreturn())));
             }
@@ -215,6 +226,7 @@ module llvm {
             index: index, externs: externs, abi: types.abi,
             stack-objects: map.new(), framed: false, frame: BcValue.constant(0), roots: BcValue.constant(0), root-count: 0,
             root-at: [], root-paths: [], given: none, task: BcValue.param(0), task-type: 0, resumes: map.new(),
+            result-memory: none,
         }
     }
 
@@ -397,12 +409,30 @@ module llvm {
             task-step(l);
             return;
         }
-        // each local's slot, in the entry block, zeroed (as C's = { 0 })
+        // the params given in memory it never writes: read where the caller has them (their slot
+        // the param itself), never copied; by local, the param
+        let first = if in-memory(types, ir, ir.result) { 1 } else { 0 };
+        let given: map<s64, s64> = map.new();
+        let written = written-locals(ir);
+        let at = if ir.closure { first + 1 } else { first };
+        for k in 0..ir.params.len() {
+            let local = ir.params[k];
+            if gives-value(ir.locals[local].ty) {
+                if in-memory(types, ir, ir.locals[local].ty) && !written.has(local) { given.set(local, at); }
+                at += 1;
+            }
+        }
+        // each local's slot, in the entry block, zeroed (as C's = { 0 }); one in memory not (it is
+        // written before it is read, and its zeroing stays where its slot is given to a call: a
+        // store for each field)
         let i32 = bitcode.int-type(m, 32);
         let one = bitcode.integer(f, i32, 1);
-        for local in ir.locals {
+        for index in 0..ir.locals.len() {
+            let local = ir.locals[index];
             if !gives-value(local.ty) {
                 l.slots.push(none);
+            } else if given.has(index) {
+                l.slots.push(some(BcValue.param(given[index])));
             } else {
                 let ty = value-type(types, ir, local.ty);
                 let slot = must(bitcode.add-inst(f, 0, 19, [
@@ -411,7 +441,7 @@ module llvm {
                     BcOperand.absolute(one),
                     BcOperand.raw(align(l, local.ty) | 64),
                 ], true));
-                store(l, slot, bitcode.null(f, ty), local.ty);
+                if !in-memory(types, ir, local.ty) { store(l, slot, bitcode.null(f, ty), local.ty); }
                 l.slots.push(some(slot));
             }
         }
@@ -419,19 +449,23 @@ module llvm {
         // the collector's roots (its frame pushed), then each param's value stored in its slot
         // (and its pointers in their roots)
         frame-start(l);
-        let at = if ir.closure { 1 } else { 0 };
-        // a closure's environment (its first param), in its local
+        // (a result given in memory: where it goes, the first param)
+        if first == 1 { l.result-memory = some(BcValue.param(0)); }
+        at = if ir.closure { first + 1 } else { first };
+        // a closure's environment (its param after that), in its local
         if ir.env-param >= 0 {
             match l.slots[ir.env-param] {
-                some(slot) => store(l, slot, BcValue.param(0), ir.locals[ir.env-param].ty),
+                some(slot) => store(l, slot, BcValue.param(first), ir.locals[ir.env-param].ty),
                 none => {}
             }
             root(l, ir.env-param);
         }
+        // each param in its slot: one given in memory copied from there
         for k in 0..ir.params.len() {
+            let ty = ir.locals[ir.params[k]].ty;
             match l.slots[ir.params[k]] {
                 some(slot) => {
-                    store(l, slot, BcValue.param(at), ir.locals[ir.params[k]].ty);
+                    if given.has(ir.params[k]) {} else if in-memory(types, ir, ty) { copy(l, slot, BcValue.param(at), ty, false); } else { store(l, slot, BcValue.param(at), ty); }
                     at += 1;
                 }
                 none => {}
@@ -569,6 +603,15 @@ module llvm {
     stmt-kind: func(l: Lower, n: Node) {
         match n.kind {
             assign(x) => {
+                // a value in memory: moved into the local's slot
+                match l.slots[x.dest] {
+                    some(slot) => if in-memory(l.types, l.ir, x.value.ty) {
+                        moved(l, slot, x.value, l.ir.locals[x.dest].ty, false);
+                        root(l, x.dest);
+                        return;
+                    },
+                    none => {}
+                }
                 let v = match x.value.kind {
                     alloc(a) => some(alloc-object(l, x.dest, a)),
                     interp(s) => some(interpolated(l, s)),
@@ -652,6 +695,10 @@ module llvm {
                 }
                 if is-unit(l.ir.result) {
                     let _ = value(l, v);
+                    frame-end(l);
+                    inst(l, 10, [], false);
+                } else if l.result-memory != none {
+                    moved(l, must(l.result-memory), v, l.ir.result, true);
                     frame-end(l);
                     inst(l, 10, [], false);
                 } else {
@@ -744,6 +791,8 @@ module llvm {
                 }
             }
             scan(t) => some(scan-value(l, t)),
+            static-list(x) => some(BcValue.global(if x.flat { static-items-global(l, x) } else { static-list-global(l, x) })),
+            descriptor(x) => some(BcValue.global(descriptor-global(l, x.ty))),
             load(x) => field-load(l, n, x),
             make(x) => some(make-value(l, n, x)),
             list-get(x) => list-item(l, n, x),
@@ -752,7 +801,7 @@ module llvm {
                 none => none,
             },
             // a runtime helper's (key ""), or one of the module's: the program's, gen's helpers
-            call(c) => if c.key == "" && !l.index.has(c.c-name) { helper(l, n, c) } else { call(l, n, c) },
+            call(c) => if c.key == "" && !l.index.has(c.c-name) { helper(l, n, c) } else { call(l, n, c, none) },
             deref(a) => {
                 if is-unit(n.ty) { return none; }
                 some(load-as(l, must(value(l, a)), field-type(l.types, l.ir, n.ty), align(l, n.ty)))
@@ -785,7 +834,7 @@ module llvm {
             }
             convert(a) => some(convert(l, must(value(l, a)), a.ty, n.ty)),
             func-ref(x) => some(func-value(l, x)),
-            call-ref(x) => call-ref(l, n, x),
+            call-ref(x) => call-ref(l, n, x, none),
             // a loop's step (i += 1): done, giving nothing
             assign(x) => {
                 stmt(l, n);
@@ -798,8 +847,9 @@ module llvm {
         }
     }
 
-    // a call of one of the program's funcs
-    call: func(l: Lower, n: Node, c: CallNode) -> option<BcValue> {
+    // a call of one of the program's funcs; a result given in memory written into (none: memory
+    // of its own, read back)
+    call: func(l: Lower, n: Node, c: CallNode, into: option<BcValue>) -> option<BcValue> {
         let name = c.c-name;
         if !l.index.has(name) { unsupported(l.ir, "a call of {c.c-name} (not in the module)"); }
         let callee = l.index[name];
@@ -809,13 +859,169 @@ module llvm {
             BcOperand.raw(l.m.funcs[callee].ty as u64),
             BcOperand.value(BcValue.function(callee)),
         ];
+        let memory = result-memory(l, n.ty, into);
+        match memory {
+            some(at) => operands.push(BcOperand.value(at)),
+            none => {}
+        }
         for a in c.args {
-            match value(l, a) {
+            match argument(l, a) {
                 some(v) => operands.push(BcOperand.value(v)),
                 none => {}
             }
         }
-        inst(l, 34, operands, gives-value(n.ty))
+        let made = inst(l, 34, operands, gives-value(n.ty) && memory == none);
+        read-back(l, n.ty, memory, into, made)
+    }
+
+    // ---- values in memory: one bigger than a string crosses a call of the program's funcs as C's
+    // bigger structs do, a param as a pointer to it (the callee copies it into its slot first),
+    // a result written where a hidden first param says (sret). Moved by memcpy, not field by
+    // field: a record of strings is two dozen loads and stores each time otherwise, and a call
+    // may write straight into the local it is assigned to
+
+    in-memory: func(ty: Types, f: IrFunc, t: Type) -> bool { gives-value(t) && size-align(ty, f, t)[0] > 16 }
+
+    // the locals a func writes: assigns, stores into them, their address taken
+    written-locals: func(ir: IrFunc) -> map<s64, bool> {
+        let out: map<s64, bool> = map.new();
+        for n in flatten(ir.body) { writes(n, out); }
+        out
+    }
+
+    writes: func(n: Node, out: map<s64, bool>) {
+        let held: list<s64> = [];
+        match n.kind {
+            assign(x) => out.set(x.dest, true),
+            store(x) => reads(x.target, held),
+            address-of(a) => reads(a, held),
+            _ => {}
+        }
+        for local in held { out.set(local, true); }
+        for index in 0..operand-count(n) { writes(operand(n, index), out); }
+    }
+
+    // a param's type as the program's funcs take it
+    param-type: func(ty: Types, f: IrFunc, t: Type) -> s64 { if in-memory(ty, f, t) { bitcode.pointer-type(ty.m) } else { value-type(ty, f, t) } }
+
+    // a value of t copied from one place to another (C's memcpy, which LLVM knows; memmove where
+    // they may overlap)
+    copy: func(l: Lower, to: BcValue, from: BcValue, t: Type, overlap: bool) {
+        let m = l.m;
+        let pointer = bitcode.pointer-type(m);
+        let size-type = bitcode.int-type(m, calling.pointer-bytes(l.abi) * 8);
+        let size = bitcode.integer(l.f, size-type, size-align(l.types, l.ir, t)[0] as u64);
+        let _ = c-function(l, if overlap { "memmove" } else { "memcpy" }, pointer, [pointer, pointer, size-type,], [to, from, size,]);
+    }
+
+    // an argument as the program's funcs take it: a value in memory by a pointer to it (a local's
+    // own slot: the callee copies it before anything else), any other as itself (none: a ())
+    argument: func(l: Lower, a: Node) -> option<BcValue> {
+        if !in-memory(l.types, l.ir, a.ty) { return value(l, a); }
+        match a.kind {
+            local(i) => match l.slots[i] {
+                some(slot) => { return some(slot); }
+                none => {}
+            },
+            _ => {}
+        }
+        // (a call's in memory of its own; another a copy: what is in memory elsewhere may change
+        // while the callee reads it)
+        match called-into(l, a) {
+            some(memory) => { return some(memory); }
+            none => {}
+        }
+        let memory = scratch-of(l, value-type(l.types, l.ir, a.ty), size-align(l.types, l.ir, a.ty)[1]);
+        moved(l, memory, a, a.ty, true);
+        some(memory)
+    }
+
+    // where a call's result of t goes, given in memory: into, or memory of its own (none: given
+    // as itself)
+    result-memory: func(l: Lower, t: Type, into: option<BcValue>) -> option<BcValue> {
+        if !in-memory(l.types, l.ir, t) { return none; }
+        match into {
+            some(at) => some(at),
+            none => some(scratch-of(l, value-type(l.types, l.ir, t), size-align(l.types, l.ir, t)[1])),
+        }
+    }
+
+    // a call's value: what it gave, or (in memory of its own) read from there
+    read-back: func(l: Lower, t: Type, memory: option<BcValue>, into: option<BcValue>, made: option<BcValue>) -> option<BcValue> {
+        match memory {
+            some(at) => if into == none { some(load(l, at, t)) } else { none },
+            none => made,
+        }
+    }
+
+    // whether a node is a call of the program's funcs (one that writes a result in memory where
+    // it is told)
+    writes-memory: func(l: Lower, v: Node) -> bool {
+        match v.kind {
+            call(c) => !(c.key == "" && !l.index.has(c.c-name)),
+            call-ref(x) => true,
+            _ => false,
+        }
+    }
+
+    // where a value already is in memory, read where it is (a local's slot, a field, an item, a
+    // deref's, a global's; none: one computed)
+    value-memory: func(l: Lower, v: Node) -> option<BcValue> {
+        match v.kind {
+            local(i) => l.slots[i],
+            load(x) => field-memory(l, x, path-steps(l, x.base.ty, x.path, x.arrow)),
+            deref(a) => value(l, a),
+            list-get(x) => some(item-memory(l, x, v.ty)),
+            global(k) => some(global-address(l, k, v.ty)),
+            _ => none,
+        }
+    }
+
+    // a call's value in memory of its own (none: v is not a call of the program's funcs)
+    called-into: func(l: Lower, v: Node) -> option<BcValue> {
+        if !writes-memory(l, v) { return none; }
+        let memory = result-memory(l, v.ty, none);
+        match v.kind {
+            call(c) => { let _ = call(l, v, c, memory); }
+            call-ref(x) => { let _ = call-ref(l, v, x, memory); }
+            _ => {}
+        }
+        memory
+    }
+
+    // a value of t (v's) put at memory: a call's written there itself (own: memory nothing else
+    // reads, a func's result) or copied from memory of its own (LLVM then has it write there
+    // itself), one already in memory copied (memmove: a field of a local may be put in the local),
+    // any other stored
+    moved: func(l: Lower, memory: BcValue, v: Node, t: Type, own: bool) {
+        if own {
+            match v.kind {
+                call(c) => if writes-memory(l, v) {
+                    let _ = call(l, v, c, some(memory));
+                    return;
+                },
+                call-ref(x) => {
+                    let _ = call-ref(l, v, x, some(memory));
+                    return;
+                }
+                _ => {}
+            }
+        }
+        match called-into(l, v) {
+            some(from) => {
+                copy(l, memory, from, t, false);
+                return;
+            }
+            none => {}
+        }
+        match value-memory(l, v) {
+            some(from) => {
+                copy(l, memory, from, t, true);
+                return;
+            }
+            none => {}
+        }
+        store(l, memory, must(value(l, v)), t);
     }
 
     // a && b, a || b (a pattern's tests: the second may read what only the first makes sure is
@@ -845,26 +1051,40 @@ module llvm {
         at
     }
 
-    // a call through a func value ({ fn, env }): its C function, given its environment first
-    call-ref: func(l: Lower, n: Node, x: CallRefNode) -> option<BcValue> {
+    // a call through a func value ({ fn, env }): its C function, given its environment first (after
+    // where its result goes, given in memory: into, as call's)
+    call-ref: func(l: Lower, n: Node, x: CallRefNode, into: option<BcValue>) -> option<BcValue> {
         let m = l.m;
+        let pointer = bitcode.pointer-type(m);
         let callee = must(value(l, x.callee));
         let function = extract(l, callee, [0,]);
-        let params = [bitcode.pointer-type(m),];
-        let args = [extract(l, callee, [1,]),];
+        let params: list<s64> = [];
+        let args: list<BcValue> = [];
+        let memory = result-memory(l, n.ty, into);
+        match memory {
+            some(at) => {
+                params.push(pointer);
+                args.push(at);
+            }
+            none => {}
+        }
+        params.push(pointer);
+        args.push(extract(l, callee, [1,]));
         for a in x.args {
-            match value(l, a) {
+            match argument(l, a) {
                 some(v) => {
-                    params.push(value-type(l.types, l.ir, a.ty));
+                    params.push(param-type(l.types, l.ir, a.ty));
                     args.push(v);
                 }
                 none => {}
             }
         }
-        let fn-ty = bitcode.func-type(m, result-type(l.types, l.ir, n.ty), params);
+        let result = if memory != none { bitcode.void-type(m) } else { result-type(l.types, l.ir, n.ty) };
+        let fn-ty = bitcode.func-type(m, result, params);
         let operands = [BcOperand.raw(0), BcOperand.raw(1 << 15), BcOperand.raw(fn-ty as u64), BcOperand.value(function),];
         for v in args { operands.push(BcOperand.value(v)); }
-        inst(l, 34, operands, gives-value(n.ty))
+        let made = inst(l, 34, operands, gives-value(n.ty) && memory == none);
+        read-back(l, n.ty, memory, into, made)
     }
 
     // a func as a value: its C function (a func value's adapter, a closure's body)
@@ -901,6 +1121,25 @@ module llvm {
             }
         }
         if name == "y_list_of" || name == "y_list_new" { return list-made(l, n, c); }
+        // a list literal of constants: its static items copied (y_list_of_data(n, size, items, scan)),
+        // or its static data, each list in it too (y_list_static(data, descriptor))
+        if name == "y_list_of_data" {
+            let i64 = bitcode.int-type(l.m, 64);
+            let pointer = bitcode.pointer-type(l.m);
+            let made = bitcode.declared(l.m, name, bitcode.func-type(l.m, pointer, [i64, i64, pointer, pointer,]), 4);
+            // (the item's size an int64_t, as the runtime takes it: a usize is 32 bits on wasm32)
+            let item = match resolve(n.ty) {
+                list-type(x) => x,
+                _ => unsupported(l.ir, "a list made of {show-type(n.ty)}"),
+            };
+            let size = bitcode.integer(l.f, i64, size-align(l.types, l.ir, item)[0] as u64);
+            return runtime-call(l, made, [must(value(l, c.args[0])), size, must(value(l, c.args[2])), must(value(l, c.args[3])),], true);
+        }
+        if name == "y_list_static" {
+            let pointer = bitcode.pointer-type(l.m);
+            let made = bitcode.declared(l.m, name, bitcode.func-type(l.m, pointer, [pointer, pointer,]), 2);
+            return runtime-call(l, made, [must(value(l, c.args[0])), must(value(l, c.args[1])),], true);
+        }
         // a future's result: where its frame keeps it (after the header)
         if name.starts-with("y_result_") {
             if !gives-value(n.ty) { return none; }
@@ -1599,6 +1838,8 @@ module llvm {
             type-arg(_) => "a type argument",
             global(_) => "a global",
             scan(_) => "a scan",
+            static-list(_) => "a list's static data",
+            descriptor(_) => "a type's descriptor",
         }
     }
 
@@ -2186,32 +2427,45 @@ module llvm {
     // a store: its value where its target (a field, a list's item) is; a local's slots again where
     // the target is in a local
     field-store: func(l: Lower, x: StoreNode) {
-        let v = value(l, x.value);
+        // a value in memory: a call's (made first: it may move what the target is in), or one in
+        // memory already, copied there
+        let from: option<BcValue> = none;
+        if in-memory(l.types, l.ir, x.value.ty) {
+            from = called-into(l, x.value);
+            if from == none { from = value-memory(l, x.value); }
+        }
+        let v = if from == none { value(l, x.value) } else { none };
         let value-of = match v {
             some(stored) => stored,
             // a () stored: C's yunit, 0
             none => bitcode.integer(l.f, bitcode.int-type(l.m, 8), 0),
         };
         let align = align-code(size-align(l.types, l.ir, x.target.ty)[1]);
+        let put = { address: BcValue, given: BcValue, aligned: u64 ->
+            match from {
+                some(source) => copy(l, address, source, x.value.ty, true),
+                none => store-as(l, address, given, aligned),
+            }
+        };
         match x.target.kind {
             load(t) => {
                 let steps = path-steps(l, t.base.ty, t.path, t.arrow);
                 match field-memory(l, t, steps) {
-                    some(address) => store-as(l, address, value-of, align),
+                    some(address) => put(address, value-of, align),
                     none => unsupported(l.ir, "a field's write into a value no local holds"),
                 }
                 if !t.arrow { root-base(l, t.base); }
             }
             list-get(t) => {
-                store-as(l, item-memory(l, t, x.target.ty), value-of, align);
+                put(item-memory(l, t, x.target.ty), value-of, align);
                 if t.fixed { root-base(l, t.list); }
             }
-            deref(a) => store-as(l, must(value(l, a)), value-of, align),
-            global(k) => store-as(l, global-address(l, k, x.target.ty), value-of, align),
+            deref(a) => put(must(value(l, a)), value-of, align),
+            global(k) => put(global-address(l, k, x.target.ty), value-of, align),
             // a whole local (a lowered scalar, written in place): its slot, its roots again
             local(i) => {
                 match l.slots[i] {
-                    some(slot) => store-as(l, slot, value-of, align),
+                    some(slot) => put(slot, value-of, align),
                     none => {}
                 }
                 root(l, i);
@@ -2423,7 +2677,7 @@ module llvm {
         for i in 0..ir.locals.len() {
             let paths = pointer-paths(l.types, ir.locals[i].ty);
             l.root-paths.push(paths);
-            let rooted = ir.rooted.len() == 0 || ir.rooted[i];
+            let rooted = !l.types.g.context.turns && (ir.rooted.len() == 0 || ir.rooted[i]);
             let has-slot = match l.slots[i] {
                 some(s) => true,
                 none => false,
@@ -2448,7 +2702,7 @@ module llvm {
                             let object = scratch-of(l, ty, layout[1]);
                             let _ = bitcode.add-inst(f, 0, 44, [BcOperand.value(object), BcOperand.value(bitcode.null(f, ty)), BcOperand.raw(align-code(layout[1])), BcOperand.raw(0),], false);
                             l.stack-objects.set(x.dest, object);
-                            if a.trace != "NULL" {
+                            if a.trace != "NULL" && !l.types.g.context.turns {
                                 objects.push(object);
                                 traces.push(trace-value(l, a.trace, a.rec));
                             }
@@ -2655,7 +2909,12 @@ module llvm {
         for k in 0..ir.params.len() {
             let local = ir.params[k];
             if gives-value(ir.locals[local].ty) {
-                store-as(l, task-field(l, 2 + local), BcValue.param(at), align(l, ir.locals[local].ty));
+                // (one given in memory copied from there)
+                if in-memory(types, ir, ir.locals[local].ty) {
+                    copy(l, task-field(l, 2 + local), BcValue.param(at), ir.locals[local].ty, false);
+                } else {
+                    store-as(l, task-field(l, 2 + local), BcValue.param(at), align(l, ir.locals[local].ty));
+                }
                 at += 1;
             }
         }
@@ -3096,8 +3355,10 @@ module llvm {
         }
     }
 
-    // the collector held (y_gc_hold, a C long, one more) or released (one less)
+    // the collector held (y_gc_hold, a C long, one more) or released (one less); never where it
+    // runs only between turns (context.turns: nothing is collected meanwhile)
     hold: func(l: Lower, more: bool) {
+        if l.types.g.context.turns { return; }
         let m = l.m;
         let long = bitcode.int-type(m, calling.pointer-bytes(l.abi) * 8);
         let counter = BcValue.global(bitcode.external-global(m, "y_gc_hold", long));
@@ -3133,7 +3394,7 @@ module llvm {
                 BcOperand.value(BcValue.function(callee)),
                 BcOperand.value(buffer-value),
             ];
-            match value(l, s.parts[k]) {
+            match argument(l, s.parts[k]) {
                 some(v) => {
                     // as C converts it to the writer's param (an s32 to write-int's s64)
                     let want = m.type-operands[m.funcs[callee].ty][3] as s64;
@@ -3347,6 +3608,136 @@ module llvm {
 
     element-integer: func(ty: s64, bits: u64) -> BcElement { { ty: ty, kind: 0, value: bits, } }
 
+    // ---- constants as static data
+
+    // a list's static data (a literal of constants, codegen's): its header, a ylist (len, cap, size,
+    // items, scan), and its items, laid out as C lays them out (each at its C offset, the bytes
+    // between them zero): a global each, made once; the header's
+    static-list-global: func(l: Lower, data: StaticList) -> s64 {
+        let name = "Y_SL_" + data.c-name;
+        if l.made.singletons.has(name) { return l.made.singletons[name]; }
+        let m = l.m;
+        let items = static-items-global(l, data);
+        let item = match resolve(data.ty) {
+            list-type(x) => x,
+            _ => unsupported(l.ir, "static data of {show-type(data.ty)}"),
+        };
+        let size = size-align(l.types, l.ir, item)[0];
+        let i64 = bitcode.int-type(m, 64);
+        let pointer = bitcode.pointer-type(m);
+        let count = data.items.len() as u64;
+        let scan: BcElement = match scan-value(l, item) {
+            function(at) => { ty: pointer, kind: 3, value: at as u64, },
+            _ => { ty: pointer, kind: 1, value: 0, },
+        };
+        let header = bitcode.add-aggregate(m, name, bitcode.struct-type(m, [i64, i64, i64, pointer, pointer,]), [
+            element-integer(i64, count),
+            element-integer(i64, count),
+            element-integer(i64, size as u64),
+            element-address(m, items),
+            scan,
+        ], align-code(8));
+        l.made.singletons.set(name, header);
+        header
+    }
+
+    // a list's static items, laid out as C lays them out: a global, made once
+    static-items-global: func(l: Lower, data: StaticList) -> s64 {
+        let name = "Y_SL_" + data.c-name + "_items";
+        if l.made.singletons.has(name) { return l.made.singletons[name]; }
+        let item = match resolve(data.ty) {
+            list-type(x) => x,
+            _ => unsupported(l.ir, "static data of {show-type(data.ty)}"),
+        };
+        let size = size-align(l.types, l.ir, item)[0];
+        let placed: list<StaticScalar> = [];
+        for index in 0..data.items.len() { static-scalars(l, item, data.items[index], index * size, placed); }
+        let items = static-bytes(l, name, placed, size * data.items.len());
+        l.made.singletons.set(name, items);
+        items
+    }
+
+    // a static value of type t at offset bytes, as the scalars C lays it out as (into out)
+    static-scalars: func(l: Lower, t0: Type, v: StaticValue, offset: s64, out: list<StaticScalar>) {
+        let m = l.m;
+        let t = resolve(t0);
+        if needs-representing(t) {
+            static-scalars(l, represented(t), v, offset, out);
+            return;
+        }
+        let pointer-bytes = calling.pointer-bytes(l.abi);
+        let integer = { bytes: s64, bits: u64 ->
+            out.push({ offset: offset, bytes: bytes, element: element-integer(bitcode.int-type(m, bytes * 8), widened(bits, bytes * 8)), });
+        };
+        match v {
+            int(bits) => {
+                let bytes = match t {
+                    num(n) => if n == "usize" { pointer-bytes } else { int-bits(n) / 8 },
+                    bool-type => 1,
+                    char-type => 4,
+                    _ => size-align(l.types, l.ir, t)[0],
+                };
+                integer(bytes, bits);
+            }
+            float(x) => {
+                let single = match t {
+                    num(n) => n == "f32",
+                    _ => false,
+                };
+                if single { integer(4, f32-bits(x as f32) as u64); } else { integer(8, f64-bits(x)); }
+            }
+            text(x) => {
+                integer(8, x.len() as u64);
+                out.push({ offset: offset + 8, bytes: pointer-bytes, element: element-address(m, bytes-global(m, x)), });
+            }
+            list(data) => out.push({ offset: offset, bytes: pointer-bytes, element: element-address(m, static-list-global(l, data)), }),
+            parts(members) => {
+                let types: list<Type> = match t {
+                    anon-record(x) => x.types,
+                    tuple-type(x) => x,
+                    _ => unsupported(l.ir, "static data of {show-type(t)}"),
+                };
+                let sizes: list<list<s64>> = [];
+                for x in types { sizes.push(size-align(l.types, l.ir, x)); }
+                let offsets = struct-offsets(sizes);
+                for index in 0..members.len() { static-scalars(l, types[index], members[index], offset + offsets[index], out); }
+            }
+        }
+    }
+
+    // bits of an integer bytes * 8 wide, sign-extended to 64 (as a constant record writes it)
+    widened: func(bits: u64, width: s64) -> u64 {
+        if width >= 64 { return bits; }
+        let mask = (1 << width as u64) - 1;
+        let low = bits & mask;
+        if (low >> (width - 1) as u64) & 1 == 1 { low | (18446744073709551615 ^ mask) } else { low }
+    }
+
+    // a global of scalars placed in total bytes: a packed struct of them, the bytes between them
+    // zero
+    static-bytes: func(l: Lower, name: string, placed: list<StaticScalar>, total: s64) -> s64 {
+        let m = l.m;
+        let types: list<s64> = [];
+        let elements: list<BcElement> = [];
+        let at = 0;
+        let gap = { bytes: s64 ->
+            if bytes > 0 {
+                let ty = bitcode.array-type(m, bytes, bitcode.int-type(m, 8));
+                let zeros: BcElement = { ty: ty, kind: 1, value: 0, };
+                types.push(ty);
+                elements.push(zeros);
+            }
+        };
+        for one in placed {
+            gap(one.offset - at);
+            types.push(one.element.ty);
+            elements.push(one.element);
+            at = one.offset + one.bytes;
+        }
+        gap(total - at);
+        bitcode.add-aggregate(m, name, bitcode.packed-struct-type(m, types), elements, align-code(8))
+    }
+
     // where each field of a struct is (each padded to its alignment), in bytes
     struct-offsets: func(fields: list<list<s64>>) -> list<s64> {
         let out: list<s64> = [];
@@ -3390,6 +3781,9 @@ variant ScalarKind {
 // a C value's layout: a scalar (aggregate false: its one scalar), or a struct's scalars, size and
 // alignment in bytes
 record Layout { aggregate: bool, scalars: list<Scalar>, size: s64, align: s64, }
+
+// a scalar of static data: where it is (bytes into its global), how many bytes, and its value
+record StaticScalar { offset: s64, bytes: s64, element: BcElement, }
 
 // one IR param (or result) a value crosses as: count of one scalar kind, as one scalar, an array
 // of them (arm64's [2 x i64], [n x double]) or a vector (x86-64's <2 x float>), loaded from offset

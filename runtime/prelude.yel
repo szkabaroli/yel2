@@ -19,6 +19,8 @@
 // a float's IEEE bits (the bitcode backend writes a float constant so)
 @c(name = "y_bits_f64") f64-bits: extern func(value: f64) -> u64;
 @c(name = "y_bits_f32") f32-bits: extern func(value: f32) -> u64;
+// a float of its IEEE bits
+@c(name = "y_f64_of") bits-f64: extern func(bits: u64) -> f64;
 
 // strings: bytes
 @c(name = "(($2) >= 0 && ($2) < ($1).len ? (int64_t)(unsigned char)($1).data[($2)] : -1)") byte-at: extern func(s: string, i: s64) -> s64;

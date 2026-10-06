@@ -4,7 +4,7 @@
 // none there.
 //
 // One of std's packages: from "std:process" include process; then process.fork(),
-// process.wait(child), process.end(0).
+// process.wait(child), process.run("cc", ["-c", "a.c",]), process.run-with(…), wait process.run-async(…), process.end(0).
 
 package std:process@0.1.0;
 
@@ -26,6 +26,62 @@ module process {
         ok(if status > 128 { ended.signal(status - 128) } else { ended.code(status) })
     }
 
+    // command run (looked for on PATH where it has no /) with arguments, in dir ("": this
+    // process's working directory), and waited for: how it ended. Its standard streams and
+    // environment are this process's. Err where it cannot be started (none such, a target without
+    // processes)
+    run: func(command: string, arguments: list<string>, dir: string = "") -> result<ended, string> { run-with(command, arguments, dir, [], "") }
+
+    // command run as run does, its environment this process's with environment's variables more
+    // (one of a name it has in place of its), its standard output and error to the file output
+    // (made, or emptied; "": this process's)
+    run-with: func(command: string, arguments: list<string>, dir: string, environment: list<tuple<string, string>>, output: string) -> result<ended, string> {
+        let status = c-run(joined(command, arguments), arguments.len() + 1, dir, variables(environment), environment.len(), output);
+        if status < 0 { return err("cannot run {command}"); }
+        ok(status-ended(status))
+    }
+
+    // command run as run-with runs it, its task waiting for it while the others go on (natively:
+    // libuv's loop tells when it ends; a target without processes: err)
+    run-async: async func(command: string, arguments: list<string>, dir: string, environment: list<tuple<string, string>>, output: string) -> result<ended, string> {
+        let child = c-start(joined(command, arguments), arguments.len() + 1, dir, variables(environment), environment.len(), output);
+        if child == 0 { return err("cannot run {command}"); }
+        loop {
+            if c-done(child) { break; }
+            wait async.park();
+        }
+        let status = c-status(child);
+        c-free(child);
+        ok(status-ended(status))
+    }
+
+    // the command and its arguments as the runtime takes them: each ended by a NUL byte
+    @(private) joined: func(command: string, arguments: list<string>) -> string {
+        let out = buffer(command.len() + 16);
+        out.push(command);
+        out.push-byte(0);
+        for argument in arguments {
+            out.push(argument);
+            out.push-byte(0);
+        }
+        out.to-string()
+    }
+
+    // the variables as the runtime takes them: NAME=value, each ended by a NUL byte
+    @(private) variables: func(environment: list<tuple<string, string>>) -> string {
+        let out = buffer(64);
+        for variable in environment {
+            let (name, value) = variable;
+            out.push(name);
+            out.push("=");
+            out.push(value);
+            out.push-byte(0);
+        }
+        out.to-string()
+    }
+
+    @(private) status-ended: func(status: s64) -> ended { if status > 128 { ended.signal(status - 128) } else { ended.code(status) } }
+
     // the process ends with code: its output flushed, and nothing more of it run (no exit
     // handlers: a child's end, once its work is done)
     @c(name = "yel_process_end") end: extern func(code: s64) -> never;
@@ -37,4 +93,15 @@ module process {
     @(private) @c(name = "yel_process_fork") c-fork: extern func() -> s64;
 
     @(private) @c(name = "yel_process_wait") c-wait: extern func(child: s64) -> s64;
+
+    // the target triple this program was built for (arm64-apple-macosx, x86_64-unknown-linux-gnu,
+    // wasm32-unknown-wasip3, …; "" for one the runtime does not know)
+    target: func() -> string { c-target() }
+
+    @(private) @c(name = "yel_host_triple") c-target: extern func() -> string;
+    @(private) @c(name = "yel_process_start") c-start: extern func(arguments: string, count: s64, dir: string, environment: string, variables: s64, output: string) -> s64;
+    @(private) @c(name = "yel_process_done") c-done: extern func(child: s64) -> bool;
+    @(private) @c(name = "yel_process_status") c-status: extern func(child: s64) -> s64;
+    @(private) @c(name = "yel_process_free") c-free: extern func(child: s64);
+    @(private) @c(name = "yel_process_run") c-run: extern func(arguments: string, count: s64, dir: string, environment: string, variables: s64, output: string) -> s64;
 }

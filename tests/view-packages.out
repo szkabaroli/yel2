@@ -1,0 +1,28 @@
+  create-element VStack -> 1
+  create-element VStack -> 2
+  create-element Text -> 3
+  create-text "Count 0" -> 4
+  append-child 3 4
+  append-child 2 3
+  create-comment if -> 5
+  append-child 2 5
+  create-element Button -> 6
+  add-event-listener 6 click 1
+  create-text "+" -> 7
+  append-child 6 7
+  insert-before 2 6 5
+  create-element Text -> 8
+  create-text "closed 0" -> 9
+  append-child 8 9
+  insert-before 2 8 5
+  create-element Button -> 10
+  add-event-listener 10 click 2
+  create-text "close" -> 11
+  append-child 10 11
+  append-child 2 10
+  append-child 1 2
+  append-child 0 1
+click +
+  set-text-content 4 "Count 1"
+click close
+  set-text-content 9 "closed 1"

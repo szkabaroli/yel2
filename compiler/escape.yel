@@ -25,6 +25,13 @@ resource Groups {
     // new): what such a value holds, others may reach
     outside: list<bool>,
     written: list<bool>,
+    // what observe counts (observing: the groups of param-changes): an @(observable) resource's
+    // local in a group of its own (apart), and a write that reaches one going no further, since what
+    // is written is its own field, which its registrar tells of (observed: those types; none when
+    // not observing)
+    observing: bool,
+    observed: map<Name, bool>,
+    apart: list<bool>,
     // moved to the host (given a WIT func: a stream's or a future's end leaves the component)
     moved: list<bool>,
     // the locals whose values hold each group's (a call kept it in another argument), and the
@@ -39,11 +46,13 @@ resource Groups {
 
 // what a call does with its arguments (by index): kept, written, given back; moved to the host
 // (all of them: a WIT func's); and whether its result is new
-// (keeps: anywhere; into: only in those other arguments)
+// (keeps: anywhere; into: only in those other arguments; changes: written as observe counts it,
+// not through an @(observable) resource it holds)
 resource CallFlow {
     keeps: list<bool>,
     kept-in: list<list<s64>>,
     writes: list<bool>,
+    changes: list<bool>,
     gives: list<bool>,
     moved: bool,
     new-result: bool,
@@ -61,6 +70,9 @@ resource Facts {
     param-kept-in: map<Name, list<list<s64>>>,
     param-gives: map<Name, list<bool>>,
     param-writes: map<Name, list<bool>>,
+    // by C name: which parameters each func writes as observe counts it (a write through an
+    // @(observable) resource is that resource's, not what holds it: gen.settle-observed's)
+    param-changes: map<Name, list<bool>>,
     fresh-result: map<Name, bool>,
     // the WIT funcs' wrappers (and an async one's start), by C name: what they are given crosses to
     // the host (moved, or copied), what they give back is new
@@ -68,6 +80,8 @@ resource Facts {
     // what each extern does, by its C name (flow.derive)
     externs: map<string, RuntimeEffect>,
     pointer-types: map<Name, bool>,
+    // the @(observable) resources
+    observable-types: map<Name, bool>,
     // the named types that may hold a func value (a closure's environment with it)
     func-holders: map<Name, bool>,
     groups: map<Name, Groups>,
@@ -154,6 +168,7 @@ module opt {
     }
 
     join: func(gr: Groups, a: s64, b: s64) {
+        if gr.apart[a] || gr.apart[b] { return; }
         let x = find(gr, a);
         let y = find(gr, b);
         if x == y { return; }
@@ -170,11 +185,50 @@ module opt {
         }
     }
 
-    // what n reads is written (through it: a field set, an item pushed)
+    // what n reads is written (through it: a field set, an item pushed); observing, only what a
+    // write through it changes (changed-reads)
     write: func(gr: Groups, n: Node) {
         let read: list<s64> = [];
-        reads(n, read);
+        if gr.observing { changed-reads(gr, n, read); } else { reads(n, read); }
         for i in read { gr.written[find(gr, i)] = true; }
+    }
+
+    // the locals a write through n changes, as observe counts them: none past an @(observable)
+    // resource (n one, or one's field), whose registrar tells of what is written in it
+    changed-reads: func(gr: Groups, n: Node, out: list<s64>) {
+        match n.kind {
+            local(i) => {
+                out.push(i);
+                return;
+            }
+            load(x) => { if x.arrow && observed(gr, x.base.ty) { return; } }
+            _ => {}
+        }
+        if observed(gr, n.ty) { return; }
+        for index in 0..operand-count(n) { changed-reads(gr, operand(n, index), out); }
+    }
+
+    // whether a value of type t is an @(observable) resource (observing: else none is)
+    observed: func(gr: Groups, t: Type) -> bool {
+        match t {
+            named(n) => gr.observed.has(n),
+            readonly-type(x) => observed(gr, x),
+            _ => false,
+        }
+    }
+
+    // whether any of f's locals may hold an @(observable) resource (else what observe counts is
+    // what is written)
+    touches-observed: func(p: Facts, f: IrFunc) -> bool {
+        if p.observable-types.len() == 0 { return false; }
+        f.locals.any({ x -> mentions-observed(p, x.ty) })
+    }
+
+    @(private) mentions-observed: func(p: Facts, t: Type) -> bool {
+        match t {
+            named(n) => p.observable-types.has(n),
+            _ => any-child(t, { x -> mentions-observed(p, x) }),
+        }
     }
 
     // d's group may hold a value made elsewhere
@@ -263,7 +317,10 @@ module opt {
     }
 
     // a func's groups: who shares a value with whom, and which values leave it
-    groups: func(p: Facts, f: IrFunc) -> Groups {
+    groups: func(p: Facts, f: IrFunc) -> Groups { groups-for(p, f, false) }
+
+    // observing: what observe counts as written (see Groups), the rest of what is found not read
+    groups-for: func(p: Facts, f: IrFunc, observing: bool) -> Groups {
         let gr: Groups = {
             parent: [],
             escapes: [],
@@ -271,6 +328,9 @@ module opt {
             stale: [],
             outside: [],
             written: [],
+            observing: observing,
+            observed: if observing { p.observable-types } else { map.new() },
+            apart: [],
             moved: [],
             holders: [],
             holding-params: [],
@@ -286,6 +346,7 @@ module opt {
             gr.stale.push(false);
             gr.outside.push(false);
             gr.written.push(false);
+            gr.apart.push(observing && observed(gr, f.locals[i].ty));
             gr.moved.push(false);
             gr.holders.push([]);
             gr.holding-params.push([]);
@@ -375,7 +436,8 @@ module opt {
                     }
                     if cf.keeps[i] { escape(gr, a); }
                     for j in cf.kept-in[i] { hold(gr, a, c.args[j]); }
-                    if cf.writes[i] { write(gr, a); }
+                    let writes = if gr.observing { cf.changes[i] } else { cf.writes[i] };
+                    if writes { write(gr, a); }
                     if holds && cf.gives[i] && may-become(p, a, f.locals[d].ty) { flow(gr, d, a); }
                 }
                 if !cf.new-result { taint-holder(p, gr, f, d); }
@@ -423,13 +485,14 @@ module opt {
     // a call's flow, found (call-flow keeps it: what it gives is only read)
     find-call-flow: func(p: Facts, c: CallNode) -> CallFlow {
         let n = c.args.len();
-        let cf: CallFlow = { keeps: [], kept-in: [], writes: [], gives: [], moved: false, new-result: true, };
+        let cf: CallFlow = { keeps: [], kept-in: [], writes: [], changes: [], gives: [], moved: false, new-result: true, };
         if p.wit.has(c.name) {
             cf.moved = true;
             for i in 0..n {
                 cf.keeps.push(false);
                 cf.kept-in.push([]);
                 cf.writes.push(false);
+                cf.changes.push(false);
                 cf.gives.push(false);
             }
             return cf;
@@ -446,6 +509,7 @@ module opt {
                 }
                 cf.kept-in.push(holders);
                 cf.writes.push(i >= k && flow.writes(e, i - k));
+                cf.changes.push(i >= k && flow.writes(e, i - k));
                 cf.gives.push(i >= k && flow.gives(e, i - k));
             }
             cf.new-result = e.listed;
@@ -460,6 +524,7 @@ module opt {
                 cf.keeps.push(true);
                 cf.kept-in.push([]);
                 cf.writes.push(true);
+                cf.changes.push(true);
                 cf.gives.push(true);
             }
             cf.new-result = false;
@@ -468,11 +533,13 @@ module opt {
         let esc = p.param-escapes[key];
         let kept-in = p.param-kept-in[key];
         let ws = p.param-writes[key];
+        let cs = p.param-changes[key];
         let gives = p.param-gives[key];
         for i in 0..n {
             cf.keeps.push(i >= esc.len() || esc[i]);
             cf.kept-in.push(if i < kept-in.len() { kept-in[i] } else { [] });
             cf.writes.push(i >= ws.len() || ws[i]);
+            cf.changes.push(i >= cs.len() || cs[i]);
             cf.gives.push(start || i >= gives.len() || gives[i]);
         }
         cf.new-result = start || p.fresh-result[key];
@@ -571,6 +638,7 @@ module opt {
         p.param-kept-in = map.new();
         p.param-gives = map.new();
         p.param-writes = map.new();
+        p.param-changes = map.new();
         p.fresh-result = map.new();
         p.groups = map.new();
         p.flows = map.new();
@@ -587,6 +655,7 @@ module opt {
             p.param-kept-in.set(f.name, none-in);
             p.param-gives.set(f.name, zeros.slice(0, zeros.len()));
             p.param-writes.set(f.name, zeros.slice(0, zeros.len()));
+            p.param-changes.set(f.name, zeros.slice(0, zeros.len()));
             p.fresh-result.set(f.name, true);
             keys.push(f.name);
         }
@@ -609,10 +678,16 @@ module opt {
             gives.push(gr.returned[find(gr, q)]);
             ws.push(gr.written[find(gr, q)]);
         }
+        // what observe counts: found again only where a local may hold an @(observable) resource
+        let cs = ws;
+        if touches-observed(p, f) {
+            let seen = groups-for(p, f, true);
+            cs = f.params.map({ q -> seen.written[find(seen, q)] });
+        }
         let fresh = p.fresh-result[n] && gives-new(gr, f);
         let env = f.env-param >= 0 && gr.escapes[find(gr, f.env-param)];
         let changed = !same(esc, p.param-escapes[n]) || !same(gives, p.param-gives[n])
-            || !same(ws, p.param-writes[n]) || fresh != p.fresh-result[n] || !same-in(kept-in, p.param-kept-in[n])
+            || !same(ws, p.param-writes[n]) || !same(cs, p.param-changes[n]) || fresh != p.fresh-result[n] || !same-in(kept-in, p.param-kept-in[n])
             || env != p.env-escapes.get-or(n, false);
         p.env-escapes.set(n, env);
         // a call of it found again (and of its start, an async func's step's)
@@ -625,6 +700,7 @@ module opt {
         p.param-kept-in.set(n, kept-in);
         p.param-gives.set(n, gives);
         p.param-writes.set(n, ws);
+        p.param-changes.set(n, cs);
         p.fresh-result.set(n, fresh);
         changed
     }

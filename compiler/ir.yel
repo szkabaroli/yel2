@@ -27,6 +27,11 @@ variant Kind {
     // a type's scan func (the collector's: what in one of its values points at the heap), as the
     // runtime takes it
     scan(Type),
+    // a list known as it is written (every item a constant: numbers, strings, and records, tuples
+    // and lists of them): static data, its address (y_list_static copies it into a list of the
+    // program's, each list in it fresh); and a type's descriptor's address (runtime/yel.h's ytype)
+    static-list(StaticList),
+    descriptor(DescriptorNode),
     // variables: a func's local, a global (by its key: a value of the program's, any func may
     // write; a store's target too)
     local(s64),
@@ -84,6 +89,23 @@ variant Kind {
 }
 
 record ElementNode { base: Node, index: Node, item: Type, }
+
+// a list's static data: its type (a list type), its items, the C name of its header (render's),
+// and whether it is its items alone (a list holding no list: copied by y_list_of_data, no header)
+resource StaticList { ty: Type, items: list<StaticValue>, c-name: string, flat: bool, }
+
+// a constant as static data holds it: an integer's (a bool's, a char's) bits, a float, a string's
+// text, a value struct's parts (in its C struct's order), or a list
+variant StaticValue {
+    int(u64),
+    float(f64),
+    text(string),
+    parts(list<StaticValue>),
+    list(StaticList),
+}
+
+// a type's descriptor, and its C name (render's)
+record DescriptorNode { ty: Type, c-name: string, }
 
 variant Constant {
     // an integer's (a char's, a usize's) bits, as the node's type holds them
@@ -223,6 +245,10 @@ zero-const: func(ty: Type) -> Node { const(Constant.zero, ty) }
 type-arg: func(ty: Type, key: bool) -> Node { new-node(Kind.type-arg({ ty: ty, key: key, }), Type.unit-type, 0) }
 
 scan: func(ty: Type) -> Node { new-node(Kind.scan(ty), Type.address-type, 0) }
+
+static-list-node: func(data: StaticList) -> Node { new-node(Kind.static-list(data), Type.address-type, 0) }
+
+descriptor-node: func(ty: Type, c-name: string) -> Node { new-node(Kind.descriptor({ ty: ty, c-name: c-name, }), Type.address-type, 0) }
 
 local: func(i: s64, ty: Type) -> Node { new-node(Kind.local(i), ty, 0) }
 

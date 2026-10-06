@@ -72,6 +72,10 @@ module packages {
             modules: map.new(),
             private-modules: map.new(),
             state: 0,
+            wit: false,
+            views: false,
+            views-dom: "",
+            included: !root,
         };
         prog.packages.set(dir, pkg);
         let files: list<string> = [];
@@ -96,6 +100,7 @@ module packages {
         for f in files {
             let source = wait diagnostics.read-source(prog.context, f);
             let p = lower.reader(prog.context, source);
+            wait diagnostics.read-embeds(prog.context, f, lower.embedded(p));
             p.scope = {
                 pkg: pkg,
                 module: "",
@@ -105,6 +110,17 @@ module packages {
                 requests: [],
                 private: "",
             };
+            lower.declarations(p, prog.decls);
+            scopes.push(p.scope);
+        }
+        // (a package with views: the compiler's view-host module too, what they do with the host's
+        // dom; once: an editor's next check lists it as one of its files)
+        let host-file = (if wait diagnostics.is-source-dir(prog.context, dir) { dir } else { dir-name(dir) }) + "/yel-view-host.yel";
+        if pkg.views && !files.contains(host-file) {
+            prog.context.overlays.set(host-file, view-host-source(pkg.views-dom));
+            let source = wait diagnostics.read-source(prog.context, host-file);
+            let p = lower.reader(prog.context, source);
+            p.scope = { pkg: pkg, module: "", file: host-file, build: p.scope.build, includes: map.new(), requests: [], private: "", };
             lower.declarations(p, prog.decls);
             scopes.push(p.scope);
         }
@@ -128,6 +144,67 @@ module packages {
         pkg
     }
 
+    // the view-host module a package with views has (the compiler's, as the file yel-view-host.yel):
+    // its dom from where its views' is (an include's spec; "": the package's own module dom)
+    view-host-source: func(dom-from: string) -> string {
+        let including = if dom-from == "" { "" } else { "from \"{dom-from}\" include dom;" };
+        c"// What the views of this package do with the host's dom (the compiler adds this file to a package
+// that has views): std's view-nodes given the program's dom, a value as the host takes it, a style
+// set or kept current
+
+{including}
+
+@(private) module view-host {
+    // std's view-nodes.Dom, its funcs this program's dom's
+    host: func() -> view-nodes.Dom {
+        {
+            comment: { content: string -> dom.create-comment(content) },
+            insert: { parent: u32, node: u32, before: u32 -> dom.insert-before(parent, node, before); },
+            append: { parent: u32, node: u32 -> dom.append-child(parent, node); },
+            remove: { node: u32 -> dom.remove(node); },
+            element: { tag: string -> dom.create-element(tag) },
+            text: { content: string -> dom.create-text(content) },
+            attribute: { node: u32, name: string, value: view-nodes.Value -> dom.set-attribute(node, name, host-value(value)); },
+            style: { node: u32, name: string, value: view-nodes.Value -> dom.set-style(node, name, host-value(value)); },
+            set-text: { node: u32, content: string -> dom.set-text-content(node, content); },
+        }
+    }
+
+    // a value as the host takes it
+    host-value: func(v: view-nodes.Value) -> dom.attribute-value {
+        match v {
+            text(x) => dom.attribute-value.str(x),
+            flag(x) => dom.attribute-value.%bool(x),
+            whole(x) => dom.attribute-value.%s32(x),
+            real(x) => dom.attribute-value.%f64(x),
+        }
+    }
+
+    // a style's value as the host takes it
+    style-value: func(v: string | bool | s32 | f64 | dom.color) -> dom.attribute-value {
+        match v {
+            let x: string => dom.attribute-value.str(x),
+            let x: bool => dom.attribute-value.%bool(x),
+            let x: s32 => dom.attribute-value.%s32(x),
+            let x: f64 => dom.attribute-value.%f64(x),
+            let x: dom.color => dom.attribute-value.color(x),
+        }
+    }
+
+    // a style set once
+    style: func(node: u32, name: string, v: string | bool | s32 | f64 | dom.color) { dom.set-style(node, name, style-value(v)); }
+
+    // a style kept current: read, set, and set again each time what it reads changes to a value
+    // it was not
+    keep-style: func(node: u32, name: string, read: func() -> string | bool | s32 | f64 | dom.color) {
+        let last = read();
+        dom.set-style(node, name, style-value(last));
+        reactive.watch(read, last, { now -> dom.set-style(node, name, style-value(now)); });
+    }
+}
+"
+    }
+
     // the .yel files of dir, into files (a test file only with-tests); nested: each directory's in it
     // too, one after another, as listed (the standard library's core: its folders one package)
     source-files: async func(prog: Program, dir: string, nested: bool, with-tests: bool, files: list<string>) {
@@ -147,6 +224,27 @@ module packages {
                 }
             }
         }
+    }
+
+    // whether a directory's package is id: what its first file with a package line says
+    @(private) declares: async func(prog: Program, dir: string, id: string) -> bool {
+        for f in wait diagnostics.source-entries(prog.context, dir) {
+            if !ends-with(f, ".yel") { continue; }
+            let source = wait diagnostics.read-source(prog.context, dir + "/" + f);
+            let root = tree.root(grammar.parse-file(prog.context, source));
+            for n in tree.child-nodes(root) {
+                if tree.kind(n) != NodeKind.package-decl { continue; }
+                let written: list<string> = [];
+                let past = false;
+                for t in tree.own-tokens(n) {
+                    if t.green.text == ";" { break; }
+                    if past { written.push(t.green.text); }
+                    if t.green.text == "package" { past = true; }
+                }
+                return without-version(written.join("")) == id;
+            }
+        }
+        false
     }
 
     // the standard library's core: its directory (core, in the library's), every program's
@@ -194,10 +292,15 @@ module packages {
             if !from-std {
                 for d in prog.search { dirs.push(d); }
             }
+            // (a directory of that name only where it is that package: a package's folder of
+            // its own named ui is not yel:ui, nor the package including it)
             for d in dirs {
+                let candidate = d + "/" + name;
                 if dir == ""
-                    && wait diagnostics.is-source-dir(prog.context, d + "/" + name) {
-                    dir = d + "/" + name;
+                    && clean-path(candidate) != clean-path(pkg.dir)
+                    && wait diagnostics.is-source-dir(prog.context, candidate)
+                    && (from-std || wait declares(prog, candidate, id)) {
+                    dir = candidate;
                 }
             }
             // (the name as written, for an error)
@@ -441,6 +544,10 @@ module packages {
             modules: map.new(),
             private-modules: map.new(),
             state: 1,
+            wit: false,
+            views: false,
+            views-dom: "",
+            included: true,
         };
         prog.packages.set(dir, pkg);
         pkg
@@ -539,7 +646,8 @@ module packages {
 // ================================================================ WIT packages
 
 module packages {
-    // the WIT packages in the WIT directories, by id: read once, when first included
+    // the WIT packages in the WIT directories, by id (a package's files merged): read once, when
+    // first included
     wit-index: async func(prog: Program) {
         if prog.wit-read { return; }
         prog.wit-read = true;
@@ -551,7 +659,18 @@ module packages {
                             prog.context,
                             wait diagnostics.read-source(prog.context, d + "/" + f),
                         );
-                        if wp.id != "" && !prog.wit.has(wp.id) { prog.wit.set(wp.id, wp); }
+                        if wp.id == "" { continue; }
+                        // (a package in several files, as WIT allows: each file's interfaces
+                        // the package's, the first read of one name kept)
+                        match prog.wit.get(wp.id) {
+                            some(known) => {
+                                known.files.push(wp.file);
+                                for name in wp.interfaces.keys() {
+                                    if !known.interfaces.has(name) { known.interfaces.set(name, wp.interfaces[name]); }
+                                }
+                            }
+                            none => prog.wit.set(wp.id, wp),
+                        }
                     }
                 }
             }
@@ -582,6 +701,10 @@ module packages {
             modules: map.new(),
             private-modules: map.new(),
             state: 1,
+            wit: true,
+            views: false,
+            views-dom: "",
+            included: true,
         };
         for n in wp.interfaces.keys() { pkg.modules.set(n, "extern"); }
         let sc: Scope = {
@@ -762,7 +885,7 @@ module packages {
                     prog.context,
                     diagnostics.error-at(at, "no WIT package {id} (for a use)"),
                 );
-                { id: id, version: "", file: "", interfaces: map.new(), }
+                { id: id, version: "", file: "", files: [], interfaces: map.new(), }
             }
         }
     }

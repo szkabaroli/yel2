@@ -4,6 +4,7 @@
 //
 //   yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none]
 //        [--wit <dir>]   (the component's WIT world, for wasm-component-ld --component-type <dir>)
+//        [--embed name=path]...   (the file #embed(name) reads)
 //        [--backend c|bitcode] [--triple <t>]   (bitcode: LLVM's, for clang, llvm.yel: integers and
 //        control so far) [-g]   (debug info: DWARF, as LLVM's metadata; bitcode only)
 //   yelc check <input.yel | package dir> [prelude.yel] [-I <dir>]...   (every error, as a compile
@@ -12,6 +13,13 @@
 //        runner of them: run, it runs each in a process of its own, those its arguments name if
 //        any, and tells which failed)
 //   yelc --fmt <file.yel | dir>...   (each file formatted in place, fmt.yel)
+//   yelc --version                   ("dev", or the release it was built as)
+//   yelc build [step]... [-Dname=value]... [--help]   (the project's build.yel, found here or above,
+//        compiled into a runner and run: std:build's build system, as Zig's)
+//
+// yelc's home is the directory above its own (build/yelc2: the repository's), or YEL_HOME: where
+// its runtime is (the prelude given none, and found in no runtime/ here; the runtime's object and
+// libuv a build links).
 //
 // This package is the compiler: its top level holds what every part shares (syntax.yel, types.yel,
 // text.yel), and each part is a module: lexer, parser, checker, gen, and packages, which reads a
@@ -19,11 +27,25 @@
 
 package yel:yelc@0.0.2;
 
+from "std:cli" include environment;
+from "std:process" include process;
+
+// yelc's version: version.txt beside this ("dev"), or the one build.yel embeds in its place
+// (-Dversion, or YEL_VERSION: a release's, "pre-alpha 3 (1a2b3c4 2026-10-06)")
+yelc-version: func() -> string { #embed("version.txt").trim() }
+
 main: async func(argv: list<string>) -> s64 {
+    if argv.len() > 0 && argv[0] == "--version" {
+        print("yelc {yelc-version()}\n");
+        return 0;
+    }
+    if argv.len() > 0 && argv[0] == "build" { return wait build-project(argv.slice(1, argv.len())); }
     // yelc <input> <output.c> [prelude.yel] [-I <dir>]...: the input is a package's directory, or
     // one file
     let positional: list<string> = [];
     let search: list<string> = [];
+    // --embed name=path: the file #embed(name) reads (a build's: one a step makes)
+    let embed-names: map<string, string> = map.new();
     // size (the default): inline only what that makes no bigger; speed: small funcs too
     let mode = "size";
     // --wit <dir>: the component's WIT (its world, and the WIT packages it needs) written there
@@ -76,6 +98,15 @@ main: async func(argv: list<string>) -> s64 {
             } else if argv[i] == "-I" && i + 1 < argv.len() {
                 search.push(argv[i + 1]);
                 i += 2;
+            } else if argv[i] == "--embed" && i + 1 < argv.len() {
+                match argv[i + 1].find("=") {
+                    some(at) => embed-names.set(argv[i + 1].substring(0, at), argv[i + 1].substring(at + 1, argv[i + 1].len())),
+                    none => {
+                        eprint("yelc: --embed takes name=path\n");
+                        return 2;
+                    }
+                }
+                i += 2;
             } else {
                 positional.push(argv[i]);
                 i += 1;
@@ -89,7 +120,7 @@ main: async func(argv: list<string>) -> s64 {
     }
 
     if positional.len() < (if check { 1 } else { 2 }) {
-        eprint("usage: yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none] [--wit <dir>] [--backend c|bitcode] [-g]\n");
+        eprint("usage: yelc <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... [--opt size|speed|none] [--wit <dir>] [--embed name=path]... [--backend c|bitcode] [-g]\n");
         eprint("       yelc check <input.yel | package dir> [prelude.yel] [-I <dir>]...\n");
         eprint("       yelc test <input.yel | package dir> <output.c> [prelude.yel] [-I <dir>]... (the same options as a build)\n");
         return 2;
@@ -99,7 +130,12 @@ main: async func(argv: list<string>) -> s64 {
     let output = if check { "" } else { positional[1] };
     let prelude = "runtime/prelude.yel";
     let prelude-at = if check { 1 } else { 2 };
-    if positional.len() > prelude-at { prelude = positional[prelude-at]; }
+    if positional.len() > prelude-at {
+        prelude = positional[prelude-at];
+    } else if !wait diagnostics.is-dir("runtime") {
+        // (none given, and no runtime/ here: the home's)
+        prelude = home() + "/runtime/prelude.yel";
+    }
 
     let context: Context = {
         sources: [],
@@ -110,6 +146,7 @@ main: async func(argv: list<string>) -> s64 {
         debug: debug,
         testing: testing,
         test-exports: testing && (wit-out != "" || triple.starts-with("wasm32")),
+        turns: wit-out != "" || triple.starts-with("wasm32"),
         triple: triple,
         overlays: map.new(),
         exits: true,
@@ -121,6 +158,11 @@ main: async func(argv: list<string>) -> s64 {
         locals: [],
         bodies: [],
         trees: map.new(),
+        cache: none,
+        interface: [],
+        func-texts: map.new(),
+        embed-names: embed-names,
+        embeds: map.new(),
         symbols: symbols(),
     };
     // (the errors found where a phase ends shown, and the compiler stopped: context.exits)
@@ -246,6 +288,7 @@ module analysis {
             debug: false,
             testing: false,
             test-exports: false,
+            turns: false,
             triple: host-triple(),
             overlays: overlays,
             exits: false,
@@ -257,6 +300,11 @@ module analysis {
             locals: [],
             bodies: [],
             trees: map.new(),
+            cache: none,
+            interface: [],
+            func-texts: map.new(),
+            embed-names: map.new(),
+            embeds: map.new(),
             symbols: symbols(),
         }
     }
@@ -317,6 +365,12 @@ module analysis {
         packages.key-decls(prog);
         prog
     }
+
+    // what one check of a program keeps for the next (Context.cache: unchanged files' trees,
+    // unchanged funcs' checked bodies), and one with nothing in it yet
+    type Cache = Incremental;
+
+    new-cache: func() -> Cache { incremental() }
 
     // what a program's compile made, as far as it went: the program loaded, the effect sites the
     // checker found, the program as IR (none where it did not get there), its output (C, or
@@ -391,13 +445,7 @@ module analysis {
         let by-key: map<string, s64> = map.new();
         // where each declaration's name is written, by its key (the parser's notes)
         let names: map<string, Span> = map.new();
-        // (a name noted in a file wins over one noted in a source made, not read: a view's field
-        // where the view writes it, not where its lowered resource does)
-        for written in context.declarations {
-            let key = packages.item-key(written.scope, written.name);
-            let made = written.span.source >= 0 && context.sources[written.span.source].origin != none;
-            if !made || !names.has(key) { names.set(key, written.span); }
-        }
+        for written in context.declarations { names.set(packages.item-key(written.scope, written.name), written.span); }
         // each declaration, from the checker's table of them (its types resolved, a func's type
         // parameters as such): a target by its key, and its kind (as completion tells it); a
         // record's fields, a variant's cases and a flags' flags each a target of its own, T#name
@@ -513,7 +561,7 @@ module analysis {
                                 name: name,
                                 container: "",
                                 place: span-place(context, mark.span),
-                                signature: "let {name}: {written-type(settled-type(mark.ty))}",
+                                signature: local-signature(mark),
                                 docs: "",
                             });
                         }
@@ -523,9 +571,9 @@ module analysis {
                 }
             }
             if target < 0 { continue; }
-            // (a use in a source made, not read, a view's lowered yel, is no reference: nothing in
-            // it is written where it would point)
-            if found.span.source >= 0 && context.sources[found.span.source].origin != none { continue; }
+            // (a use in what lowering made, written nowhere (a view's funcs, a regex's matcher), is
+            // no reference: nothing is written where it would point)
+            if found.span.source < 0 { continue; }
             let place = span-place(context, found.span);
             // (an expression checked twice gives its use twice)
             let id = "{place.path}:{place.line}:{place.col}:{target}";
@@ -566,7 +614,7 @@ module analysis {
         let locals: list<Local> = [];
         for extent in context.locals {
             let mark = extent.mark;
-            if mark.span.source < 0 || context.sources[mark.span.source].origin != none { continue; }
+            if mark.span.source < 0 { continue; }
             locals.push({
                 name: mark.name,
                 place: span-place(context, mark.span),
@@ -576,7 +624,7 @@ module analysis {
         }
         let bodies: list<Body> = [];
         for body in context.bodies {
-            if body.span.source < 0 || context.sources[body.span.source].origin != none { continue; }
+            if body.span.source < 0 { continue; }
             let sc = body.scope;
             bodies.push({
                 place: span-place(context, body.span),
@@ -712,7 +760,7 @@ module analysis {
     @(private) keywords: func() -> list<string> {
         [
         "if", "else", "match", "for", "in", "return", "break", "continue", "let", "as", "is", "true",
-        "false", "start", "wait", "yield", "module", "view", "from", "include", "extern", "async",
+        "false", "start", "wait", "yield", "module", "view", "widget", "from", "include", "extern", "async",
         "loop", "const", "type", "readonly", "resource", "record", "variant", "enum", "flags",
         ]
     }
@@ -942,7 +990,7 @@ module analysis {
             if t.green.kind != TokenKind.id { continue; }
             let word = t.green.text;
             let keyword = word == "record" || word == "resource" || word == "variant" || word == "enum" || word == "flags"
-                || word == "type" || word == "let" || word == "const" || word == "module" || word == "view" || word == "extern"
+                || word == "type" || word == "let" || word == "const" || word == "module" || word == "view" || word == "widget" || word == "extern"
                 || word == "ignored" || word == "private";
             if !keyword { return some(t); }
         }
@@ -1008,6 +1056,22 @@ module analysis {
             return some({ label: shown.text, params: shown.params, active: commas + if receiver { 1 } else { 0 }, });
         }
         none
+    }
+
+    // a local as a hover tells it: let name: T; a view's for row's item, read through its getter
+    // (view-item<n>-<name>: lower.yel's), the item itself
+    @(private) local-signature: func(mark: Mark) -> string {
+        let ty = settled-type(mark.ty);
+        if mark.name.starts-with("view-item") {
+            let at = mark.name.find-from("-", 9);
+            match (at, ty) {
+                (some(dash), func-type(f)) => {
+                    if f.params.len() == 0 { return "{mark.name.substring(dash + 1, mark.name.len())}: {written-type(f.result)}"; }
+                }
+                _ => {}
+            }
+        }
+        "let {mark.name}: {written-type(ty)}"
     }
 
     // a call's callee's name token: f of f(…), its name after the . of x.f(…)
@@ -1131,6 +1195,8 @@ module analysis {
         // same bindings where every name names what it did)
         let resolving = context(checked.input, overlays);
         resolving.mode = "resolve";
+        // (what its check kept: only what the rename changes is checked again)
+        resolving.cache = checked.context.cache;
         let after = wait check(resolving, checked.prelude, checked.search);
         if after.problems.len() > checked.problems.len() {
             let first = after.problems[after.problems.len() - 1];
@@ -1479,15 +1545,8 @@ module analysis {
         "{base-name(key)}: {kind}{generic}({parts.join(", ")}){gives}"
     }
 
-    // a span as a place, in the file it was read from (one in a source made, not read, a view's
-    // lowered yel: the place of what made it, the view's name)
+    // a span as a place, in the file it was read from
     @(private) span-place: func(context: Context, span: Span) -> Place {
-        if span.source >= 0 {
-            match context.sources[span.source].origin {
-                some(origin) => { return span-place(context, origin); }
-                none => {}
-            }
-        }
         let path = if span.source >= 0 { context.sources[span.source].path } else { "" };
         { path: path, line: span.line, col: span.col, end-line: span.end-line, end-col: span.end-col, }
     }
@@ -1549,6 +1608,7 @@ format-path: async func(path: string) {
         debug: false,
         testing: false,
         test-exports: false,
+        turns: false,
         triple: "",
         overlays: map.new(),
         exits: true,
@@ -1560,6 +1620,11 @@ format-path: async func(path: string) {
         locals: [],
         bodies: [],
         trees: map.new(),
+        cache: none,
+        interface: [],
+        func-texts: map.new(),
+        embed-names: map.new(),
+        embeds: map.new(),
         symbols: symbols(),
     };
     let src = context.sources[wait diagnostics.read-source(context, path)].text;
@@ -1570,18 +1635,139 @@ format-path: async func(path: string) {
     }
 }
 
+// yelc build: the project's build.yel (the nearest, here or above) compiled once into a runner,
+// kept in the project's .yel-cache by a key of build.yel, std:build and this compiler, and run with
+// what it was given; its end yelc build's
+build-project: async func(arguments: list<string>) -> s64 {
+    // (each absolute: the runner runs in the project's directory)
+    let yelc = absolute(environment.get-arguments()[0]);
+    let home = absolute(home());
+    let project = ".";
+    for level in 0..32 {
+        if wait diagnostics.exists(project + "/build.yel") { break; }
+        if level == 31 {
+            eprint("yelc build: no build.yel here or above\n");
+            return 2;
+        }
+        project = if project == "." { ".." } else { project + "/.." };
+    }
+    let key: u64 = 1469598103934665603;
+    for file in [project + "/build.yel", home + "/runtime/std/build/build.yel", yelc,] {
+        match wait diagnostics.read-file(file) {
+            ok(content) => { key = (key ^ text.hash(content)) * 1099511628211; }
+            err(_) => {}
+        }
+    }
+    let dir = project + "/.yel-cache/runner/" + hex16(key);
+    let runner = dir + "/build";
+    if !wait diagnostics.exists(runner) {
+        wait diagnostics.make-dirs(dir);
+        let flags = ["-O1", "-w", "-I" + home + "/runtime", "-I" + home + "/runtime/libuv/include", "-o", runner, dir + "/build.c", home + "/build/yel.o", home + "/build/libuv.a", "-lm", "-lpthread",];
+        // (Linux's dl and rt, which libuv uses)
+        if process.target().contains("linux") { flags.push("-ldl"); flags.push("-lrt"); }
+        let made = ran(yelc, [project + "/build.yel", dir + "/build.c", home + "/runtime/prelude.yel",]) && ran(c-compiler(), flags);
+        if !made { return 1; }
+    }
+    let given = ["--yelc", yelc, "--home", home, "--project", ".",];
+    for argument in arguments { given.push(argument); }
+    match process.run(absolute(runner), given, project) {
+        ok(ended) => {
+            match ended {
+                code(n) => n,
+                signal(n) => 128 + n,
+            }
+        }
+        err(why) => {
+            eprint("yelc build: {why}\n");
+            1
+        }
+    }
+}
+
+// a path from the working directory, absolute (one with no / at all, found on PATH, as it is)
+absolute: func(at: string) -> string {
+    if at.starts-with("/") || !at.contains("/") && at != "." && at != ".." { return at; }
+    match environment.get-initial-cwd() {
+        some(cwd) => if at == "." { cwd } else { cwd + "/" + at },
+        none => at,
+    }
+}
+
+// a program run: whether it ended well (else told)
+ran: func(command: string, arguments: list<string>) -> bool {
+    match process.run(command, arguments) {
+        ok(ended) => {
+            match ended {
+                code(0) => true,
+                _ => {
+                    eprint("yelc build: {command} failed\n");
+                    false
+                }
+            }
+        }
+        err(why) => {
+            eprint("yelc build: {why}\n");
+            false
+        }
+    }
+}
+
+// yelc's home: YEL_HOME, else the directory above its own (build/yelc2: the repository's)
+home: func() -> string {
+    for pair in environment.get-environment() {
+        let (name, value) = pair;
+        if name == "YEL_HOME" && value != "" { return value; }
+    }
+    // (its own directory's parent: build/yelc2's is build/.., ../yelc2's ../..; one found on PATH
+    // has none to go by: YEL_HOME)
+    let me = environment.get-arguments()[0];
+    match me.find-last("/") {
+        some(slash) => if slash == 0 { "/.." } else { me.substring(0, slash) + "/.." },
+        none => ".",
+    }
+}
+
+// the C compiler: CC, else cc
+c-compiler: func() -> string {
+    for pair in environment.get-environment() {
+        let (name, value) = pair;
+        if name == "CC" && value != "" { return value; }
+    }
+    "cc"
+}
+
+// a key as sixteen hex digits
+hex16: func(key: u64) -> string {
+    let digits = "0123456789abcdef";
+    let out = buffer(16);
+    for place in 0..16 {
+        let digit = ((key >> ((15 - place) * 4) as u64) & 15) as s64;
+        out.push-byte(digits.byte-at(digit));
+    }
+    out.to-string()
+}
+
 // the component's WIT: its world (named for the program's package, yel:app for none) in
 // <dir>/world.wit, and the WIT packages it may need in <dir>/deps
 write-world: async func(prog: Program, dir: string, world: World) {
     wait packages.wit-index(prog);
+    // (what an earlier build wrote there gone first: a package laid out otherwise then would be
+    // found twice)
+    wait diagnostics.remove-all(dir + "/deps");
     wait diagnostics.make-dirs(dir + "/deps");
     for id in prog.wit.keys() {
-        let wp = prog.wit[id];
-        let base = wp.file.substring(packages.dir-name(wp.file).len() + 1, wp.file.len(),);
-        wait diagnostics.write-output(
-            dir + "/deps/" + base,
-            prog.context.sources[wait diagnostics.read-source(prog.context, wp.file)].text,
-        );
+        // (each of the package's files, in a directory of its own, as WIT reads one:
+        // deps/<ns>-<name>/; two packages' files may share a name, package.wit)
+        let files = prog.wit[id].files;
+        let place = "/deps/" + id.replace(":", "-") + "/";
+        wait diagnostics.make-dirs(dir + place);
+        for file in files {
+            let base = file.substring(packages.dir-name(file).len() + 1, file.len(),);
+            wait diagnostics.write-output(
+                dir + place + base,
+                prog.context.sources[wait diagnostics.read-source(prog.context, file)].text,
+            );
+        }
     }
     let root = prog.root;
     let id = if root.id == "" { "yel:app" } else { root.id };

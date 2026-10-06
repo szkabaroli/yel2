@@ -1,12 +1,14 @@
-// The yel-solid hello example (packages/yel-solid/examples/hello: a counter) as a yel view, with the
-// same WIT (yel:hello's app-component: resource app) so the same hosts run it. The view is lowered
+// The yel-solid hello example (packages/yel-solid/examples/hello: a counter) as a yel view, with
+// the WIT of every yel guest (an app-component's resource app, its dispatch given what the event
+// carries, std's event-payload, as apps/cloud's), so the shell's hosts run it. The view is lowered
 // to an observable resource of its fields and the funcs its interface has (new, mount, unmount,
-// dispatch, get-name, set-name): each binding that reads a field an effect, so a click tells the
-// host only the text that changed.
+// dispatch, get-name, set-name): each binding that reads a field kept current, so a click tells
+// the host only the text that changed.
 
 package yel:hello@0.1.0;
 
 from "yel:ui" include dom;
+from "yel:widgets" include meshx;
 
 module app-component {
     view App {
@@ -20,7 +22,7 @@ module app-component {
                 Text { "Clicked {count} times" }
                 Button {
                     "Click me"
-                    on click { count += 1; }
+                    on.click: { -> count += 1; }
                 }
             }
         }

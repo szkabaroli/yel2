@@ -9,9 +9,9 @@ mount
   append-child 4 5
   append-child 1 4
   create-element Button -> 6
+  add-event-listener 6 click 1
   create-text "+" -> 7
   append-child 6 7
-  add-event-listener 6 click 1
   append-child 1 6
   append-child 0 1
 click (handler 1)
@@ -26,6 +26,7 @@ unmount
 todo: mount
   create-element VStack -> 8
   set-style 8 pad f64(8)
+  set-style 8 overflow.y str("auto")
   create-element Text -> 9
   set-attribute 9 weight str("normal")
   create-text "0 done" -> 10
@@ -45,42 +46,360 @@ todo: items a, b
   create-comment if -> 15
   insert-before 8 15 11
   create-element Button -> 16
-  create-text "a" -> 17
-  append-child 16 17
   add-event-listener 16 click 1
+  create-text "b" -> 17
+  append-child 16 17
   insert-before 8 16 14
   create-element Button -> 18
-  create-text "b" -> 19
-  append-child 18 19
   add-event-listener 18 click 2
-  insert-before 8 18 14
+  create-text "a" -> 19
+  append-child 18 19
+  insert-before 8 18 16
 todo: a, b, c (busy; rows a and b kept)
-  create-element Text -> 20
-  create-text "Busy" -> 21
+  create-element Button -> 20
+  add-event-listener 20 click 3
+  create-text "c" -> 21
   append-child 20 21
-  insert-before 8 20 15
-  insert-before 8 16 14
-  insert-before 8 18 14
-  create-element Button -> 22
-  create-text "c" -> 23
+  insert-before 8 20 14
+  create-element Text -> 22
+  create-text "Busy" -> 23
   append-child 22 23
-  add-event-listener 22 click 3
-  insert-before 8 22 14
+  insert-before 8 22 15
 todo: click c's row
   set-attribute 9 weight str("bold")
   set-text-content 10 "1 done"
 todo: c, a (b let go)
-  remove 20
-  insert-before 8 22 14
-  insert-before 8 16 14
-  remove 18
+  remove 16
+  insert-before 8 20 18
+  remove 22
 todo: none
   remove 15
   create-element Text -> 24
   create-text "Nothing to do" -> 25
   append-child 24 25
   insert-before 8 24 11
-  remove 22
-  remove 16
+  remove 20
+  remove 18
 todo: unmount
   remove 8
+form: mount
+  create-element VStack -> 26
+  create-element Input -> 27
+  set-attribute 27 value str("")
+  add-event-listener 27 input 2
+  append-child 26 27
+  create-element Button -> 28
+  add-event-listener 28 click 3
+  create-text "Go" -> 29
+  append-child 28 29
+  append-child 26 28
+  create-element Text -> 30
+  create-text ", shifted 0" -> 31
+  append-child 30 31
+  append-child 26 30
+  append-child 0 26
+form: input hi
+  set-attribute 27 value str("hi")
+  set-text-content 31 "hi, shifted 0"
+form: a value, not an input: nothing
+form: shift-click
+  set-text-content 31 "hi, shifted 1"
+form: plain click: nothing
+  remove 26
+rows: mount a, b, c, d (d starred)
+  create-element VStack -> 32
+  create-comment for -> 33
+  append-child 32 33
+  append-child 0 32
+  create-element Text -> 34
+  create-text "d" -> 35
+  append-child 34 35
+  insert-before 32 34 33
+  create-comment if -> 36
+  insert-before 32 36 33
+  create-element Badge -> 37
+  create-text "star" -> 38
+  append-child 37 38
+  insert-before 32 37 36
+  create-element Text -> 39
+  create-text "c" -> 40
+  append-child 39 40
+  insert-before 32 39 34
+  create-comment if -> 41
+  insert-before 32 41 34
+  create-element Text -> 42
+  create-text "b" -> 43
+  append-child 42 43
+  insert-before 32 42 39
+  create-comment if -> 44
+  insert-before 32 44 39
+  create-element Text -> 45
+  create-text "a" -> 46
+  append-child 45 46
+  insert-before 32 45 42
+  create-comment if -> 47
+  insert-before 32 47 42
+rows: b renamed (its text only)
+  set-text-content 43 "B"
+rows: d to the front (one row moved, its badge with it)
+  insert-before 32 34 45
+  insert-before 32 37 45
+  insert-before 32 36 45
+rows: a starred (its badge made)
+  create-element Badge -> 48
+  create-text "star" -> 49
+  append-child 48 49
+  insert-before 32 48 47
+  remove 32
+groups: mount x (a, b), y (c)
+  create-element VStack -> 50
+  create-comment for -> 51
+  append-child 50 51
+  append-child 0 50
+  create-element Text -> 52
+  create-text "y" -> 53
+  append-child 52 53
+  insert-before 50 52 51
+  create-comment for -> 54
+  insert-before 50 54 51
+  create-element Text -> 55
+  create-text "y: c" -> 56
+  append-child 55 56
+  insert-before 50 55 54
+  create-comment for -> 57
+  insert-before 50 57 51
+  create-element Badge -> 58
+  create-text "c" -> 59
+  append-child 58 59
+  insert-before 50 58 57
+  create-element Text -> 60
+  create-text "x" -> 61
+  append-child 60 61
+  insert-before 50 60 52
+  create-comment for -> 62
+  insert-before 50 62 52
+  create-element Text -> 63
+  create-text "x: b" -> 64
+  append-child 63 64
+  insert-before 50 63 62
+  create-element Text -> 65
+  create-text "x: a" -> 66
+  append-child 65 66
+  insert-before 50 65 63
+  create-comment for -> 67
+  insert-before 50 67 52
+  create-element Badge -> 68
+  create-text "b" -> 69
+  append-child 68 69
+  insert-before 50 68 67
+  create-element Badge -> 70
+  create-text "a" -> 71
+  append-child 70 71
+  insert-before 50 70 68
+groups: x renamed X (its title and its members' texts)
+  set-text-content 61 "X"
+  set-text-content 64 "X: b"
+  set-text-content 66 "X: a"
+groups: y to the front (its title, member and badge with it)
+  insert-before 50 52 60
+  insert-before 50 55 60
+  insert-before 50 54 60
+  insert-before 50 58 60
+  insert-before 50 57 60
+groups: d added to y (one inner row)
+  create-element Text -> 72
+  create-text "y: d" -> 73
+  append-child 72 73
+  insert-before 50 72 54
+  create-element Badge -> 74
+  create-text "d" -> 75
+  append-child 74 75
+  insert-before 50 74 57
+  remove 50
+panel: mount
+  create-element VStack -> 76
+  create-element Button -> 77
+  set-attribute 77 variant str("accent")
+  add-event-listener 77 click 2
+  create-text "a (0)" -> 78
+  append-child 77 78
+  append-child 76 77
+  create-comment if -> 79
+  append-child 76 79
+  create-element Button -> 80
+  set-attribute 80 variant str("muted")
+  add-event-listener 80 click 3
+  create-text "inside (0)" -> 81
+  append-child 80 81
+  insert-before 76 80 79
+  create-comment for -> 82
+  append-child 76 82
+  append-child 0 76
+panel: title b (the child's text only)
+  set-text-content 78 "b (0)"
+panel: click the inner label (its own state)
+  set-text-content 81 "inside (1)"
+panel: closed (the inner label let go, its node removed once)
+  remove 80
+panel: names p, q
+  create-element Button -> 83
+  set-attribute 83 variant str("muted")
+  add-event-listener 83 click 3
+  create-text "q (0)" -> 84
+  append-child 83 84
+  insert-before 76 83 82
+  create-element Button -> 85
+  set-attribute 85 variant str("muted")
+  add-event-listener 85 click 1
+  create-text "p (0)" -> 86
+  append-child 85 86
+  insert-before 76 85 83
+panel: q, p (one label moved)
+  insert-before 76 83 85
+panel: unmount
+  remove 76
+chooser: mount
+  create-element VStack -> 87
+  create-element Text -> 88
+  create-text "chosen: none" -> 89
+  append-child 88 89
+  append-child 87 88
+  create-comment if -> 90
+  append-child 87 90
+  create-element HStack -> 91
+  create-element Button -> 92
+  add-event-listener 92 click 2
+  create-text "red" -> 93
+  append-child 92 93
+  append-child 91 92
+  create-element Button -> 94
+  add-event-listener 94 click 1
+  create-text "close" -> 95
+  append-child 94 95
+  append-child 91 94
+  insert-before 87 91 90
+  append-child 0 87
+chooser: red picked (the picker calls on.pick)
+  set-text-content 89 "chosen: red"
+chooser: close (the picker calls on.close: it is let go)
+  remove 91
+  remove 87
+tabs: mount (b)
+  create-element VStack -> 96
+  create-comment if -> 97
+  append-child 96 97
+  create-comment if -> 98
+  insert-before 96 98 97
+  create-element Text -> 99
+  create-text "second" -> 100
+  append-child 99 100
+  insert-before 96 99 98
+  append-child 0 96
+tabs: a (third never made)
+  remove 99
+  remove 98
+  create-element Text -> 101
+  create-text "first" -> 102
+  append-child 101 102
+  insert-before 96 101 97
+  remove 96
+mount at meshx://cloud/~/logs (never the default)
+  create-element Text -> 103
+  create-text "opened at meshx://cloud/~/logs" -> 104
+  append-child 103 104
+  append-child 0 103
+set-intent meshx://cloud/~/usage
+  set-text-content 104 "opened at meshx://cloud/~/usage"
+  remove 103
+framed: mount (the card's title, the items given, the card's badge)
+  create-element VStack -> 105
+  create-element VStack -> 106
+  create-element Text -> 107
+  create-text "Counter 0" -> 108
+  append-child 107 108
+  append-child 106 107
+  create-comment if -> 109
+  append-child 106 109
+  create-element Text -> 110
+  create-text "Clicked 0 times" -> 111
+  append-child 110 111
+  insert-before 106 110 109
+  create-element Button -> 112
+  add-event-listener 112 click 2
+  create-text "+" -> 113
+  append-child 112 113
+  insert-before 106 112 109
+  create-comment if -> 114
+  insert-before 106 114 109
+  create-element Button -> 115
+  add-event-listener 115 click 1
+  create-text "hide" -> 116
+  append-child 115 116
+  insert-before 106 115 114
+  create-element Badge -> 117
+  create-text "end" -> 118
+  append-child 117 118
+  append-child 106 117
+  append-child 105 106
+  append-child 0 105
+framed: click + (the giver's count: its text and the card's title)
+  set-text-content 111 "Clicked 1 times"
+  set-text-content 108 "Counter 1"
+framed: click hide (the giver's if, in the card)
+  remove 115
+framed: unmount
+  remove 105
+lets: mount (shown made once, though count and the for read it)
+  create-element VStack -> 119
+  create-element Text -> 120
+  (shown made for "")
+  create-text "3 shown" -> 121
+  append-child 120 121
+  append-child 119 120
+  create-element Text -> 122
+  create-text "opened with 3 items" -> 123
+  append-child 122 123
+  append-child 119 122
+  create-element Text -> 124
+  create-text "draft of fruit" -> 125
+  append-child 124 125
+  append-child 119 124
+  create-element Text -> 126
+  create-text "query then: " -> 127
+  append-child 126 127
+  append-child 119 126
+  create-element Text -> 128
+  create-text "clicks 0" -> 129
+  append-child 128 129
+  append-child 119 128
+  create-element Button -> 130
+  add-event-listener 130 click 2
+  create-text "+" -> 131
+  append-child 130 131
+  append-child 119 130
+  create-comment for -> 132
+  append-child 119 132
+  create-element Text -> 133
+  create-text "cherry" -> 134
+  append-child 133 134
+  insert-before 119 133 132
+  create-element Text -> 135
+  create-text "banana" -> 136
+  append-child 135 136
+  insert-before 119 135 133
+  create-element Text -> 137
+  create-text "apple" -> 138
+  append-child 137 138
+  insert-before 119 137 135
+  append-child 0 119
+lets: click (shown not made again)
+  set-text-content 129 "clicks 1"
+lets: query an (shown made again; the untracked text kept)
+  (shown made for "an")
+  set-text-content 121 "1 shown"
+  remove 137
+  remove 133
+lets: items + date (shown made again; opened kept)
+  (shown made for "an")
+lets: unmount
+  remove 119

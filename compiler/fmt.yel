@@ -84,7 +84,7 @@ module fmt {
     // separates no items)
     tokens-of: func(src: string, file: string) -> Fmt {
         let context: Context = {
-            sources: [{ path: file, text: src, origin: none, },],
+            sources: [{ path: file, text: src, },],
             errors: [],
             input: file,
             mode: "",
@@ -92,6 +92,7 @@ module fmt {
             debug: false,
             testing: false,
             test-exports: false,
+            turns: false,
             triple: "",
             overlays: map.new(),
             exits: false,
@@ -103,6 +104,11 @@ module fmt {
             locals: [],
             bodies: [],
             trees: map.new(),
+            cache: none,
+            interface: [],
+            func-texts: map.new(),
+            embed-names: map.new(),
+            embeds: map.new(),
             symbols: symbols(),
         };
         let f: Fmt = { src: src, toks: [], pos: 0, angled: [], failed: false, };

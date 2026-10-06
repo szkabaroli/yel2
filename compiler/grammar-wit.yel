@@ -2,7 +2,9 @@
 // them into yel modules. A world is skipped: a yel program's own is made from what it uses.
 
 // a WIT package as read: its id (ns:name), version, file, and interfaces by name
-resource WitPackage { id: string, version: string, file: string, interfaces: map<string, WitInterface>, }
+// a WIT package: its id and version, its first file (where it is) and all of them (a package may be
+// in several), its interfaces
+resource WitPackage { id: string, version: string, file: string, files: list<string>, interfaces: map<string, WitInterface>, }
 resource WitInterface {
     name: string,
     uses: list<WitUse>,
@@ -45,7 +47,7 @@ module grammar {
     wit-file: func(context: Context, source: s64) -> WitPackage {
         let file = context.sources[source].path;
         let g = grammar(context, source);
-        let pkg: WitPackage = { id: "", version: "", file: file, interfaces: map.new(), };
+        let pkg: WitPackage = { id: "", version: "", file: file, files: [file,], interfaces: map.new(), };
         for step in g.pos..g.toks.len() {
             skip-gates(g);
             if is-kind(g, 0, TokenKind.eof) { return pkg; }

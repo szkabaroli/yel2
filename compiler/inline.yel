@@ -117,10 +117,12 @@ module opt {
             param-kept-in: map.new(),
             param-gives: map.new(),
             param-writes: map.new(),
+            param-changes: map.new(),
             fresh-result: map.new(),
             wit: wit,
             externs: externs,
             pointer-types: pointer-types,
+            observable-types: map.new(),
             func-holders: func-holders,
             groups: map.new(),
             callees: map.new(),
@@ -137,7 +139,7 @@ module opt {
         let inline: map<Name, bool> = map.new();
         for f in funcs {
             let n = counts.get-or(f.name, 0);
-            let small = if mode == "speed" { 40 } else { 4 };
+            let small = if mode == "speed" { 40 } else { 0 };
             if !rooted.has(f.name) && n > 0 && (n == 1 || size(f.body) <= small)
                 && returns-fresh(p, f) && !recursive(p, f.name) {
                 inline.set(f.name, true);
@@ -304,6 +306,8 @@ module opt {
             type-arg(x) => n.kind,
             global(x) => n.kind,
             scan(t) => n.kind,
+            static-list(_) => n.kind,
+            descriptor(_) => n.kind,
             element(x) => Kind.element({ base: clone(c, x.base), index: clone(c, x.index), item: x.item, }),
         };
         new-node(k, n.ty, n.fx)

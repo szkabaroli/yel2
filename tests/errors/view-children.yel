@@ -1,0 +1,13 @@
+// error: 8:13: a view puts its children in one place: one #children
+// error: 10:41: #children goes in one place, not in a for's rows (it would be built again in each)
+module twice-view {
+    view Twice {
+        items: list<string> = [];
+
+        VStack {
+            #children
+            #children
+            for one in items key(one) { #children }
+        }
+    }
+}

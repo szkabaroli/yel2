@@ -13,7 +13,7 @@ module counter-view {
             Text { "Clicked {count} times" }
             Button {
                 "+"
-                on click { count += 1; }
+                on.click: { -> count += 1; }
             }
         }
     }
@@ -28,6 +28,7 @@ module list-view {
 
         VStack {
             style.pad: 8.0
+            style.overflow.y: "auto"
             Text {
                 weight: if done > 0 { "bold" } else { "normal" }
                 "{done} done"
@@ -40,10 +41,241 @@ module list-view {
             for item in items key(item) {
                 Button {
                     "{item}"
-                    on click { done += 1; }
+                    on.click: { -> done += 1; }
                 }
             }
         }
+    }
+}
+
+// what an event carries: a handler's parameter, typed as the widget's event says (Input's on.input
+// gives an input-change, Button's on.click a click-event; its body run only for that case)
+module form-view {
+    view Form {
+        @(private) text: string = "";
+        @(private) shifted: s32 = 0;
+
+        VStack {
+            Input {
+                value: text
+                on.input: { change: input-change -> text = change.value; }
+            }
+            Button {
+                "Go"
+                on.click: { pressed -> if pressed.shift { shifted += 1; } }
+            }
+            Text { "{text}, shifted {shifted}" }
+        }
+    }
+}
+
+// if, else if, else: from the middle branch to the first, the inner if (the else's) let go by the
+// outer before it runs, so the last branch is never made on the way
+module tabs-view {
+    view Tabs {
+        tab: string = "b";
+
+        VStack {
+            if tab == "a" {
+                Text { "first" }
+            } else if tab == "b" {
+                Text { "second" }
+            } else {
+                Text { "third" }
+            }
+        }
+    }
+}
+
+// a keyed for's rows: a row kept is given its item (only what read what changed told again),
+// rows in order stay put (d moved to the front: one move, not four), and a row moves whole (what
+// an if in it shows goes with it)
+record entry { id: s32, label: string, starred: bool, }
+
+module rows-view {
+    view Rows {
+        entries: list<entry> = [];
+
+        VStack {
+            for one in entries key(one.id) {
+                Text { "{one.label}" }
+                if one.starred {
+                    Badge { "star" }
+                }
+            }
+        }
+    }
+}
+
+// a for in a for's row: each inner row reads the outer row's item (an outer item changed: the
+// inner rows that read it told), an outer row moved takes its inner rows with it, and an inner for
+// of the outer's name reads its own
+record group { id: s32, title: string, members: list<string>, }
+
+module groups-view {
+    view Groups {
+        groups: list<group> = [];
+
+        VStack {
+            for one in groups key(one.id) {
+                Text { "{one.title}" }
+                for member in one.members key(member) {
+                    Text { "{one.title}: {member}" }
+                }
+                for one in one.members key(one) {
+                    Badge { "{one}" }
+                }
+            }
+        }
+    }
+}
+
+// a view in another's tree (module.View { props }): made with its props (one that reads the
+// parent's state kept current, only the child's binding told), its own state its own, let go with
+// the branch or row it is in (its nodes removed with it, none one by one), moved with its row
+module label-view {
+    view Label {
+        text: string = "";
+        tone: string = "muted";
+        @(private) clicks: s32 = 0;
+
+        Button {
+            variant: tone
+            "{text} ({clicks})"
+            on.click: { -> clicks += 1; }
+        }
+    }
+}
+
+module panel-view {
+    view Panel {
+        title: string = "a";
+        names: list<string> = [];
+        open: bool = true;
+
+        VStack {
+            label-view.Label { text: title  tone: "accent" }
+            if open {
+                label-view.Label { text: "inside" }
+            }
+            for one in names key(one) {
+                label-view.Label { text: one }
+            }
+        }
+    }
+}
+
+// callbacks: a view's prop of a func's type, declared on.name (on.pick: func(string);, nothing
+// done until one is given), called in its handlers (on.pick(name)), given by the view it is in as
+// a closure, as a host element's handler is (on.pick: { key -> … })
+module picker-view {
+    view Picker {
+        name: string = "";
+        on.pick: func(string);
+        on.close: func();
+
+        HStack {
+            Button {
+                "{name}"
+                on.click: { -> on.pick(name); }
+            }
+            Button {
+                "close"
+                on.click: { -> on.close(); }
+            }
+        }
+    }
+}
+
+module chooser-view {
+    view Chooser {
+        @(private) chosen: string = "none";
+        @(private) open: bool = true;
+
+        VStack {
+            Text { "chosen: {chosen}" }
+            if open {
+                picker-view.Picker {
+                    name: "red"
+                    on.pick: { key -> chosen = key; }
+                    on.close: { -> open = false; }
+                }
+            }
+        }
+    }
+}
+
+// a prop mount is given (@(mount)): set before the view is first built, so the first tree is
+// already the page it opens at (the host's mount(root, intent))
+module opened-view {
+    view Opened {
+        @(mount) intent: string = "the default";
+
+        Text { "opened at {intent}" }
+    }
+}
+
+// #children: a view frames what the view it is in gives it (its title, then the items, then its
+// own badge); the items are the giver's, reading and setting its state, an if among them
+module card-view {
+    view Card {
+        title: string = "";
+
+        VStack {
+            Text { "{title}" }
+            #children
+            Badge { "end" }
+        }
+    }
+}
+
+module framed-view {
+    view Framed {
+        @(private) count: s32 = 0;
+        @(private) open: bool = true;
+
+        VStack {
+            card-view.Card {
+                title: "Counter {count}"
+                Text { "Clicked {count} times" }
+                Button { on.click: { -> count += 1; }  "+" }
+                if open {
+                    Button { on.click: { -> open = false; }  "hide" }
+                }
+            }
+        }
+    }
+}
+
+// lets: shown made of what it reads, made once however many read it, and again only when what it
+// read changes (count reads it); an @(once) let made as the view is first built; state from a prop,
+// made then too (the prop given by then); untracked(query) read, never followed
+module lets-view {
+    view Filtered {
+        items: list<string> = [];
+        query: string = "";
+        title: string = "untitled";
+        @(private) clicks: s32 = 0;
+        @(private) draft: string = "draft of {title}";
+
+        let shown: list<string> = traced(items, query);
+        let count: s32 = shown.len() as s32;
+        @(once) let opened: string = "opened with {items.len()} items";
+
+        VStack {
+            Text { "{count} shown" }
+            Text { "{opened}" }
+            Text { "{draft}" }
+            Text { "query then: {untracked(query)}" }
+            Text { "clicks {clicks}" }
+            Button { on.click: { -> clicks += 1; }  "+" }
+            for one in shown key(one) { Text { "{one}" } }
+        }
+    }
+
+    traced: func(items: list<string>, query: string) -> list<string> {
+        print("  (shown made for \"{query}\")\n");
+        items.filter({ one -> one.contains(query) })
     }
 }
 
@@ -52,9 +284,9 @@ main: func() {
     print("mount\n");
     counter-view.mount(c, 0);
     print("click (handler 1)\n");
-    counter-view.dispatch(c, 1);
+    counter-view.dispatch(c, 1, event-payload.none);
     print("click\n");
-    counter-view.dispatch(c, 1);
+    counter-view.dispatch(c, 1, event-payload.none);
     print("set-name grace\n");
     counter-view.set-name(c, "grace");
     print("set-name grace again: nothing\n");
@@ -70,11 +302,114 @@ main: func() {
     print("todo: a, b, c (busy; rows a and b kept)\n");
     list-view.set-items(t, ["a", "b", "c",]);
     print("todo: click c's row\n");
-    list-view.dispatch(t, 3);
+    list-view.dispatch(t, dom.last-handler("click"), event-payload.none);
     print("todo: c, a (b let go)\n");
     list-view.set-items(t, ["c", "a",]);
     print("todo: none\n");
     list-view.set-items(t, []);
     print("todo: unmount\n");
     list-view.unmount(t);
+
+    let f = form-view.new();
+    print("form: mount\n");
+    form-view.mount(f, 0);
+    print("form: input hi\n");
+    form-view.dispatch(f, dom.last-handler("input"), event-payload.input({ value: "hi", }));
+    print("form: a value, not an input: nothing\n");
+    form-view.dispatch(f, dom.last-handler("input"), event-payload.value("no"));
+    print("form: shift-click\n");
+    form-view.dispatch(f, dom.last-handler("click"), event-payload.click({ ctrl: false, shift: true, alt: false, meta: false, }));
+    print("form: plain click: nothing\n");
+    form-view.dispatch(f, dom.last-handler("click"), event-payload.click({ ctrl: false, shift: false, alt: false, meta: false, }));
+    form-view.unmount(f);
+
+    let rows = rows-view.new();
+    let entry = { id: s32, label: string, starred: bool -> let one: entry = { id: id, label: label, starred: starred, }; one };
+    print("rows: mount a, b, c, d (d starred)\n");
+    rows-view.mount(rows, 0);
+    rows-view.set-entries(rows, [entry(1, "a", false), entry(2, "b", false), entry(3, "c", false), entry(4, "d", true),]);
+    print("rows: b renamed (its text only)\n");
+    rows-view.set-entries(rows, [entry(1, "a", false), entry(2, "B", false), entry(3, "c", false), entry(4, "d", true),]);
+    print("rows: d to the front (one row moved, its badge with it)\n");
+    rows-view.set-entries(rows, [entry(4, "d", true), entry(1, "a", false), entry(2, "B", false), entry(3, "c", false),]);
+    print("rows: a starred (its badge made)\n");
+    rows-view.set-entries(rows, [entry(4, "d", true), entry(1, "a", true), entry(2, "B", false), entry(3, "c", false),]);
+    rows-view.unmount(rows);
+
+    let groups = groups-view.new();
+    let group = { id: s32, title: string, members: list<string> -> let one: group = { id: id, title: title, members: members, }; one };
+    print("groups: mount x (a, b), y (c)\n");
+    groups-view.mount(groups, 0);
+    groups-view.set-groups(groups, [group(1, "x", ["a", "b",]), group(2, "y", ["c",]),]);
+    print("groups: x renamed X (its title and its members' texts)\n");
+    groups-view.set-groups(groups, [group(1, "X", ["a", "b",]), group(2, "y", ["c",]),]);
+    print("groups: y to the front (its title, member and badge with it)\n");
+    groups-view.set-groups(groups, [group(2, "y", ["c",]), group(1, "X", ["a", "b",]),]);
+    print("groups: d added to y (one inner row)\n");
+    groups-view.set-groups(groups, [group(2, "y", ["c", "d",]), group(1, "X", ["a", "b",]),]);
+    groups-view.unmount(groups);
+
+    let panel = panel-view.new();
+    print("panel: mount\n");
+    panel-view.mount(panel, 0);
+    print("panel: title b (the child's text only)\n");
+    panel-view.set-title(panel, "b");
+    print("panel: click the inner label (its own state)\n");
+    panel-view.dispatch(panel, dom.last-handler("click"), event-payload.none);
+    print("panel: closed (the inner label let go, its node removed once)\n");
+    panel-view.set-open(panel, false);
+    print("panel: names p, q\n");
+    panel-view.set-names(panel, ["p", "q",]);
+    print("panel: q, p (one label moved)\n");
+    panel-view.set-names(panel, ["q", "p",]);
+    print("panel: unmount\n");
+    panel-view.unmount(panel);
+
+    let chooser = chooser-view.new();
+    print("chooser: mount\n");
+    chooser-view.mount(chooser, 0);
+    let clicks = dom.handler-ids("click");
+    print("chooser: red picked (the picker calls on.pick)\n");
+    chooser-view.dispatch(chooser, clicks[clicks.len() - 2], event-payload.none);
+    print("chooser: close (the picker calls on.close: it is let go)\n");
+    chooser-view.dispatch(chooser, clicks[clicks.len() - 1], event-payload.none);
+    chooser-view.unmount(chooser);
+
+    let tabs = tabs-view.new();
+    print("tabs: mount (b)\n");
+    tabs-view.mount(tabs, 0);
+    print("tabs: a (third never made)\n");
+    tabs-view.set-tab(tabs, "a");
+    tabs-view.unmount(tabs);
+    let opened = opened-view.new();
+    print("mount at meshx://cloud/~/logs (never the default)\n");
+    opened-view.mount(opened, 0, "meshx://cloud/~/logs");
+    print("set-intent meshx://cloud/~/usage\n");
+    opened-view.set-intent(opened, "meshx://cloud/~/usage");
+    opened-view.unmount(opened);
+
+    let framed = framed-view.new();
+    print("framed: mount (the card's title, the items given, the card's badge)\n");
+    framed-view.mount(framed, 0);
+    let pressed = dom.handler-ids("click");
+    print("framed: click + (the giver's count: its text and the card's title)\n");
+    framed-view.dispatch(framed, pressed[pressed.len() - 2], event-payload.none);
+    print("framed: click hide (the giver's if, in the card)\n");
+    framed-view.dispatch(framed, pressed[pressed.len() - 1], event-payload.none);
+    print("framed: unmount\n");
+    framed-view.unmount(framed);
+
+    let filtered = lets-view.new();
+    lets-view.set-items(filtered, ["apple", "banana", "cherry",]);
+    lets-view.set-title(filtered, "fruit");
+    print("lets: mount (shown made once, though count and the for read it)\n");
+    lets-view.mount(filtered, 0);
+    print("lets: click (shown not made again)\n");
+    lets-view.dispatch(filtered, dom.last-handler("click"), event-payload.none);
+    print("lets: query an (shown made again; the untracked text kept)\n");
+    lets-view.set-query(filtered, "an");
+    print("lets: items + date (shown made again; opened kept)\n");
+    lets-view.set-items(filtered, ["apple", "banana", "cherry", "date",]);
+    print("lets: unmount\n");
+    lets-view.unmount(filtered);
 }

@@ -25,6 +25,11 @@ resource Server {
     checked-at: map<string, s64>,
     // the change each package's check under way is of (check.fresh's)
     checking: map<string, s64>,
+    // what each package's checks keep for the next (unchanged files' trees, unchanged funcs'
+    // checked bodies: Context.cache)
+    caches: map<string, analysis.Cache>,
+    // the directories a package's checks include from (-I: what yelc build gave it, by its input)
+    searches: map<string, list<string>>,
     // each file's package (check.package-input's), found since the last change
     inputs: map<string, string>,
     inputs-at: s64,
@@ -55,6 +60,8 @@ module server {
             checked: map.new(),
             checked-at: map.new(),
             checking: map.new(),
+            caches: map.new(),
+            searches: map.new(),
             inputs: map.new(),
             inputs-at: -1,
             documents: map.new(),

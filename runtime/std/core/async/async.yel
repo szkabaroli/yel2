@@ -27,6 +27,11 @@ module async {
     @c(name = "yel_async_yield") yield-turn: extern func() -> future<()>;
     @c(name = "yel_async_park") park: extern func() -> future<()>;
 
+    // the task being stepped, and a parked one made ready again: a wait for what only yel tells (a
+    // place free among several, a signal) is the task kept, parked, and woken by what it waits for
+    @c(name = "yel_async_current") current-task: extern func() -> future<()>;
+    @c(name = "yel_async_wake") wake-task: extern func(task: future<()>);
+
     // a future no one waits for any more: the host's end let go (the compiler's, where a local
     // holding one is last used: compiler/ends.yel)
     @c(name = "yel_future_release") release-future: extern func<T>(f: future<T>);

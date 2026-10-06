@@ -137,6 +137,7 @@ y_async *yel_async_park(void);
 
 /** Milliseconds on a clock that only goes on. */
 int64_t yel_async_now_ms(void);
+int64_t yel_wall_ms(void);
 
 /** The task being stepped, woken at a time. */
 // the timers' tasks, marked: a task a timer names stays until the timer is due (waking a task that

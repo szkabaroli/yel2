@@ -69,7 +69,9 @@ bitcode() {
 	level=$(echo "O0 O2" | cut -d' ' -f$((seed % 2 + 1)))
 	clang -$level -w -Wno-override-module -o "$work/bc" "$work/case.bc" build/fuzz/runtime.bc build/libuv.a -lm -lpthread > "$work/bitcode-cc.log" 2>&1 || keep bitcode-build
 	run bc "$work/bc"
-	YEL_GC_STRESS=7 run bc-stress "$work/bc"
+	# (env: the stress the run's alone; an assignment before a shell func stays in the script's
+	# environment after it, and would run every later command, the compiler too, under it)
+	run bc-stress env YEL_GC_STRESS=7 "$work/bc"
 	for name in bc bc-stress; do
 		if ! cmp -s "$work/o0.result" "$work/$name.result"; then
 			{ echo "== $name (bitcode -$level) differs from the C build's o0:"; diff "$work/o0.result" "$work/$name.result" | head -20; } >> "$work/bitcode-differs.log"
@@ -125,7 +127,7 @@ o2) $CC -O2 -w $CFLAGS -o "$work/other" "$work/case.c" $LIBS > "$work/cc-other.l
 	;;
 esac
 if [ -x "$work/other" ]; then run other "$work/other"; else echo "the build failed" > "$work/other.result"; fi
-YEL_GC_STRESS=7 run stress "$work/o0"
+run stress env YEL_GC_STRESS=7 "$work/o0"
 for name in other stress; do
 	if ! cmp -s "$work/o0.result" "$work/$name.result"; then
 		{ echo "== $name ($other) differs from o0:"; diff "$work/o0.result" "$work/$name.result" | head -20; } >> "$work/differs.log"

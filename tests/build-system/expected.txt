@@ -1,0 +1,9 @@
+build: command sh
+build: executable hello
+hello from a written file
+made by a command
+a message of the day, written by the build
+build: tests unit
+ok   sums.adds
+ok   sums.adds-nothing
+2 tests, 0 failed

@@ -1,0 +1,33 @@
+from "std:build" include build;
+
+// std:build's own test (bootstrap.sh runs it: yelc build run, yelc build test, yelc build check):
+// a package the build writes itself, one a command makes from a file it reads (made once for what
+// goes into it), an executable including both and embedding a file the build writes, tests, and a
+// command's output and ending checked
+main: async func() {
+    wait build.run({ b ->
+        // a package the build writes itself
+        let written = b.write-files();
+        let _ = written.add-file("greeting/greeting.yel", "package app:greeting@0.1.0;\nmodule greeting \{ text: func() -> string \{ \"hello from a written file\" \} \}\n");
+        // a package a command makes, from a file it reads
+        let tool = b.command(["sh", "-c", "mkdir -p \"$0/stamp\" && printf 'package app:stamp@0.1.0;\\nmodule stamp \{ text: func() -> string \{ \"%s\" \} \}\\n' \"$(cat stamp-text.txt)\" > \"$0/stamp/stamp.yel\"",]);
+        let stamped = tool.output-dir("packages");
+        tool.input("stamp-text.txt");
+        // a file the build writes, embedded (#embed("motd"))
+        let motd = written.add-file("motd.txt", "a message of the day, written by the build");
+        let hello = b.executable("hello", "src");
+        hello.embed("motd", motd);
+        hello.include(written.directory());
+        hello.include(stamped);
+        b.install(hello);
+        b.step("run", "Run hello", [b.run-artifact(hello),]);
+        let tests = b.test("unit", "unit");
+        b.step("test", "Run the tests", [b.run-artifact(tests),]);
+        // a command given a variable, what it prints and how it ends checked
+        let greets = b.command(["sh", "-c", "echo \"$GREETING\"; exit 3",]).named("greets");
+        greets.set-environment("GREETING", "hello from the environment");
+        greets.expect-output("greeting.txt");
+        greets.expect-exit(3);
+        b.step("check", "Check what a command prints", [greets,]);
+    });
+}

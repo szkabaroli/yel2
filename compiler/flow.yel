@@ -68,7 +68,8 @@ module flow {
     }
 
     // the compiler's own helpers, by C name: a frame's result read (what the frame holds), a value
-    // held another way, a list literal (its items kept), a future or a generator stepped; any
+    // held another way, a list literal (its items kept; of constants, static data copied: new), a
+    // future or a generator stepped; any
     // other func not declared: it may give back any argument (and listed false)
     helper-effect: func(c-name: string) -> RuntimeEffect {
         let none-of: list<s64> = [];
@@ -81,8 +82,8 @@ module flow {
         if c-name == "yel_async_step" || c-name == "yel_async_first" || c-name == "y_seq_next" {
             return effect(none-of, none-of, none-of);
         }
-        // a list made empty, a string joined: new
-        if c-name == "y_list_new" { return effect(none-of, none-of, none-of); }
+        // a list made empty, a string joined, a list of static data (a literal of constants): new
+        if c-name == "y_list_new" || c-name == "y_list_of_data" || c-name == "y_list_static" { return effect(none-of, none-of, none-of); }
         { writes: none-of, keeps: none-of, kept-in: [], gives: none-of, gives-all: true, keeps-all: false, listed: false, }
     }
 

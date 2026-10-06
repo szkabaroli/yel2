@@ -1,0 +1,69 @@
+// A search as a yel view: an input whose text filters a list as it is typed (on.input), Escape to
+// clear it (on.keydown: the key), the matches as rows kept by their name (one that still matches
+// stays where it is made, the rest come and go), and a count read from the same text. Each row is
+// a view of its own (region-view.Region, in a module the component does not export), given the
+// region and the query as props: what reads the query in it is told as it is typed.
+
+package yel:search@0.1.0;
+
+from "yel:ui" include dom;
+from "yel:widgets" include meshx;
+
+module app-component {
+    view App {
+        regions: list<string> = ["Amsterdam", "Frankfurt", "London", "Paris", "Stockholm", "Warsaw",];
+        @(private) query: string = "";
+
+        VStack {
+            style.gap: 100.0
+            Input {
+                type: "search"
+                value: query
+                placeholder: "Find a region"
+                aria-label: "Find a region"
+                on.input: { change: input-change -> query = change.value; }
+                on.keydown: { pressed: key-event ->
+                    if pressed.key == "Escape" { query = ""; }
+                }
+            }
+            Text {
+                style.fg: "muted"
+                "{matching(regions, query).len()} of {regions.len()} regions"
+            }
+            for region in matching(regions, query) key(region) {
+                region-view.Region { name: region  query: query }
+            }
+            if matching(regions, query).len() == 0 {
+                EmptyState {
+                    icon: "magnifying-glass"
+                    title: "No region matches"
+                    description: "Press Escape to clear the search."
+                }
+            }
+        }
+    }
+
+    // the regions whose name has query in it, in either case
+    @(private) matching: func(regions: list<string>, query: string) -> list<string> {
+        let wanted = query.trim().to-lower();
+        regions.filter({ region -> region.to-lower().contains(wanted) })
+    }
+}
+
+// a region found: its name, and a badge where it is the whole query
+@(private) module region-view {
+    view Region {
+        name: string = "";
+        query: string = "";
+
+        HStack {
+            style.gap: 100.0
+            style.align: "center"
+            Icon { name: "globe" }
+            Text { "{name}" }
+            if name.to-lower() == query.trim().to-lower() {
+                Badge { "exact" }
+            }
+        }
+    }
+}

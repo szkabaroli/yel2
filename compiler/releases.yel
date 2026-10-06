@@ -31,10 +31,12 @@ module gen {
             param-kept-in: map.new(),
             param-gives: map.new(),
             param-writes: map.new(),
+            param-changes: map.new(),
             fresh-result: map.new(),
             wit: wit-wrappers(g),
             externs: externs,
             pointer-types: pointer-types,
+            observable-types: observable-types(g),
             func-holders: func-holders,
             groups: map.new(),
             callees: map.new(),
@@ -45,6 +47,13 @@ module gen {
         for f in funcs { p.funcs.set(f.name, f); }
         opt.param-escapes(p, funcs);
         p
+    }
+
+    // the @(observable) resources, by name (what escape.yel's param-changes stops at)
+    observable-types: func(g: Gen) -> map<Name, bool> {
+        let found: map<Name, bool> = map.new();
+        for r in g.symbols.records.keys() { if g.symbols.records[r].observable { found.set(r, true); } }
+        found
     }
 
     release-ends: func(g: Gen, funcs: list<IrFunc>, p: Facts) {

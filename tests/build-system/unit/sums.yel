@@ -1,0 +1,13 @@
+from "std:testing" include expect;
+
+module sums {
+    total: func(xs: list<s64>) -> s64 {
+        let sum = 0;
+        for x in xs { sum += x; }
+        sum
+    }
+
+    @(test) adds: func() { expect.equal(total([1, 2, 3,]), 6); }
+
+    @(test) adds-nothing: func() { expect.equal(total([]), 0); }
+}

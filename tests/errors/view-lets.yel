@@ -1,0 +1,8 @@
+// error: 6:17: @(once) in a view is a let's: @(once) let name: T = value;
+module counts-view {
+    view Counts {
+        items: list<string> = [];
+        let total: s32 = items.len() as s32;
+        @(once) count: s32 = 0;
+    }
+}

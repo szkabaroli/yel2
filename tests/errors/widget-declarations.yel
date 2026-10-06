@@ -1,0 +1,10 @@
+// error: 8:19: size is a widget's attribute: the host gives it its value to start with (no = value)
+module ui {
+    @(container)
+    widget Card {
+        title: string;
+    }
+    widget Input {
+        size: s32 = 3;
+    }
+}

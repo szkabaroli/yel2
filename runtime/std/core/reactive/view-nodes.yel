@@ -1,0 +1,402 @@
+// What a view's if and for show, as they move it: each node a branch or a row placed is a part,
+// and an if's or a for's anchor a part too, with what it shows now before it (its own parts,
+// kept current as it changes). A row moved is its parts moved, each one's inner parts first, so
+// what an if or a for in it shows goes with it. The view's dom is the program's (yel:ui's, or a
+// test's), so what moves a node is given (insert: node, before which).
+//
+// A for's rows are kept by key: the rows whose old places run in order stay where they are (a
+// longest increasing run of them: in-place), the rest are moved, so a row added, removed or moved
+// moves no other.
+
+module view-nodes {
+    // a node placed; an anchor and what it shows before it (none: inner empty)
+    resource Part { node: u32, inner: list<Part>, }
+
+    // whether a view is mounted (its tree in the host's), shared by what it shows: an if or a for
+    // let go while it is removes the nodes it placed
+    resource Mounted { on: bool, }
+
+    unmounted: func() -> Mounted { { on: false, } }
+
+    // what std does with the program's dom (a view module's, view-dom): a comment, an element and
+    // a text made; a node put before another in a parent, appended to it, removed; an attribute
+    // and a style set
+    resource Dom {
+        comment: func(string) -> u32,
+        insert: func(u32, u32, u32),
+        append: func(u32, u32),
+        remove: func(u32),
+        element: func(string) -> u32,
+        text: func(string) -> u32,
+        attribute: func(u32, string, Value),
+        style: func(u32, string, Value),
+        set-text: func(u32, string),
+    }
+
+    // an attribute's or a style's value (the view's package makes the host's of it)
+    variant Value { text(string), flag(bool), whole(s32), real(f64), }
+
+    // an attribute kept current on a node: read, set, and set again each time what it reads changes
+    // to a value it was not
+    keep-attribute: func(host: Dom, node: u32, name: string, read: func() -> Value) {
+        let set = host.attribute;
+        let last = read();
+        set(node, name, last);
+        reactive.watch(read, last, { now -> set(node, name, now); });
+    }
+
+    // a text kept current: made of what read gives, and set again each time that changes
+    kept-text: func(host: Dom, read: func() -> string) -> u32 {
+        let make = host.text;
+        let set = host.set-text;
+        let last = read();
+        let made = make(last);
+        reactive.watch(read, last, { now -> set(made, now); });
+        made
+    }
+
+    // an if: an anchor where its branch goes (appended to parent, or put before before and kept as
+    // one of outer's parts), and an effect showing the branch cond picks (made again only when that
+    // changes: what the branch made let go with it, its nodes removed but where the view is no
+    // longer mounted)
+    show: func(host: Dom, mounted: Mounted, parent: u32, inserted: bool, before: u32, outer: list<Part>, cond: func() -> bool, then: func(u32, list<Part>), otherwise: func(u32, list<Part>)) {
+        let comment = host.comment;
+        let insert = host.insert;
+        let append = host.append;
+        let remove-node = host.remove;
+        let anchor = comment("if");
+        let nodes: list<Part> = [];
+        if inserted {
+            insert(parent, anchor, before);
+            outer.push(shown(anchor, nodes));
+        } else {
+            append(parent, anchor);
+        }
+        let showing = 0;
+        let owner = reactive.new-owner();
+        reactive.on-cleanup({ ->
+            reactive.dispose(owner);
+            if mounted.on {
+                for gone in nodes { remove-node(gone.node); }
+            }
+        });
+        let _ = reactive.effect({ ->
+            let want = if cond() { 1 } else { 2 };
+            if want != showing {
+                reactive.dispose(owner);
+                for gone in nodes { remove-node(gone.node); }
+                clear(nodes);
+                showing = want;
+                observe.untracked({ ->
+                    reactive.within(owner, { ->
+                        if want == 1 { then(anchor, nodes); } else { otherwise(anchor, nodes); }
+                    });
+                });
+            }
+            { -> }
+        });
+    }
+
+    // a view's static part as the compiler writes it (ops, ASCII): E<tag> an element made (the one
+    // ops go on to), A<name><value> an attribute set on it, S<name><value> a style, T<text> a text
+    // put in it, U the element done (appended to the one before it, if any). A text is its length
+    // in bytes, a colon, then its bytes; a value s<text>, t or f (a bool), i<text> (an s32's digits)
+    // or d<text> (an f64's IEEE bits, 16 hex digits). Its top element made
+    template: func(host: Dom, ops: string) -> u32 {
+        let element = host.element;
+        let text = host.text;
+        let append = host.append;
+        let attribute = host.attribute;
+        let style = host.style;
+        let r: Ops = { text: ops, at: 0, };
+        let open: list<u32> = [];
+        let top: u32 = 0;
+        loop {
+            if r.at >= ops.len() { break; }
+            let op = ops.byte-at(r.at);
+            r.at += 1;
+            if op == 69 {
+                let made = element(read-text(r));
+                if open.len() == 0 { top = made; }
+                open.push(made);
+            } else if op == 65 {
+                let name = read-text(r);
+                attribute(open[open.len() - 1], name, read-value(r));
+            } else if op == 83 {
+                let name = read-text(r);
+                style(open[open.len() - 1], name, read-value(r));
+            } else if op == 84 {
+                append(open[open.len() - 1], text(read-text(r)));
+            } else {
+                let done = open.pop();
+                if open.len() > 0 { append(open[open.len() - 1], done); }
+            }
+        }
+        top
+    }
+
+    // a template being read: its ops, and where
+    resource Ops { text: string, at: s64, }
+
+    @(private) read-text: func(r: Ops) -> string {
+        let length = 0;
+        loop {
+            let digit = r.text.byte-at(r.at);
+            r.at += 1;
+            if digit == 58 { break; }
+            length = length * 10 + (digit - 48);
+        }
+        let made = r.text.substring(r.at, r.at + length);
+        r.at += length;
+        made
+    }
+
+    @(private) read-value: func(r: Ops) -> Value {
+        let kind = r.text.byte-at(r.at);
+        r.at += 1;
+        if kind == 116 { return Value.flag(true); }
+        if kind == 102 { return Value.flag(false); }
+        let written = read-text(r);
+        if kind == 105 { return Value.whole(number.parse-int(written).unwrap-or(0) as s32); }
+        if kind == 100 {
+            // (its IEEE bits, 16 hex digits: no parse)
+            let bits: u64 = 0;
+            for index in 0..written.len() {
+                let digit = written.byte-at(index);
+                bits = bits * 16 + (if digit >= 97 { digit - 87 } else { digit - 48 }) as u64;
+            }
+            return Value.real(bits-f64(bits));
+        }
+        Value.text(written)
+    }
+
+    // a for: an anchor where its rows go (appended to parent, or put before before and kept as one
+    // of outer's parts), and an effect keeping a row for each item items gives, by its key. A row
+    // kept is given its item (the row reads it through its getter: what read it is told when it
+    // changes); the rows whose old places run in order stay (in-place), the others move; a row is
+    // made (make: its getter, the node it goes before, its parts) for a new key where it goes, and
+    // let go for a key gone (its nodes removed but where the view is no longer mounted). The
+    // anchor's part holds every row's parts (a row this for is in moves them all).
+    //
+    // What depends on the items' type is here (their keys matched, each row's item kept in a box),
+    // the rest rows-core's, one for every for of any type
+    rows: func<T, K>(host: Dom, mounted: Mounted, parent: u32, inserted: bool, before: u32, outer: list<Part>, items: func() -> list<T>, key: func(T) -> K, make: func(func() -> T, u32, list<Part>)) {
+        let keys: list<K> = [];
+        let boxes = item-boxes(items);
+        let now = item-list(items);
+        let next-boxes = item-boxes(items);
+        rows-core(
+            host,
+            mounted,
+            parent,
+            inserted,
+            before,
+            outer,
+            { -> now = items(); },
+            { ->
+                // (each item's key, and the row it had: -1 for none)
+                let next-keys: list<K> = [];
+                let next-old: list<s64> = [];
+                let used: list<bool> = [];
+                for i in 0..keys.len() { used.push(false); }
+                for item in now {
+                    let k = key(item);
+                    let found = -1;
+                    for i in 0..keys.len() {
+                        if found < 0 && !used[i] && keys[i] == k { found = i; }
+                    }
+                    if found >= 0 { used[found] = true; }
+                    next-keys.push(k);
+                    next-old.push(found);
+                }
+                keys = next-keys;
+                next-boxes = item-boxes(items);
+                next-old
+            },
+            { old, place, registrar ->
+                let item-box = boxes[old];
+                if item-box[0] != now[place] {
+                    item-box[0] = now[place];
+                    observe.will-set(registrar, 0);
+                }
+                next-boxes.push(item-box);
+            },
+            { place, registrar, at, row ->
+                let item-box = [now[place],];
+                let getter = { ->
+                    observe.access(registrar, 0);
+                    item-box[0]
+                };
+                next-boxes.push(item-box);
+                make(getter, at, row);
+            },
+            { -> boxes = next-boxes.reverse(); },
+        );
+    }
+
+    // no items yet of the type items gives, typed by it
+    item-list: func<T>(items: func() -> list<T>) -> list<T> { [] }
+
+    // what a for does whatever its items' type: load (tracked) reads the items; matched gives each
+    // one's old row (-1: a new row); kept is told a row kept (its old row, its place now, its
+    // registrar), from the last place back; fresh a row made (its place, registrar, the node it goes
+    // before, its parts: under its own owner); settled that every place is done
+    rows-core: func(host: Dom, mounted: Mounted, parent: u32, inserted: bool, before: u32, outer: list<Part>, load: func(), matched: func() -> list<s64>, kept: func(s64, s64, observe.Registrar), fresh: func(s64, observe.Registrar, u32, list<Part>), settled: func()) {
+        // (each a func of the host's: called as a local)
+        let comment = host.comment;
+        let insert = host.insert;
+        let append = host.append;
+        let remove-node = host.remove;
+        let anchor = comment("for");
+        let held: list<Part> = [];
+        if inserted {
+            insert(parent, anchor, before);
+            outer.push(shown(anchor, held));
+        } else {
+            append(parent, anchor);
+        }
+        let owners: list<reactive.Owner> = [];
+        let parts: list<list<Part>> = [];
+        let registrars: list<observe.Registrar> = [];
+        reactive.on-cleanup({ ->
+            for owner in owners { reactive.dispose(owner); }
+            if mounted.on {
+                for row in parts {
+                    for gone in row { remove-node(gone.node); }
+                }
+            }
+        });
+        let _ = reactive.effect({ ->
+            load();
+            observe.untracked({ ->
+                let next-old = matched();
+                // (the rows of keys gone let go)
+                let used: list<bool> = [];
+                for i in 0..owners.len() { used.push(false); }
+                for old in next-old {
+                    if old >= 0 { used[old] = true; }
+                }
+                for i in 0..owners.len() {
+                    if !used[i] {
+                        reactive.dispose(owners[i]);
+                        for gone in parts[i] { remove-node(gone.node); }
+                    }
+                }
+                // (from the last row back: each placed before the one after it, the anchor for
+                // the last)
+                let stays = in-place(next-old);
+                let next = anchor;
+                let kept-owners: list<reactive.Owner> = [];
+                let kept-parts: list<list<Part>> = [];
+                let kept-registrars: list<observe.Registrar> = [];
+                let place = next-old.len();
+                loop {
+                    if place == 0 { break; }
+                    place -= 1;
+                    let old = next-old[place];
+                    if old >= 0 {
+                        kept(old, place, registrars[old]);
+                        // (a row out of place: each of its parts put before the row after it)
+                        if !stays[place] { move-before(parts[old], next, { moved, ahead -> insert(parent, moved, ahead); }); }
+                        kept-owners.push(owners[old]);
+                        kept-parts.push(parts[old]);
+                        kept-registrars.push(registrars[old]);
+                        next = first-node(parts[old], next);
+                    } else {
+                        let owner = reactive.new-owner();
+                        let row: list<Part> = [];
+                        let registrar = observe.registrar(1);
+                        let at = next;
+                        let made = place;
+                        reactive.within(owner, { -> fresh(made, registrar, at, row); });
+                        kept-owners.push(owner);
+                        kept-parts.push(row);
+                        kept-registrars.push(registrar);
+                        next = first-node(row, next);
+                    }
+                }
+                settled();
+                owners = kept-owners.reverse();
+                parts = kept-parts.reverse();
+                registrars = kept-registrars.reverse();
+                refill(held, parts);
+            });
+            { -> }
+        });
+    }
+
+
+
+    node: func(n: u32) -> Part { { node: n, inner: [], } }
+
+    // an if's or a for's anchor, and the list of what it shows (the if's or the for's own:
+    // changed in place, never replaced)
+    shown: func(anchor: u32, inner: list<Part>) -> Part { { node: anchor, inner: inner, } }
+
+    // the first node of parts (otherwise: none placed)
+    first-node: func(parts: list<Part>, otherwise: u32) -> u32 {
+        if parts.len() == 0 { return otherwise; }
+        let part = parts[0];
+        first-node(part.inner, part.node)
+    }
+
+    // parts moved before before, in order (each one's inner parts, then its node)
+    move-before: func(parts: list<Part>, before: u32, insert: func(u32, u32)) {
+        for part in parts {
+            move-before(part.inner, before, insert);
+            insert(part.node, before);
+        }
+    }
+
+    // parts emptied in place (an if's: its anchor's part holds the same list)
+    clear: func(parts: list<Part>) {
+        loop {
+            if parts.len() == 0 { break; }
+            let _ = parts.pop();
+        }
+    }
+
+    // a for's parts: its rows', in order, in place of what it had
+    refill: func(parts: list<Part>, rows: list<list<Part>>) {
+        clear(parts);
+        for row in rows {
+            for part in row { parts.push(part); }
+        }
+    }
+
+    // no boxes yet of the items items gives (a for's rows hold each its item in one: what it reads
+    // changed in place), typed by it
+    item-boxes: func<T>(items: func() -> list<T>) -> list<list<T>> { [] }
+
+    // which rows stay where they are: of each row's old place (-1: a new row), those in a longest
+    // run of increasing places (the rest, and every new row, are placed again)
+    in-place: func(old: list<s64>) -> list<bool> {
+        let stays: list<bool> = [];
+        // (tails[k]: the row ending the best run of k + 1 found so far; before: each row's
+        // predecessor in its run)
+        let tails: list<s64> = [];
+        let before: list<s64> = [];
+        for index in 0..old.len() {
+            stays.push(false);
+            before.push(-1);
+            let place = old[index];
+            if place < 0 { continue; }
+            let low = 0;
+            let high = tails.len();
+            loop {
+                if low >= high { break; }
+                let middle = (low + high) / 2;
+                if old[tails[middle]] < place { low = middle + 1; } else { high = middle; }
+            }
+            if low > 0 { before[index] = tails[low - 1]; }
+            if low == tails.len() { tails.push(index); } else { tails[low] = index; }
+        }
+        let at = if tails.len() > 0 { tails[tails.len() - 1] } else { -1 };
+        loop {
+            if at < 0 { break; }
+            stays[at] = true;
+            at = before[at];
+        }
+        stays
+    }
+}

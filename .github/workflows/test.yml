@@ -1,0 +1,128 @@
+name: Test
+
+# The bootstrap on every target a release is made for, each on its own runner (native: libuv and
+# the runtime are built for the system they run on): the seed, stages 1 to 3, the fixed point and
+# every test. Then once more on linux-x64 as a release builds it (--full: -O2, and the compiler
+# compiling itself under GC stress), with the WASI 0.3 component tests (wasi-sdk, wasmtime, wac).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    name: bootstrap ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: darwin-arm64
+            runner: macos-15
+          - target: darwin-x64
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      # (the bitcode tests: clang and LLVM's opt, whose verifier checks every module yelc writes)
+      - name: install LLVM 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          echo /usr/lib/llvm-22/bin >> "$GITHUB_PATH"
+      - name: install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      - name: bootstrap and test
+        shell: bash
+        run: ./bootstrap.sh 2>&1 | tee bootstrap.log
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## bootstrap ${{ matrix.target }}"
+            echo
+            grep -E '^(build: [0-9]+ steps ran|fixed point|no fixed point)' bootstrap.log | sed 's/$/  /' || true
+            echo
+            echo '<details><summary>failures</summary>'
+            echo
+            echo '```'
+            grep -E 'FAIL|failed|error:' bootstrap.log | head -50 || true
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: upload log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-${{ matrix.target }}
+          path: bootstrap.log
+
+  full:
+    name: full and components (linux-x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      WASI_SDK: /opt/wasi-sdk
+    steps:
+      - uses: actions/checkout@v4
+      # (the bitcode tests: clang and LLVM's opt, whose verifier checks every module yelc writes)
+      - name: install LLVM 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          echo /usr/lib/llvm-22/bin >> "$GITHUB_PATH"
+      - name: install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      - name: install wasi-sdk 34
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz -o wasi-sdk.tar.gz
+          sudo mkdir -p "$WASI_SDK"
+          sudo tar -xzf wasi-sdk.tar.gz -C "$WASI_SDK" --strip-components=1
+      - name: install wasmtime 49 and wac
+        run: |
+          curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v49.0.1
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          curl -sSfL https://github.com/bytecodealliance/wac/releases/download/v0.11.0/wac-cli-x86_64-unknown-linux-musl -o "$HOME/.local/bin/wac" --create-dirs
+          chmod +x "$HOME/.local/bin/wac"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: bootstrap --full, with the components
+        shell: bash
+        run: ./bootstrap.sh --full 2>&1 | tee bootstrap.log
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## bootstrap --full (linux-x64, components)'
+            echo
+            grep -E '^(build: [0-9]+ steps ran|fixed point|no fixed point)' bootstrap.log | sed 's/$/  /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: upload log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-full
+          path: bootstrap.log

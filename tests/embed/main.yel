@@ -1,0 +1,11 @@
+// #embed(path): a file's bytes as a string, read as the program is compiled (as Zig's
+// @embedFile), its path from this file's directory: quotes, backslashes and braces as they are
+// (no escapes, no interpolation), line breaks and UTF-8 kept
+
+const GREETING: string = #embed("data/text.txt");
+
+main: func() {
+    print("{GREETING}\n");
+    let again = #embed("data/text.txt");
+    print("{again.len()} bytes, {again.split("\n").len()} lines, the same: {again == GREETING}\n");
+}

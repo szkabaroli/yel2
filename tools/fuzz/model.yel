@@ -32,7 +32,8 @@ resource Fields { names: list<string>, types: list<Ty>, }
 resource Table { key: Ty, value: Ty, }
 resource Fun { params: list<Ty>, result: Ty, }
 
-// a declared type. kind: "record", "variant" (types: each case's payload, unit-t for none),
+// a declared type. kind: "record" (a resource: shared, as the programs made assume), "value" (a
+// record: a value, copied where it goes; its fields never set), "variant" (types: each case's payload, unit-t for none),
 // "enum", "flags", "distinct" (base), "strings" (an alias of string literals: names), "range"
 // (base, low..=high), "union" (an alias of kinds: types)
 resource TypeDecl {
@@ -46,8 +47,8 @@ resource TypeDecl {
 }
 
 // a func the program has: how it is called (module.name for a module's), its params, which of them
-// are readonly (only read), its result, its type params (generic), and whether it yields (its
-// result a seq of result)
+// are readonly (only read), its result, its type params (generic), whether it yields (its result
+// a seq of result), its params' defaults, and whether it is async
 resource FuncInfo {
     name: string,
     params: list<Ty>,
@@ -55,6 +56,10 @@ resource FuncInfo {
     result: Ty,
     type-params: list<string>,
     yields: bool,
+    // each param's default as written ("" for none: the defaulted ones are the last), and whether
+    // it is an async func (called with wait, or started)
+    defaults: list<string>,
+    is-async: bool,
 }
 
 // a constant: its name and type (an s32 or a string)

@@ -44,6 +44,9 @@ resource Gen {
     funcs: map<string, FuncInfo>,
     // generic funcs, compiled once for each list of type arguments they are called with
     generic: map<string, Func>,
+    // funcs that only make a record of their parameters (and constants): a call of one given
+    // constants is a constant too (static data, codegen's static-list)
+    constructors: map<string, Func>,
     instances: map<string, bool>,
     pending: list<Pending>,
     // the type arguments of the func being compiled
@@ -168,13 +171,25 @@ module gen {
         "{c / 64}{(c / 8) % 8}{c % 8}"
     }
 
+    // whether a func's body is a record literal and nothing else (its value)
+    made-record: func(f: Func) -> bool {
+        if f.body.stmts.len() != 1 { return false; }
+        match f.body.stmts[0] {
+            expr-stmt(x) => x.is-value && match x.value.kind {
+                record-lit(_) => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     generator: func(context: Context, decls: list<Decl>) -> Gen {
         let file = context.input;
         let g: Gen = {
             builds: map.new(),
             context: context,
             literals: map.new(), literal-decls: [], funcs: map.new(),
-            generic: map.new(), instances: map.new(), pending: [], subst: map.new(), file: file,
+            generic: map.new(), constructors: map.new(), instances: map.new(), pending: [], subst: map.new(), file: file,
             symbols: context.symbols,
             made: map.new(), value-decls: [], helper-protos: [],
             helper-bodies: [], helpers: [], protos: [], wit-externs: map.new(),
@@ -258,6 +273,7 @@ module gen {
                         type-params: f.type-params,
                     });
                     if f.type-params.len() > 0 { g.generic.set(f.name, f); }
+                    else if made-record(f) { g.constructors.set(f.name, f); }
                 }
                 extern-decl(x) => {
                     if x.wit-module != "" {
@@ -305,11 +321,12 @@ module gen {
     }
 
     // the will-sets before calls given an observable resource's field (a list, a map): kept where
-    // the call may change what it is given there (as the program's flow says), else nothing
+    // the call may change what it is given there (as the program's flow says: not through an
+    // @(observable) resource in it, which tells of its own fields), else nothing
     settle-observed: func(g: Gen, facts: Facts) {
         for w in g.observed-writes {
             let flow = opt.call-flow(facts, w.call);
-            if w.arg < flow.writes.len() && !flow.writes[w.arg] {
+            if w.arg < flow.changes.len() && !flow.changes[w.arg] {
                 w.marker.kind = Kind.block({ body: [], label: -1, });
                 w.marker.fx = 0;
             }
@@ -2060,6 +2077,8 @@ module gen {
     lower-program: func(context: Context, decls: list<Decl>, sites: list<EffectSite>) -> Lowered {
         let mode = context.mode;
         let backend = context.backend;
+        // (a component with a main, wasi:cli/run's, runs as one turn: it keeps its frames)
+        if context.turns && !is-reactor(decls) { context.turns = false; }
         let g = generator(context, decls);
         let forward: list<string> = [];
         let structs: list<string> = [];

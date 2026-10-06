@@ -1,0 +1,19 @@
+package test:kit;
+
+from "../host" include dom, ui;
+
+// a card from another package: a title, then what it is given
+module card-view {
+    record card-style { gap: s32, }
+
+    view Card {
+        title: string = "";
+        on.close: func();
+
+        VStack {
+            Text { "{title}" }
+            #children
+            Button { on.click: { -> on.close(); }  "close" }
+        }
+    }
+}

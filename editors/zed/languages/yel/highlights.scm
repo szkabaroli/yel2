@@ -23,6 +23,7 @@
   "distinct"
   "module"
   "view"
+  "widget"
   "package"
   "from"
   "include"
@@ -192,10 +193,14 @@
     ">"
   ] @punctuation.bracket)
 
-; ---- views: element tags, fields, attributes, handlers
+; ---- views: element tags, fields, attributes, handlers (on.event: { … }, a callback's on.name)
 
 (view_tag) @tag
 (view_field name: (identifier) @property)
+(view_field derived: "let" name: (identifier) @variable)
 (view_attribute name: (identifier) @property)
-(view_handler event: (identifier) @function)
+(view_attribute namespace: "on" name: (identifier) @function)
+(view_field callback: "on" name: (identifier) @function)
+(widget_declaration name: (identifier) @type)
+(widget_declaration base: (identifier) @type)
 (view_for pattern: (identifier) @variable)

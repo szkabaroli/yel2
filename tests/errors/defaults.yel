@@ -1,7 +1,7 @@
 // error: 9:29: the default of word is a literal or a # directive
 // error: 12:40: #caller-expression(p): p is one of named's parameters, whose argument's text it is
 // error: 15:17: #caller-location is a parameter's default: the place of a call that leaves it out
-// error: 16:17: #places: no such directive (#file, #line, #column, #func, #location; a parameter's default: #caller-location, #caller-expression(param))
+// error: 16:17: #places: no such directive (#file, #line, #column, #func, #location, #embed(path); a parameter's default: #caller-location, #caller-expression(param))
 
 first: func(word: string, count: s32) -> string { word }
 

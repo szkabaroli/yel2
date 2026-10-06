@@ -1,0 +1,20 @@
+// The examples, as the shell's hosts take them: each a WASI 0.2 component (yel-out/<name>.wasm,
+// exporting its views' interfaces, importing yel:ui/dom from wit), its elements yel:widgets'
+// (widgets: generated from the host's tables by meshx-shell's scripts/generate-yel-widgets.mjs).
+//
+//   yelc build                      every example (WASI_SDK, or -Dwasi-sdk=<dir>)
+//   yelc build todo                 one
+//   yelc build --help               the steps and options
+
+from "std:build" include build;
+
+main: async func() {
+    wait build.run({ b ->
+        for name in ["hello", "todo", "settings", "search",] {
+            let example = b.component(name, name);
+            example.wit("wit");
+            example.include(".");
+            b.step(name, "Build the {name} example", [b.install(example),]);
+        }
+    });
+}

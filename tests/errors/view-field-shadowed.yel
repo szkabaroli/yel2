@@ -1,4 +1,4 @@
-// error: 9:28: count is a field of the view: name the local otherwise
+// error: 9:32: count is a field of the view: name the local otherwise
 // error: 11:13: item is a field of the view: name the for's variable otherwise
 module m {
     view Shadow {
@@ -6,7 +6,7 @@ module m {
         item: string = "";
         VStack {
             Button {
-                on click { let count = 2; }
+                on.click: { -> let count = 2; }
             }
             for item in ["a",] key(item) { "{item}" }
         }

@@ -48,6 +48,32 @@ module escape-tests {
         expect.equal(lowered.facts.param-writes[again.name], [true,]);
     }
 
+    // what observe counts as written: not an @(observable) resource's field, written through a
+    // list's item (it tells of its own fields), but a plain resource's, and a list of lists' items
+    @(test) changes-stop-at-observable-items: async func() {
+        let (lowered, rename) = wait summary(c"
+            @(observable) resource sheet { name: string, }
+            resource plain { name: string, }
+            rename: func(sheets: list<sheet>) -> list<string> { sheets.map({ one -> one.name = \"x\"; one.name }) }
+            rename-plain: func(items: list<plain>) -> list<string> { items.map({ one -> one.name = \"x\"; one.name }) }
+            grow: func(rows: list<list<s64>>) { for row in rows { row.push(1); } }
+
+            main: func() {
+                let sheets: list<sheet> = [{ name: \"a\", },];
+                let named = rename(sheets);
+                let items: list<plain> = [{ name: \"a\", },];
+                let others = rename-plain(items);
+                grow([[1,],]);
+            }
+        ", "rename");
+        expect.equal(lowered.facts.param-writes[rename.name], [true,]);
+        expect.equal(lowered.facts.param-changes[rename.name], [false,]);
+        let plain = lowering.func-named(lowered, "rename-plain");
+        expect.equal(lowered.facts.param-changes[plain.name], [true,]);
+        let grow = lowering.func-named(lowered, "grow");
+        expect.equal(lowered.facts.param-changes[grow.name], [true,]);
+    }
+
     // a parameter pushed into another is kept in it, not let escape
     @(test) kept-in-another-parameter: async func() {
         let (lowered, keep) = wait summary(c"

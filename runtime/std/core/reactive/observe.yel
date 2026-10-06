@@ -100,6 +100,24 @@ module observe {
         reading = outer;
     }
 
+    // what read gives, none of what it reads kept (a view's untracked(x), and what a derived value
+    // checks of itself)
+    peek: func<T>(read: func() -> T) -> T {
+        let outer = reading;
+        reading = none;
+        let value = read();
+        reading = outer;
+        value
+    }
+
+    // a watch held (none: none is) let go
+    stop-held: func(held: option<Watch>) {
+        match held {
+            some(w) => stop(w),
+            none => {}
+        }
+    }
+
     // whether a run is being tracked
     tracking: func() -> bool {
         match reading {

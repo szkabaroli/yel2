@@ -1,0 +1,475 @@
+// yelc, built by itself, and tested. bootstrap.sh builds the seed (build/yelc0, from seed/yelc.c)
+// and the runtime this needs (build/yel.o, build/libuv.a), then runs this:
+//
+//   stage 1  the seed compiles the compiler (compiler/), cc builds that   -> yelc1
+//   stage 2  yelc1 compiles it                                             -> yelc2
+//   stage 3  yelc2 compiles it                                             -> yelc3.c
+//
+// yelc2.c must equal yelc3.c: the compiler, built by itself, reproduces itself (a fixed point).
+// yelc1 may differ from yelc2: it was built by the seed's code generator, not by the new one. Each
+// stage is made once for what goes into it (the compiler's sources, the prelude and std, the
+// compiler compiling it), so a build with none of them changed makes nothing.
+//
+//   yelc build -p build              the stages, installed in build/ (yelc1, yelc2, the C of each
+//                                    and yelc3.c), and the fixed point checked
+//   yelc build -p build test         and every test, by build/yelc2 (yelc build --help: each
+//                                    suite's own step)
+//   yelc build -p build update-seed  and, the tests passed, yelc3.c the seed
+//   -Dseed=<yelc>                    what compiles stage 1 (build/yelc0)
+//   -Dc-optimize=-O2                 how cc builds (-O0, for development; flags apart by spaces)
+//   -Dfull                           the compiler compiling itself under GC stress too, natively
+//                                    and (WASI_SDK) as wasm: -Dgc-stress=<n> (5000),
+//                                    -Dgc-stress-wasm=<n> (20000) allocations between collections
+//   -Dwasi-sdk=<dir>                 the component tests (WASI_SDK by default; wasmtime runs them)
+
+from "std:build" include build;
+
+main: async func() {
+    wait build.run({ b ->
+        let seed = b.option("seed", "What compiles stage 1", "build/yelc0");
+        // (what yelc --version says, embedded in each stage as compiler/version.txt: the same in
+        // stages 2 and 3, so the fixed point holds; a release's YEL_VERSION)
+        let version = b.option("version", "What yelc --version says", build.variable("YEL_VERSION", "dev"));
+        let writing = b.write-files().named("version");
+        let version-file = writing.add-file("version.txt", version + "\n");
+        let optimize = b.option("c-optimize", "How cc builds: -O0 (development), -O2", "-O0");
+        let flags = optimize.split(" ");
+
+        let c1 = compiled(b, 1, seed, version-file);
+        let yelc1 = linked(b, 1, c1, flags);
+        let c2 = compiled(b, 2, yelc1, version-file);
+        let yelc2 = linked(b, 2, c2, flags);
+        let c3 = compiled(b, 3, yelc2, version-file);
+
+        // (the fixed point after the installs, so build/ has stages 2 and 3 to compare where they
+        // differ)
+        let check = b.command([
+            "sh",
+            "-c",
+            "cmp -s \"$0\" \"$1\" && echo 'fixed point: yelc2.c == yelc3.c' || \{ echo \"no fixed point: diff $0 $1\"; exit 1; \}",
+        ]).named("fixed point");
+        check.add-argument(c2);
+        check.add-argument(c3);
+        for installing in [
+            b.install-executable(yelc1, "yelc1"),
+            b.install-executable(yelc2, "yelc2"),
+            b.install-file(c1, "yelc1.c"),
+            b.install-file(c2, "yelc2.c"),
+            b.install-file(c3, "yelc3.c"),
+        ] {
+            check.depend(installing);
+        }
+        b.installed.depend(check);
+        b.step("fixed-point", "Check that stage 2's C is stage 3's", [check,]);
+
+        tests(b, flags, c3);
+    });
+}
+
+// stage n's C: the compiler compiled by yelc, version (a file the build writes) embedded as its
+// version.txt (through sh: --embed takes name=path, one argument, and the path is the build's)
+compiled: func(b: build.builder, n: s64, yelc: build.place, version: build.generated) -> build.generated {
+    let compiling = b.command(["sh", "-c", "exec \"$0\" compiler \"$2\" --embed \"version.txt=$1\"", yelc,]).named("stage {n}");
+    compiling.add-argument(version);
+    let c = compiling.output-file("yelc{n}.c");
+    for read in ["compiler", "runtime/prelude.yel", "runtime/std",] { compiling.input(read); }
+    // (the seed by what it holds: one a stage makes is keyed by that stage)
+    match yelc {
+        let given: string => compiling.input(given),
+        _ => {}
+    }
+    c
+}
+
+// stage n's compiler: its C built by cc, with the runtime
+linked: func(b: build.builder, n: s64, c: build.generated, flags: list<string>) -> build.generated {
+    let linking = b.command([b.cc,]).named("stage {n}: cc");
+    for one in flags { linking.add-argument(one); }
+    for one in ["-Iruntime", "-Iruntime/libuv/include", "-o",] { linking.add-argument(one); }
+    let yelc = linking.output-file("yelc{n}");
+    linking.add-argument(c);
+    for one in ["build/yel.o", "build/libuv.a",] {
+        linking.add-argument(one);
+        linking.input(one);
+    }
+    for one in b.system-libraries() { linking.add-argument(one); }
+    linking.input("runtime/yel.h");
+    yelc
+}
+
+// ---- the tests: each by build/yelc2 (installed, so it finds its runtime and std), once the
+// stages and the fixed point are
+
+// what makes them, and the steps they go in
+resource Tests {
+    b: build.builder,
+    yelc: string,
+    flags: list<string>,
+    all: build.step,
+    // the runs of tests/host (natively, as a component, as a bitcode one): each after the one
+    // before, since they share their files (build/fs-test-*)
+    hosts: list<build.step>,
+}
+
+tests: func(b: build.builder, flags: list<string>, c3: build.generated) {
+    let full = b.option("full", "The compiler compiling itself under GC stress too", "false") == "true";
+    let stress = b.option("gc-stress", "Allocations between collections, the compiler compiling itself (-Dfull)", "5000");
+    let stress-wasm = b.option("gc-stress-wasm", "Allocations between collections, the compiler as wasm compiling itself (-Dfull)", "20000");
+    let sdk = b.option("wasi-sdk", "The WASI SDK's directory, for the component tests", build.variable("WASI_SDK", ""));
+    let all = b.step("test", "Every test", [b.installed,]);
+    let t: Tests = { b: b, yelc: "build/yelc2", flags: flags, all: all, hosts: [], };
+
+    programs(t);
+    packages(t);
+    errors(t);
+    formats(t);
+
+    if full {
+        // (the compiler compiling itself with a collection every n allocations makes the same C)
+        let compiling = after(t, b.command([t.yelc, "compiler",]).named("self-compile (YEL_GC_STRESS={stress})"));
+        compiling.set-environment("YEL_GC_STRESS", stress);
+        let c = compiling.output-file("yelc3.stress.c");
+        compiling.input(t.yelc);
+        suite(t, "test-self-compile", "The compiler compiling itself under GC stress", [same(t, "self-compile", c3, c),]);
+    }
+
+    if sdk != "" { components(t, sdk, if full { stress-wasm } else { "" }, c3); }
+    match b.find-program("clang") {
+        some(_) => bitcode(t, sdk),
+        none => {}
+    }
+    let seeding = b.command([
+        "sh",
+        "-c",
+        "if cmp -s build/yelc3.c seed/yelc.c; then echo 'seed: unchanged'; else cp build/yelc3.c seed/yelc.c && rm -rf seed/runtime && echo 'seed: updated (seed/yelc.c)'; fi",
+    ]).named("update seed");
+    // (the runtime an older seed needed goes with it)
+    seeding.depend(all);
+
+    b.step("update-seed", "Every test, then yelc3.c the seed", [seeding,]);
+}
+
+// tests/*.yel and the packages there with an expected output (tests/<name>.out; a directory
+// without one is a package the tests include), each run, and again with a collection before every
+// allocation (a root the C does not keep shows there); the runner of tests/testing's tests (yelc
+// test: three that fail, a snapshot that differs among them); tests/build-system (yelc build from
+// a cold cache); tests/host natively (the host's interfaces)
+programs: func(t: Tests) {
+    let b = t.b;
+    let names = b.entries("tests");
+    let steps: list<build.step> = [];
+    for entry in names {
+        let name = if entry.ends-with("/") { entry.substring(0, entry.len() - 1) } else if entry.ends-with(".yel") { entry.substring(0, entry.len() - 4) } else { "" };
+        // (a component of exports only runs under a host: components)
+        if name == "" || name == "errors" || name == "component" || !names.contains("{name}.out") { continue; }
+        let program = artifact(t, b.executable(name, if entry.ends-with("/") { "tests/" + name } else { "tests/" + entry }));
+        for stressed in [false, true,] {
+            let running = b.run-artifact(program).named(if stressed { "test {name} (YEL_GC_STRESS=1)" } else { "test {name}" });
+            if stressed { running.set-environment("YEL_GC_STRESS", "1"); }
+            running.expect-output("tests/{name}.out");
+            steps.push(running);
+        }
+    }
+    let testing = b.run-artifact(artifact(t, b.test("testing", "tests/testing"))).named("testing (yelc test)");
+    testing.expect-output("tests/testing.runner.out");
+    steps.push(testing);
+    let building = after(t, b.command([
+        "sh",
+        "-c",
+        "cd tests/build-system && rm -rf .yel-cache yel-out && ../../$0 build run && ../../$0 build test && ../../$0 build check",
+        t.yelc,
+    ]).named("build system (yelc build)"));
+    building.expect-output("tests/build-system/expected.txt");
+    building.expect-exit(0);
+    steps.push(building);
+    steps.push(sharing(t, b.run-artifact(artifact(t, b.test("host", "tests/host"))).named("host")));
+    suite(t, "test-programs", "The test programs, the test runner, yelc build and the host", steps);
+}
+
+// std's own tests, beside it (a package's *.test.yel: core's in its folders) and the compiler's
+// (compiler/*.test.yel), each yelc test's runner run; std's again under YEL_GC_STRESS=1
+packages: func(t: Tests) {
+    let b = t.b;
+    let steps: list<build.step> = [];
+    for entry in b.entries("runtime/std") {
+        if !entry.ends-with("/") { continue; }
+        let package = "runtime/std/" + entry.substring(0, entry.len() - 1);
+        let tested = b.entries(package).any({ one -> one.ends-with(".test.yel") || one.ends-with("/") && b.entries(package + "/" + one).any({ inner -> inner.ends-with(".test.yel") }) });
+        if !tested { continue; }
+        let name = "std-" + entry.substring(0, entry.len() - 1);
+        let runner = artifact(t, b.test(name, package));
+        for stressed in [false, true,] {
+            let running = b.run-artifact(runner).named(if stressed { "{name} (YEL_GC_STRESS=1)" } else { name });
+            if stressed { running.set-environment("YEL_GC_STRESS", "1"); }
+            steps.push(running);
+        }
+    }
+    steps.push(b.run-artifact(artifact(t, b.test("compiler", "compiler"))).named("compiler"));
+    suite(t, "test-packages", "std's tests and the compiler's", steps);
+}
+
+// tests/errors/*.yel must not compile: yelc reports each error their first lines name, and no
+// others (tools/errors checks one)
+errors: func(t: Tests) {
+    let b = t.b;
+    let checker = b.executable("errors", "tools/errors");
+    let steps: list<build.step> = [];
+    for entry in b.entries("tests/errors") {
+        if !entry.ends-with(".yel") { continue; }
+        let test = "tests/errors/" + entry;
+        let checking = after(t, b.run-artifact(checker).named("errors {entry}"));
+        checking.add-argument(t.yelc);
+        checking.add-argument(test);
+        let _ = checking.output-dir("out");
+        checking.input(test);
+        checking.input(t.yelc);
+        steps.push(checking);
+    }
+    suite(t, "test-errors", "Programs that must not compile, and what yelc tells", steps);
+}
+
+// tests/fmt/*.yel: yelc --fmt lays each out as tests/fmt/<name>.out has it, and lays that out
+// again as it is
+formats: func(t: Tests) {
+    let b = t.b;
+    let steps: list<build.step> = [];
+    for entry in b.entries("tests/fmt") {
+        if !entry.ends-with(".yel") { continue; }
+        let test = "tests/fmt/" + entry;
+        let expected = test.substring(0, test.len() - 4) + ".out";
+        let checking = after(t, b.command([
+            "sh",
+            "-c",
+            "cp \"$1\" \"$0/a.yel\" && \"$3\" --fmt \"$0/a.yel\" > /dev/null || exit 1\ncmp -s \"$2\" \"$0/a.yel\" || \{ echo \"diff $2 $0/a.yel\"; exit 1; \}\ncp \"$0/a.yel\" \"$0/b.yel\" && \"$3\" --fmt \"$0/b.yel\" > /dev/null || exit 1\ncmp -s \"$0/a.yel\" \"$0/b.yel\" || \{ echo \"formatted again it changes: diff $0/a.yel $0/b.yel\"; exit 1; \}",
+        ]).named("fmt {entry}"));
+        let _ = checking.output-dir("out");
+        for one in [test, expected, t.yelc,] {
+            checking.add-argument(one);
+            checking.input(one);
+        }
+        steps.push(checking);
+    }
+    suite(t, "test-fmt", "yelc --fmt's layout", steps);
+}
+
+// the WASI 0.3 component tests (wasmtime runs them; wac plugs one into another): streams from the
+// host, lists, resources, streams and futures across WIT, a UI component and its host, exports
+// called by the host, tests/host and yelc test's runner as components, the view examples (yelc
+// build, as the shell's hosts take them); stress (-Dfull: its -Dgc-stress-wasm): the compiler as a
+// component compiling itself under GC stress
+components: func(t: Tests, sdk: string, stress: string, c3: build.generated) {
+    let b = t.b;
+    let clang = sdk + "/bin/clang";
+    let runtime-compiling = b.command([clang, "--target=wasm32-wasip3",]).named("runtime (wasm)");
+    for one in t.flags { runtime-compiling.add-argument(one); }
+    for one in ["-Iruntime", "-c", "-o",] { runtime-compiling.add-argument(one); }
+    let runtime = runtime-compiling.output-file("yel-wasm.o");
+    runtime-compiling.add-argument("runtime/yel.c");
+    for one in ["runtime/yel.c", "runtime/yel.h", "runtime/async.h", "runtime/async-wasi.h", "runtime/wasi-native.h",] { runtime-compiling.input(one); }
+    let steps: list<build.step> = [];
+
+    // stdin to stdout as streams; a stream from the host read in part (its end let go after its
+    // last use, else stdin's future never comes)
+    let cat = component(t, clang, runtime, "cat", "tests/cat.yel", [], false);
+    let echoing = shell(t, "stdin to stdout (component)", "perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y \"$0\" < tests/cat.in", [cat.0,]);
+    echoing.expect-output("tests/cat.component.out");
+    steps.push(echoing);
+    let dropping = component(t, clang, runtime, "stdin-drop", "tests/stdin-drop.yel", [], false);
+    let draining = shell(t, "host ends let go (component)", "head -c 2000000 /dev/zero | perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y \"$0\"", [dropping.0,]);
+    draining.expect-output("tests/stdin-drop.component.out");
+    steps.push(draining);
+
+    match b.find-program("wac") {
+        some(_) => {
+            // (each a caller's imports plugged into an api's exports)
+            for pair in [("fixed-lists", "fixed-api", "fixed-caller"), ("resources-exported", "res-api", "res-caller"), ("streams", "stream-api", "stream-caller"),] {
+                let (name, api, caller) = pair;
+                let exporting = component(t, clang, runtime, api, "tests/" + api, [], true);
+                let calling = component(t, clang, runtime, caller, "tests/" + caller, [exporting.1,], false);
+                let plugged = plug(t, name, calling.0, exporting.0);
+                let wasmtime = if name == "fixed-lists" { "-W component-model-fixed-length-lists=y " } else { "" };
+                let running = shell(t, "{name} (components)", "perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y {wasmtime}\"$0\"", [plugged,]);
+                running.expect-output("tests/{name}.component.out");
+                steps.push(running);
+            }
+            // a UI component lowered by hand as templates will be, its yel:ui/dom given by a
+            // stand-in host (each call printed) and driven as the shell would: the wire, call by call
+            let dom = component(t, clang, runtime, "ui-dom", "tests/ui-dom", [], true);
+            let counter = component(t, clang, runtime, "ui-counter", "tests/ui-counter", ["tests/ui-wit",], true);
+            let driver = component(t, clang, runtime, "ui-driver", "tests/ui-driver", [counter.1, "tests/ui-wit",], false);
+            let hosted = plug(t, "ui-counter-hosted", counter.0, dom.0);
+            let ui = plug(t, "ui", driver.0, hosted);
+            let running = shell(t, "ui component (components)", "perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y \"$0\" 2>&1", [ui,]);
+            running.expect-output("tests/ui.component.out");
+            steps.push(running);
+        }
+        none => {}
+    }
+
+    // exports called by the host, each call's result as tests/component.calls.out has it; a
+    // private func (@(private)) the component's own, not in its WIT
+    let exporting = component(t, clang, runtime, "component", "tests/component", [], true);
+    let calling = shell(t, "component (exports)", "while read -r call; do perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y --invoke \"$call\" \"$0\"; done < tests/component.calls", [exporting.0,]);
+    calling.expect-output("tests/component.calls.out");
+    steps.push(calling);
+    steps.push(shell(t, "component (a private func not exported)", "! grep -rq tally-step \"$0\"", [exporting.1,]));
+
+    // tests/host as a component (the network and name lookups granted; after the native run: they
+    // share their files), and yelc test's runner of tests/testing as one; both collecting at every
+    // turn's end (YEL_GC_STRESS=1: a reactor keeps no frames, its turns' ends its only collections)
+    let host = sharing(t, after(t, b.command(["tools/test-component.sh", "tests/host",]).named("host (component)")));
+    host.set-environment("WASMTIME_FLAGS", "--env YEL_GC_STRESS=1 -S inherit-network=y -S allow-ip-name-lookup=y");
+    let testing = after(t, b.command(["tools/test-component.sh", "tests/testing",]).named("testing (yelc test, component)"));
+    testing.set-environment("WASMTIME_FLAGS", "--env YEL_GC_STRESS=1");
+    testing.expect-output("tests/testing.runner.out");
+    for running in [host, testing,] {
+        running.set-environment("YELC", t.yelc);
+        running.set-environment("WASI_SDK", sdk);
+        steps.push(running);
+    }
+
+    // the view examples (examples/build.yel) built by yelc build, each one's WIT the resource a
+    // view lowers to, its dispatch given what the event carries
+    let examples = shell(t, "view examples (yelc build)", "cd examples && rm -rf .yel-cache yel-out && ../$0 build -Dwasi-sdk=$1 > /dev/null || exit 1\nfor name in hello todo settings search; do\n\twit=$(ls -d .yel-cache/o/*/\"$name-wit\" 2>/dev/null | head -1)\n\t[ -f \"yel-out/$name.wasm\" ] && grep -q 'resource app' \"$wit/world.wit\" && grep -q 'dispatch: func(handler-id: u32, payload: event-payload);' \"$wit/world.wit\" || \{ echo \"view example $name\"; exit 1; \}\ndone", [t.yelc, sdk,]);
+    steps.push(examples);
+
+    if stress != "" {
+        // the compiler as a component (its files through wasi:filesystem) compiling itself under
+        // stress (an 8 MiB stack, as native has)
+        let compiler = component(t, clang, runtime, "yelc", "compiler", [], false);
+        let compiling = after(t, b.command([
+            "wasmtime",
+            "run",
+            "-W",
+            "component-model-async=y",
+            "-S",
+            "p3=y",
+            "--dir",
+            ".",
+            "--env",
+            "YEL_GC_STRESS={stress}",
+            compiler.0,
+            "compiler",
+        ]).named("wasm self-compile (YEL_GC_STRESS={stress})"));
+        let c = compiling.output-file("yelc3.wasm.c");
+        compiling.add-argument("runtime/prelude.yel");
+        for one in ["compiler", "runtime/prelude.yel", "runtime/std",] { compiling.input(one); }
+        steps.push(same(t, "wasm self-compile", c3, c));
+    }
+    suite(t, "test-components", "The WASI 0.3 component tests (wasmtime)", steps);
+}
+
+// the bitcode backend (compiler/llvm.yel) against the C one (tools/bitcode-test.sh, in parts): the
+// runtime built once, then each tests/bitcode/*.yel built both ways and doing the same (natively at
+// -O0 and -O2, under GC stress, with debug info; as wasm with WASI_SDK; as x86-64 under Rosetta), a
+// step each, made again only where what goes into it changed; with WASI_SDK the component tests
+// built as bitcode
+bitcode: func(t: Tests, sdk: string) {
+    let b = t.b;
+    let runtime-building = after(t, b.command(["sh", "tools/bitcode-test.sh", "--runtime-only", "--out",]).named("bitcode runtime"));
+    let runtime = runtime-building.output-dir("runtime");
+    for one in b.entries("runtime") {
+        if one.ends-with(".c") || one.ends-with(".h") { runtime-building.input("runtime/" + one); }
+    }
+    let steps: list<build.step> = [runtime-building,];
+    let names = b.entries("tests/bitcode");
+    for entry in names {
+        if !entry.ends-with(".yel") { continue; }
+        let name = entry.substring(0, entry.len() - 4);
+        let testing = after(t, b.command(["sh", "tools/bitcode-test.sh", "--runtime", runtime, "--out",]).named("bitcode {name}"));
+        let _ = testing.output-dir("out");
+        testing.add-argument("tests/bitcode/" + entry);
+        // (its own C functions, its expected output, where it has them)
+        for own in [entry, "{name}.c", "{name}.out",] {
+            if names.contains(own) { testing.input("tests/bitcode/" + own); }
+        }
+        for one in [t.yelc, "build/libuv.a", "tools/bitcode-test.sh",] { testing.input(one); }
+        steps.push(testing);
+    }
+    if sdk != "" {
+        steps.push(sharing(t, after(t, b.command(["sh", "tools/bitcode-test.sh", "--components", "--runtime", runtime,]).named("bitcode components"))));
+    }
+    for one in steps {
+        one.set-environment("YELC", t.yelc);
+        if sdk != "" { one.set-environment("WASI_SDK", sdk); }
+    }
+    suite(t, "test-bitcode", "The bitcode backend against the C one", steps);
+}
+
+// ---- making them
+
+// a run of tests/host: after the one before (they share their files)
+sharing: func(t: Tests, s: build.step) -> build.step {
+    match t.hosts.get(t.hosts.len() - 1) {
+        some(before) => s.depend(before),
+        none => {}
+    }
+    t.hosts.push(s);
+    s
+}
+
+// an artifact of the tests: compiled by build/yelc2 (once it is made) as cc builds the stages
+artifact: func(t: Tests, made: build.artifact) -> build.artifact {
+    made.compiler(t.yelc);
+    made.c-flags(t.flags);
+    made.compile.depend(t.b.installed);
+    made
+}
+
+// a step of the tests: run once build/yelc2 is made
+after: func(t: Tests, s: build.step) -> build.step {
+    s.depend(t.b.installed);
+    s
+}
+
+// a step running script (sh: $0 and on its arguments)
+shell: func(t: Tests, name: string, script: string, arguments: list<build.place>) -> build.step {
+    let running = after(t, t.b.command(["sh", "-c", script,]).named(name));
+    for one in arguments { running.add-argument(one); }
+    running
+}
+
+// a step checking that two files a step made are the same
+same: func(t: Tests, name: string, want: build.generated, got: build.generated) -> build.step {
+    shell(t, name, "cmp -s \"$0\" \"$1\" || \{ echo \"diff $0 $1\"; exit 1; \}", [want, got,])
+}
+
+// a suite's own step (yelc build <name>), and the tests' (yelc build test) running it
+suite: func(t: Tests, name: string, description: string, steps: list<build.step>) {
+    let made = t.b.step(name, description, steps);
+    t.all.depend(made);
+}
+
+// a WASI 0.3 component of the package at root, by build/yelc2 and the WASI SDK's clang (WIT
+// included from includes; reactor: exports only, no main): the component, and its WIT
+component: func(t: Tests, clang: string, runtime: build.generated, name: string, root: string, includes: list<build.place>, reactor: bool) -> tuple<build.generated, build.generated> {
+    let b = t.b;
+    let compiling = after(t, b.command([t.yelc, root,]).named("component {name}"));
+    let c = compiling.output-file("{name}.c");
+    for one in includes {
+        compiling.add-argument("-I");
+        compiling.add-argument(one);
+        compiling.input(one);
+    }
+    compiling.add-argument("--wit");
+    let wit = compiling.output-dir("{name}-wit");
+    for one in [root, "runtime/prelude.yel", "runtime/std", t.yelc,] { compiling.input(one); }
+    let linking = b.command([clang, "--target=wasm32-wasip3",]).named("component {name}: clang");
+    for one in t.flags { linking.add-argument(one); }
+    for one in ["-Iruntime", "-Wl,-z,stack-size=8388608",] { linking.add-argument(one); }
+    if reactor { linking.add-argument("-mexec-model=reactor"); }
+    for one in ["-Xlinker", "--component-type", "-Xlinker",] { linking.add-argument(one); }
+    linking.add-argument(wit);
+    linking.add-argument("-o");
+    let wasm = linking.output-file("{name}.wasm");
+    linking.add-argument(c);
+    linking.add-argument(runtime);
+    linking.add-argument("-lm");
+    (wasm, wit)
+}
+
+// caller's imports plugged into api's exports (wac): one component
+plug: func(t: Tests, name: string, caller: build.generated, api: build.generated) -> build.generated {
+    let plugging = t.b.command(["wac", "plug", caller, "--plug", api, "-o",]).named("plug {name}");
+    plugging.output-file("{name}.wasm")
+}

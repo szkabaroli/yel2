@@ -33,7 +33,7 @@ const KEYWORDS = ["if", "else", "match", "for", "in", "return", "break", "contin
 const CONTEXTUAL = [
   "start", "wait", "yield", "module", "view", "package", "from", "include", "extern", "async",
   "loop", "distinct", "const", "type", "readonly", "never", "resource", "record", "variant",
-  "enum", "flags", "on", "key", "style",
+  "enum", "flags", "on", "key", "style", "widget",
 ];
 
 /** items separated by commas, a comma after the last allowed */
@@ -69,6 +69,11 @@ module.exports = grammar({
     [$.negative_number, $._literal],
     [$.field_type, $.closure_parameter],
     [$._name, $.yield_expression],
+    // style.name: value or on.name: value (an attribute) or style.View { (another view's tag,
+    // module style or on)
+    [$._name, $.view_attribute],
+    // on.name: T (a callback field) or on (a field's name)
+    [$._name, $.view_field],
     [$._type_member, $._pattern],
     [$._name, $.start_expression],
     [$._name, $.wait_expression],
@@ -98,6 +103,7 @@ module.exports = grammar({
         $.global_declaration,
         $.type_alias,
         $.view_declaration,
+        $.widget_declaration,
       ),
 
     comment: (_) => token(seq("//", /[^\n]*/)),
@@ -122,8 +128,17 @@ module.exports = grammar({
 
     attribute_arguments: ($) => seq("(", commaSep($.attribute_argument), ")"),
 
+    // name, name = value, or name(names): container(Tab, Row)
     attribute_argument: ($) =>
-      seq(field("name", $._name), optional(seq("=", field("value", choice($.attribute_string, $.number, $.boolean, $._name))))),
+      seq(
+        field("name", $._name),
+        optional(
+          choice(
+            seq("=", field("value", choice($.attribute_string, $.number, $.boolean, $._name))),
+            seq("(", commaSep1(field("part", $._name)), ")"),
+          ),
+        ),
+      ),
 
     // an attribute's string: C, as written (its braces no interpolation's)
     attribute_string: (_) => token(seq('"', repeat(choice(/[^"\\]/, /\\./)), '"')),
@@ -243,26 +258,52 @@ module.exports = grammar({
 
     view_body: ($) => seq("{", repeat(choice($.view_field, $.view_element)), "}"),
 
-    // @(private) name: T = value; (a field: a prop, its value to start with)
+    // @(container) widget Name: Base, … { attributes; events }: an element the host draws (its
+    // fields: name: T; and on.name: func(T); its bases' too)
+    widget_declaration: ($) =>
+      seq(
+        repeat($.attribute),
+        "widget",
+        field("name", $._name),
+        optional(seq(":", commaSep1(field("base", $._name)))),
+        "{",
+        repeat($.view_field),
+        "}",
+      ),
+
+    // @(private) name: T = value; (a field: a prop, its value to start with); let name: T = value;
+    // (a value made of what it reads; @(once) let: made once)
     view_field: ($) =>
       seq(
         repeat($.attribute),
+        optional(field("derived", "let")),
+        // (on.name: a callback)
+        optional(seq(field("callback", "on"), ".")),
         field("name", $._name),
         ":",
         field("type", $._type),
-        "=",
-        field("value", $._expression),
+        // (a callback, on.name: func(T);, may have none)
+        optional(seq("=", field("value", $._expression))),
         ";",
       ),
 
     // Tag { items }
-    view_element: ($) => seq(field("tag", $._view_tag), "{", repeat($._view_item), "}"),
+    // Tag { items }: the host's element; module.View { props }: another view
+    view_element: ($) =>
+      seq(
+        optional(seq(field("module", $._name), ".")),
+        field("tag", $._view_tag),
+        "{",
+        repeat($._view_item),
+        "}",
+      ),
 
     // an element's tag (VStack, Text: a name, as a leaf of its own)
     _view_tag: ($) =>
       choice(alias($.identifier, $.view_tag), alias(choice(...CONTEXTUAL), $.view_tag)),
 
-    // text, an element, an attribute, a handler, if, for (a comma after one allowed)
+    // text, an element, an attribute (a handler is one: on.click: { -> … }), if, for, #children
+    // (where a view puts what it is given; a comma after one allowed)
     _view_item: ($) =>
       seq(
         choice(
@@ -270,19 +311,23 @@ module.exports = grammar({
           $.multiline_string,
           $.view_element,
           $.view_attribute,
-          $.view_handler,
           $.view_if,
           $.view_for,
+          $.directive,
         ),
         optional(","),
       ),
 
-    // name: value, style.name: value
+    // name: value, style.name: value (a style's name of one segment or more: style.pad.x),
+    // on.event: { params -> … }
     view_attribute: ($) =>
-      seq(optional(seq("style", ".")), field("name", $._name), ":", field("value", $._expression)),
-
-    // on event { statements }
-    view_handler: ($) => seq("on", field("event", $._name), field("body", $.block)),
+      seq(
+        optional(seq(field("namespace", choice("style", "on")), ".")),
+        field("name", $._name),
+        repeat(seq(".", field("name", $._name))),
+        ":",
+        field("value", $._expression),
+      ),
 
     // if cond { items } else { items }, else if ...
     view_if: ($) =>

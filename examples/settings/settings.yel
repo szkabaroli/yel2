@@ -1,0 +1,65 @@
+// Settings as a yel view: tabs (on.change: the tab a widget chose, its key as a value) picking
+// which panel shows (if, else if: a panel made when shown, let go when another is), switches each
+// setting a field (what a widget chose: "true" or "false"), and a summary that reads them all,
+// told again only when what it reads changes.
+
+package yel:settings@0.1.0;
+
+from "yel:ui" include dom;
+from "yel:widgets" include meshx;
+
+module app-component {
+    view App {
+        @(private) tab: string = "general";
+        @(private) notify: bool = true;
+        @(private) digest: bool = false;
+        @(private) compact: bool = false;
+
+        Card {
+            title: "Settings"
+            VStack {
+                style.gap: 150.0
+                Tabs {
+                    value: tab
+                    on.change: { key: string -> tab = key; }
+                    Tab { value: "general" "General" }
+                    Tab { value: "notifications" "Notifications" }
+                    Tab { value: "appearance" "Appearance" }
+                }
+                if tab == "general" {
+                    Text { role: "heading" aria-level: 3 "General" }
+                    Text {
+                        style.fg: "muted"
+                        "{summary(notify, digest, compact)}"
+                    }
+                } else if tab == "notifications" {
+                    Switch {
+                        checked: notify
+                        label: "Notify me of deployments"
+                        on.change: { value: string -> notify = value == "true"; }
+                    }
+                    if notify {
+                        Switch {
+                            checked: digest
+                            label: "Send a daily digest instead"
+                            on.change: { value: string -> digest = value == "true"; }
+                        }
+                    }
+                } else {
+                    Switch {
+                        checked: compact
+                        label: "Compact rows"
+                        on.change: { value: string -> compact = value == "true"; }
+                    }
+                }
+            }
+        }
+    }
+
+    // the settings, as a line
+    @(private) summary: func(notify: bool, digest: bool, compact: bool) -> string {
+        let told = if !notify { "no notifications" } else if digest { "a daily digest" } else { "each deployment told" };
+        let rows = if compact { "compact rows" } else { "roomy rows" };
+        "{told}, {rows}"
+    }
+}

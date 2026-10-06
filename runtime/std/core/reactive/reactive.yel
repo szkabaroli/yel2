@@ -9,9 +9,11 @@ module reactive {
     resource Owner { cleanups: list<func()>, }
 
     // an effect: its func (what it gives back runs before it runs again, and when it is let go),
-    // what it made under it (its own owner: let go before it runs again), what it read
+    // what it made under it (its own owner: let go before it runs again), what it read, and when
+    // it was made (an effect made in another's run is made after it: run after it in a flush)
     resource Effect {
         run: func() -> func(),
+        order: s64,
         cleanup: func(),
         children: Owner,
         watch: option<observe.Watch>,
@@ -22,9 +24,13 @@ module reactive {
     // the owner what is made now joins (none: no one lets it go); each task's own (@(context)): a
     // task started under an owner joins it, what it makes and its cleanups, even after it waits
     @(private, context) let owner: option<Owner>;
-    // what flush runs, in order; whether it is running
+    // what flush runs, in order: the effects queued, the outermost first (one an outer effect lets
+    // go as it runs again never runs), then the funcs scheduled; whether it is running; how many
+    // effects have been made
     @(private) let queue: list<func()>;
+    @(private) let queued: list<Effect>;
     @(private) let flushing: bool;
+    @(private) let made: s64;
 
     new-owner: func() -> Owner { { cleanups: [], } }
 
@@ -57,11 +63,26 @@ module reactive {
         }
     }
 
+    // a value kept current: read again each time what it reads changes, changed told the new
+    // value where it differs from the last (last: read's value now, what the caller made with it)
+    watch: func<T>(read: func() -> T, last: T, changed: func(T)) {
+        let _ = effect({ ->
+            let now = read();
+            if now != last {
+                changed(now);
+                last = now;
+            }
+            nothing
+        });
+    }
+
     // run now, and again (after a flush) each time what it read changes; what it gives back runs
     // before it runs again, and when its owner lets it go
     effect: func(run: func() -> func()) -> Effect {
+        made += 1;
         let e: Effect = {
             run: run,
+            order: made,
             cleanup: nothing,
             children: new-owner(),
             watch: none,
@@ -100,15 +121,20 @@ module reactive {
         flushing = true;
         let rounds = 0;
         loop {
+            let effects = queued;
             let now = queue;
-            if now.len() == 0 { break; }
+            if effects.len() == 0 && now.len() == 0 { break; }
             rounds += 1;
             if rounds > 100 {
                 queue = [];
+                queued = [];
                 flushing = false;
                 panic("effects changed what they read 100 times in one flush: an update loop");
             }
+            queued = [];
             queue = [];
+            effects.sort({ a, b -> a.order < b.order });
+            for e in effects { check(e); }
             for f in now { f(); }
         }
         flushing = false;
@@ -121,6 +147,14 @@ module reactive {
         run();
         flushing = outer;
         flush();
+    }
+
+    // a derived value (a view's let), once made: its getter makes it first
+    made-value: func<T>(held: option<T>) -> T {
+        match held {
+            some(value) => value,
+            none => panic("a view's let read before it was made"),
+        }
     }
 
     @(private) nothing: func() {}
@@ -138,7 +172,8 @@ module reactive {
     @(private) queue-effect: func(e: Effect) {
         if e.queued || !e.alive { return; }
         e.queued = true;
-        schedule({ -> check(e); });
+        let waiting = queued;
+        waiting.push(e);
     }
 
     // a queued effect: run again if what it read has changed (a derived value may have come out the

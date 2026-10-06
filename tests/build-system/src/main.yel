@@ -1,0 +1,8 @@
+from "app:greeting" include greeting;
+from "app:stamp" include stamp;
+
+main: func() {
+    print("{greeting.text()}\n");
+    print("{stamp.text()}\n");
+    print("{#embed("motd")}\n");
+}

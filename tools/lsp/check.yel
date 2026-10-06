@@ -7,9 +7,12 @@
 // first where that found errors (the IR's are not run then), else after the second. One check runs for a
 // change, whoever asks; the last one is let go before the next is made.
 //
-// A document's package: the core standard library's for one of its files (checked through a
-// program of nothing, which loads it), the document alone where its directory holds programs of
-// their own (more than one file with a main, as tests/), else its directory's.
+// A document's package: where yelc build built the project it is in, the artifact it is part of
+// (the nearest .yel-cache/check.txt: its package, and the directories it includes from), as a file
+// of an included package is only ever built; else the core standard library's for one of its
+// files (checked through a program of nothing, which loads it), the document alone where its
+// directory holds programs of their own (more than one file with a main, as tests/), else its
+// directory's.
 
 from "../../compiler" include analysis, diagnostics, packages;
 from "std:encoding/json" include json;
@@ -123,11 +126,46 @@ module check {
         state.checked.remove(input);
         let context = analysis.context(input, overlays);
         context.mode = "names";
-        let checked = wait analysis.check(context, state.prelude, []);
+        // (what its last check kept: only what changed since is checked again)
+        if !state.caches.has(input) { state.caches.set(input, analysis.new-cache()); }
+        context.cache = some(state.caches[input]);
+        let checked = wait analysis.check(context, state.prelude, state.searches.get(input).unwrap-or([]));
         state.checking.remove(input);
         state.checked.set(input, checked);
         state.checked-at.set(input, revision);
         checked
+    }
+
+    // the package a file is built in, by the nearest .yel-cache/check.txt yelc build wrote: the
+    // artifact whose package's directory holds it (the innermost), its include directories kept for
+    // its checks (none: no build there has one)
+    @(private) built-in: async func(state: Server, file: string) -> option<string> {
+        let dir = packages.dir-name(file);
+        loop {
+            match wait diagnostics.read-file(dir + "/.yel-cache/check.txt") {
+                ok(text) => {
+                    let found = "";
+                    let dirs: list<string> = [];
+                    for line in text.split("\n") {
+                        if line == "" { continue; }
+                        let parts = line.split("\t").map({ part -> if part.starts-with("/") { packages.clean-path(part) } else { packages.clean-path(dir + "/" + part) } });
+                        let root = parts[0];
+                        if file.starts-with(root + "/") && root.len() > found.len() {
+                            found = root;
+                            dirs = parts.slice(1, parts.len());
+                        }
+                    }
+                    if found == "" { return none; }
+                    state.searches.set(found, dirs);
+                    return some(found);
+                }
+                err(_) => {}
+            }
+            let up = packages.dir-name(dir);
+            if up == dir || up == "" || up == "." { return none; }
+            dir = up;
+        }
+        none
     }
 
     // each open document's text, by its path: what a check reads in place of the disk's
@@ -155,6 +193,11 @@ module check {
 
     @(private) package-of: async func(state: Server, file: string, overlays: map<string, string>) -> string {
         let dir = packages.dir-name(file);
+        // (a file of what yelc build builds: checked as the artifact it is in is built)
+        match wait built-in(state, file) {
+            some(root) => { return root; }
+            none => {}
+        }
         let prelude-dir = packages.dir-name(state.prelude);
         // a file of the standard library's core (in a folder of runtime/std/core): the core itself
         // checked (its test files too)

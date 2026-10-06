@@ -26,6 +26,14 @@ resource Gen {
     yields: list<option<Ty>>,
     // the generic func being written: its type params
     type-params: list<string>,
+    // for each func or closure being written (innermost last): whether it is async (a wait may be
+    // written in it: never in a closure)
+    asyncs: list<bool>,
+    // the keywords' words the func being written names a local with (%if: each once in it), and
+    // the words that start a declaration elsewhere (record, module) the program names a func with
+    // (each once)
+    escaped: list<string>,
+    worded: list<string>,
     // the lists a for is reading (not pushed to in its body: it would never end)
     frozen: list<string>,
 }
@@ -36,6 +44,34 @@ module gen {
         g.counter += 1;
         "{prefix}{g.counter}"
     }
+
+    // a local's (or a param's) name: a new one, or now and then a keyword's word written %name
+    // (%if: one the func being written has not named one with yet)
+    local-name: func(g: Gen, prefix: string) -> string {
+        let words = ["if", "else", "match", "for", "in", "return", "break", "continue", "let", "as", "is",].filter({ w -> !g.escaped.contains(w) });
+        if words.len() > 0 && dice.chance(g.dice, 6) {
+            let word = dice.pick(g.dice, words);
+            g.escaped.push(word);
+            return "%" + word;
+        }
+        fresh(g, prefix)
+    }
+
+    // a func's name: a new one, or now and then a word that starts a declaration elsewhere (what
+    // yel takes as a name where it does not start one: record: func(…), and a call of it)
+    func-name: func(g: Gen) -> string {
+        let words = ["record", "resource", "module", "type", "view", "variant", "enum", "flags", "const", "package", "from", "include",
+            "extern", "async", "start", "wait", "loop",].filter({ w -> !g.worded.contains(w) });
+        if words.len() > 0 && dice.chance(g.dice, 12) {
+            let word = dice.pick(g.dice, words);
+            g.worded.push(word);
+            return word;
+        }
+        fresh(g, "fn")
+    }
+
+    // whether what is being written is async (a wait may be written here)
+    in-async: func(g: Gen) -> bool { g.asyncs.len() > 0 && g.asyncs[g.asyncs.len() - 1] }
 
     // the { and } a program's text holds (in yel's strings, a { starts an interpolation)
     lb: func() -> string { from-byte(123) }

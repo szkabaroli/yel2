@@ -28,5 +28,38 @@ module dom {
     append-child: func(parent: u32, child: u32) { print("  append-child {parent} {child}\n"); }
     insert-before: func(parent: u32, node: u32, reference: u32) { print("  insert-before {parent} {node} {reference}\n"); }
     remove: func(node: u32) { print("  remove {node}\n"); }
-    add-event-listener: func(node: u32, event: string, handler-id: u32) { print("  add-event-listener {node} {event} {handler-id}\n"); }
+    add-event-listener: func(node: u32, event: string, handler-id: u32) {
+        print("  add-event-listener {node} {event} {handler-id}\n");
+        let events = listened-events;
+        events.push(event);
+        let ids = listened-ids;
+        ids.push(handler-id);
+    }
+
+    // the handler last added for event (what a host would dispatch to: the test's, by event, not
+    // by an id that depends on the order handlers are made in)
+    last-handler: func(event: string) -> u32 {
+        let found: u32 = 0;
+        let events = listened-events;
+        let ids = listened-ids;
+        for index in 0..events.len() {
+            if events[index] == event { found = ids[index]; }
+        }
+        found
+    }
+
+    // the handlers added for event, in order
+    handler-ids: func(event: string) -> list<u32> {
+        let found: list<u32> = [];
+        let events = listened-events;
+        let ids = listened-ids;
+        for index in 0..events.len() {
+            if events[index] == event { found.push(ids[index]); }
+        }
+        found
+    }
+
+    // each listener added: its event, its handler's id
+    @(private) let listened-events: list<string>;
+    @(private) let listened-ids: list<u32>;
 }

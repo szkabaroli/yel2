@@ -1,14 +1,56 @@
 // A view's event handlers by id (what a view's dispatch is given: the id its listener was added
 // with, from 1 as yel-solid's), and the flush after each: the effects what the handler changed
-// runs. A view (compiler/parser.yel's lowering) makes one for each `on event { … }`, and lets it go
-// with the owner it was made under (a branch shown no more, a row removed, the view unmounted).
+// runs. A view (compiler/lower.yel's lowering) makes one for each `on.event: { … }`
+// (owned-handler), let go with the owner it was made under (a branch shown no more, a row removed,
+// the view unmounted). Each is given what its event carries (event-payload: the host's, as each
+// yel guest's WIT declares it, in the view's interface).
+
+// a pointer event's modifiers: all a click carries (where and when stay the host's)
+record click-event { ctrl: bool, shift: bool, alt: bool, meta: bool, }
+
+// a gesture on a plot, in the plot's own units (never pixels)
+record selection { x: string, y0: s32, y1: s32, }
+
+// a key pressed or let go, and the modifiers then
+record key-event { key: string, code: string, ctrl: bool, shift: bool, alt: bool, meta: bool, repeat: bool, }
+
+// an input's value, changed
+record input-change { value: string, }
+
+// what was pasted, as text and as HTML
+record clipboard-data { text: option<string>, html: option<string>, }
+
+// a drag's cold part: kind enter, leave or drop; its media type (read from enter on), its data
+// and where it was dropped (on drop only)
+record drop-event { kind: string, media-type: option<string>, data: option<string>, index: option<u32>, }
+
+// a grid's cell, by its 0-based row and its column's 0-based index
+record grid-cell { row: u32, column: u32, }
+
+// a block of a grid's cells, 0-based and inclusive at both ends
+record grid-range { top: u32, left: u32, bottom: u32, right: u32, }
+
+// what an event carries: nothing; a click's modifiers; a plot's selection; a value a widget chose
+// (a tab, an option); a drop; a key; an input's value; a paste; a grid's cell; a block of its cells
+variant event-payload {
+    none,
+    click(click-event),
+    select(selection),
+    value(string),
+    drop(drop-event),
+    key(key-event),
+    input(input-change),
+    paste(clipboard-data),
+    cell(grid-cell),
+    range(grid-range),
+}
 
 module view-events {
-    @(private) let handlers: list<option<func()>>;
+    @(private) let handlers: list<option<func(event-payload)>>;
     @(private) let released: list<u32>;
 
     // run, under a new id
-    handler: func(run: func()) -> u32 {
+    handler: func(run: func(event-payload)) -> u32 {
         let spare = released;
         if spare.len() > 0 {
             let id = spare.pop();
@@ -21,6 +63,14 @@ module view-events {
         all.len() as u32
     }
 
+    // run, under a new id let go with the owner it is made under (a branch's, a row's, the
+    // view's)
+    owned-handler: func(run: func(event-payload)) -> u32 {
+        let id = handler(run);
+        reactive.on-cleanup({ -> release(id); });
+        id
+    }
+
     // an id let go: its handler gone, the id another's later
     release: func(id: u32) {
         let all = handlers;
@@ -29,12 +79,13 @@ module view-events {
         spare.push(id);
     }
 
-    // the handler of an id run (none: a stale id, from before it was let go), then what it changed
-    dispatch: func(id: u32) {
+    // the handler of an id run with what its event carries (none: a stale id, from before it was
+    // let go), then what it changed
+    dispatch: func(id: u32, payload: event-payload) {
         let all = handlers;
         if id >= 1 && (id as s64) <= all.len() {
             match all[(id - 1) as s64] {
-                some(run) => run(),
+                some(run) => run(payload),
                 none => {}
             }
         }

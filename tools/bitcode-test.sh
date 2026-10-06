@@ -9,39 +9,64 @@
 # by the verifier, run, and its line table read back (llvm-dwarfdump).
 #
 #   tools/bitcode-test.sh [tests...]     (YELC: the compiler, default build/yelc2)
+#
+# build.yel runs it in parts, each a step: --runtime-only (the runtime, built into --out), then a
+# test each (--runtime <that dir> --out <its own> <test>), and --components (the component tests
+# alone)
 set -u
 cd "$(dirname "$0")/.."
 YELC=${YELC:-build/yelc2}
 CFLAGS="-Iruntime -Iruntime/libuv/include"
 out=build/bitcode-test
+runtime=""
+mode=all
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--out) out=$2; shift 2 ;;
+	--runtime) runtime=$2; shift 2 ;;
+	--runtime-only) mode=runtime; shift ;;
+	--components) mode=components; shift ;;
+	*) break ;;
+	esac
+done
+[ $# -gt 0 ] && mode=named
 mkdir -p "$out"
+# the runtime's builds: in --runtime's directory (built before), else here
+built=1
+[ -n "$runtime" ] || { runtime=$out; built=0; }
 # what the runtime links with natively (libuv: its event loop)
 SYSTEM="build/libuv.a -lm -lpthread"
 if [ "$(uname -s)" = Linux ]; then SYSTEM="$SYSTEM -ldl -lrt"; fi
-LIBS="$out/yel.o $SYSTEM"
-tests=${*:-tests/bitcode/*.yel}
+LIBS="$runtime/yel.o $SYSTEM"
+tests=""
+if [ $mode = all ]; then tests=$(ls tests/bitcode/*.yel); elif [ $mode = named ]; then tests=$*; fi
 # LLVM's verifier, run on every module the compiler writes (clang, a release build, skips it on what
 # it is given: an invalid module may build, or crash it, instead of saying what is wrong)
-OPT=${OPT:-$(command -v opt || echo /opt/homebrew/opt/llvm/bin/opt)}
-[ -x "$OPT" ] || { echo "no LLVM opt (for its verifier): set OPT"; exit 1; }
-verify() { "$OPT" -passes=verify -disable-output "$1" 2>&1 | head -5; }
+# (LLVM_OPT, not OPT: bootstrap.sh's OPT is how cc optimizes, -O2, and a run inherits it)
+LLVM_OPT=${LLVM_OPT:-$(command -v opt || echo /opt/homebrew/opt/llvm/bin/opt)}
+[ -x "$LLVM_OPT" ] || { echo "no LLVM opt (for its verifier): set LLVM_OPT"; exit 1; }
+verify() { "$LLVM_OPT" -passes=verify -disable-output "$1" 2>&1 | head -5; }
 # llvm-dwarfdump (beside opt): a -g build's line table read back
-DWARFDUMP=${DWARFDUMP:-$(dirname "$OPT")/llvm-dwarfdump}
+DWARFDUMP=${DWARFDUMP:-$(dirname "$LLVM_OPT")/llvm-dwarfdump}
 failed=0
+# x86-64 under Rosetta (an arm64 Mac that has it): libuv and the runtime built for it too
+x86=""
+if [ "$(uname -s)-$(uname -m)" = Darwin-arm64 ] && arch -x86_64 /usr/bin/true 2> /dev/null; then x86=x86_64-apple-macosx; fi
 # the runtime, for the C build (an object) and the bitcode one (bitcode, for each target: the C one's
 # as it is, linked into the program's module)
-cc -O0 -w $CFLAGS -c -o "$out/yel.o" runtime/yel.c || exit 1
-clang -O2 -c -emit-llvm $CFLAGS -o "$out/runtime.bc" runtime/yel.c 2> "$out/runtime.err" || { cat "$out/runtime.err"; exit 1; }
-if [ -n "${WASI_SDK:-}" ]; then
-	"$WASI_SDK/bin/clang" --target=wasm32-wasip3 -O2 -c -emit-llvm -Iruntime -o "$out/runtime-wasm.bc" runtime/yel.c 2> "$out/runtime-wasm.err" || { cat "$out/runtime-wasm.err"; exit 1; }
+if [ $built = 0 ]; then
+	cc -O0 -w $CFLAGS -c -o "$runtime/yel.o" runtime/yel.c || exit 1
+	clang -O2 -c -emit-llvm $CFLAGS -o "$runtime/runtime.bc" runtime/yel.c 2> "$runtime/runtime.err" || { cat "$runtime/runtime.err"; exit 1; }
+	if [ -n "${WASI_SDK:-}" ]; then
+		"$WASI_SDK/bin/clang" --target=wasm32-wasip3 -O2 -c -emit-llvm -Iruntime -o "$runtime/runtime-wasm.bc" runtime/yel.c 2> "$runtime/runtime-wasm.err" || { cat "$runtime/runtime-wasm.err"; exit 1; }
+	fi
+	if [ -n "$x86" ]; then
+		clang --target=$x86 -O2 -c -emit-llvm $CFLAGS -o "$runtime/runtime-x86.bc" runtime/yel.c 2> "$runtime/runtime-x86.err" || { cat "$runtime/runtime-x86.err"; exit 1; }
+	fi
 fi
-# x86-64 under Rosetta (an arm64 Mac that has it): libuv and the runtime built for it
-x86=""
-if [ "$(uname -s)-$(uname -m)" = Darwin-arm64 ] && arch -x86_64 /usr/bin/true 2> /dev/null; then
-	x86=x86_64-apple-macosx
-	CC="cc -arch x86_64" sh runtime/libuv/build.sh build/x86_64 > /dev/null || exit 1
-	clang --target=$x86 -O2 -c -emit-llvm $CFLAGS -o "$out/runtime-x86.bc" runtime/yel.c 2> "$out/runtime-x86.err" || { cat "$out/runtime-x86.err"; exit 1; }
-fi
+# (libuv for x86-64 whenever it is missing, the runtime above kept or not: build.sh keeps one there)
+if [ -n "$x86" ]; then CC="cc -arch x86_64" sh runtime/libuv/build.sh build/x86_64 > /dev/null || exit 1; fi
+[ $mode = runtime ] && exit 0
 # a build's run: its stdout, its stderr (apart: how the two interleave is each libc's buffering), then
 # its exit code
 run() {
@@ -96,7 +121,7 @@ for test in $tests; do
 	fi
 	ok=1
 	for level in O0 O2; do
-		if ! clang -$level -Wno-override-module "$out/$name.bc" $extra "$out/runtime.bc" $SYSTEM -o "$out/$name-$level" 2> "$out/$name-$level.err"; then
+		if ! clang -$level -Wno-override-module "$out/$name.bc" $extra "$runtime/runtime.bc" $SYSTEM -o "$out/$name-$level" 2> "$out/$name-$level.err"; then
 			echo "FAIL $name: clang -$level: $(head -3 "$out/$name-$level.err")"
 			ok=0
 			continue
@@ -124,7 +149,7 @@ for test in $tests; do
 	if [ $ok = 1 ]; then
 		if "$YELC" "$test" "$out/$name-g.bc" --backend bitcode -g 2> "$out/$name-g.err" \
 			&& { invalid=$(verify "$out/$name-g.bc"); [ -z "$invalid" ] || { echo "LLVM's verifier: $invalid" > "$out/$name-g.err"; false; }; } \
-			&& clang -g -O0 -Wno-override-module "$out/$name-g.bc" $extra "$out/runtime.bc" $SYSTEM -o "$out/$name-g" 2>> "$out/$name-g.err"; then
+			&& clang -g -O0 -Wno-override-module "$out/$name-g.bc" $extra "$runtime/runtime.bc" $SYSTEM -o "$out/$name-g" 2>> "$out/$name-g.err"; then
 			got=$(run "$out/$name-g")
 			[ "$got" = "$want" ] || { echo "FAIL $name (-g): the C build gave"; echo "$want" | head -5; echo "  and the -g build"; echo "$got" | head -5; ok=0; }
 			dwarf="$out/$name-g"
@@ -139,7 +164,7 @@ for test in $tests; do
 	if [ -n "${WASI_SDK:-}" ] && [ $ok = 1 ]; then
 		"$YELC" "$test" "$out/$name-wasm.bc" --backend bitcode --triple wasm32-unknown-wasip3 \
 			&& { invalid=$(verify "$out/$name-wasm.bc"); [ -z "$invalid" ] || { echo "LLVM's verifier: $invalid" > "$out/$name-wasm.err"; false; }; } \
-			&& "$WASI_SDK/bin/clang" --target=wasm32-wasip3 -O2 -Wno-override-module "$out/$name-wasm.bc" $extra_wasm "$out/runtime-wasm.bc" -lm -o "$out/$name.wasm" 2> "$out/$name-wasm.err" \
+			&& "$WASI_SDK/bin/clang" --target=wasm32-wasip3 -O2 -Wno-override-module "$out/$name-wasm.bc" $extra_wasm "$runtime/runtime-wasm.bc" -lm -o "$out/$name.wasm" 2> "$out/$name-wasm.err" \
 			|| { echo "FAIL $name: the wasm build: $(head -3 "$out/$name-wasm.err")"; ok=0; }
 		if [ $ok = 1 ]; then
 			code=$(echo "$want" | tail -1 | sed 's/exit //')
@@ -151,7 +176,7 @@ for test in $tests; do
 	if [ -n "$x86" ] && [ $ok = 1 ]; then
 		if "$YELC" "$test" "$out/$name-x86.bc" --backend bitcode --triple $x86 2> "$out/$name-x86.err" \
 			&& { invalid=$(verify "$out/$name-x86.bc"); [ -z "$invalid" ] || { echo "LLVM's verifier: $invalid" > "$out/$name-x86.err"; false; }; } \
-			&& clang --target=$x86 -O2 -Wno-override-module "$out/$name-x86.bc" $extra_x86 "$out/runtime-x86.bc" build/x86_64/libuv.a -lm -lpthread -o "$out/$name-x86" 2>> "$out/$name-x86.err"; then
+			&& clang --target=$x86 -O2 -Wno-override-module "$out/$name-x86.bc" $extra_x86 "$runtime/runtime-x86.bc" build/x86_64/libuv.a -lm -lpthread -o "$out/$name-x86" 2>> "$out/$name-x86.err"; then
 			got=$(run arch -x86_64 "$out/$name-x86")
 			[ "$got" = "$want" ] || { echo "FAIL $name (x86-64): the C build gave"; echo "$want" | head -5; echo "  and the x86-64 bitcode build"; echo "$got" | head -5; ok=0; }
 		else
@@ -161,10 +186,10 @@ for test in $tests; do
 	fi
 	if [ $ok = 1 ]; then echo "ok   $name"; else failed=1; fi
 done
-# with WASI_SDK and no tests named: the component tests (as bootstrap.sh runs the C build's) built as
+# with WASI_SDK, no tests named (or --components): the component tests (as bootstrap.sh runs the C build's) built as
 # bitcode: imports, async ones, streams and futures, resources, the filesystem, exports (the calls
 # tests/component.calls makes), and (wac) components plugged into each other
-if [ -n "${WASI_SDK:-}" ] && [ -z "${*:-}" ]; then
+if [ -n "${WASI_SDK:-}" ] && { [ $mode = all ] || [ $mode = components ]; }; then
 	crun() { perl -e 'alarm 120; exec @ARGV' wasmtime run -W component-model-async=y -S p3=y "$@"; }
 	component() { # name source [reactor] [-I wit]
 		cname=$1; source=$2; shift 2
@@ -172,15 +197,16 @@ if [ -n "${WASI_SDK:-}" ] && [ -z "${*:-}" ]; then
 		if [ "${1:-}" = reactor ]; then model=-mexec-model=reactor; shift; fi
 		"$YELC" "$source" "$out/c-$cname.bc" --backend bitcode --triple wasm32-unknown-wasip3 "$@" --wit "$out/c-$cname-wit" > "$out/c-$cname.log" 2>&1 \
 			&& { invalid=$(verify "$out/c-$cname.bc"); [ -z "$invalid" ] || { echo "LLVM's verifier: $invalid" >> "$out/c-$cname.log"; false; }; } \
-			&& "$WASI_SDK/bin/clang" --target=wasm32-wasip3 -O2 -Wno-override-module $model "$out/c-$cname.bc" "$out/runtime-wasm.bc" -lm -Wl,-z,stack-size=8388608 -Wl,--component-type,"$out/c-$cname-wit" -o "$out/c-$cname.wasm" >> "$out/c-$cname.log" 2>&1
+			&& "$WASI_SDK/bin/clang" --target=wasm32-wasip3 -O2 -Wno-override-module $model "$out/c-$cname.bc" "$runtime/runtime-wasm.bc" -lm -Wl,-z,stack-size=8388608 -Wl,--component-type,"$out/c-$cname-wit" -o "$out/c-$cname.wasm" >> "$out/c-$cname.log" 2>&1
 	}
 	expect() { # name want got
 		if [ "$3" = "$(cat "$2")" ]; then echo "ok   $1 (component)"; else echo "FAIL $1 (component): $(echo "$3" | head -3)"; failed=1; fi
 	}
 	built() { component "$@" || { echo "FAIL $1 (component): $(grep -v '^ *#\|Stack\|PLEASE' "$out/c-$1.log" | head -3)"; failed=1; return 1; }; }
 	# the host's interfaces (tests/host: imports, the clock's waits, resources, the filesystem,
-	# TCP, name lookups), its tests run as a bitcode component, a call each
-	if BACKEND=bitcode WASMTIME_FLAGS="-S inherit-network=y -S allow-ip-name-lookup=y" tools/test-component.sh tests/host > "$out/c-host.out" 2>&1; then
+	# TCP, name lookups), its tests run as a bitcode component, a call each, collecting at every
+	# turn's end
+	if BACKEND=bitcode WASMTIME_FLAGS="--env YEL_GC_STRESS=1 -S inherit-network=y -S allow-ip-name-lookup=y" tools/test-component.sh tests/host > "$out/c-host.out" 2>&1; then
 		echo "ok   host ($(tail -n 1 "$out/c-host.out"), component)"
 	else
 		echo "FAIL host (component): $(grep '^FAIL' "$out/c-host.out" | head -3)"

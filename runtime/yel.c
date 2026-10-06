@@ -24,11 +24,201 @@ Y_NORETURN static void y_stop_now(void) {
 #define y_stop() y_stop_now()
 #endif
 
+// what the runtime writes on stdout (fd 1) or stderr (2): false where it could not. A component's
+// (Y_HOSTED, WASI 0.2) goes on the host's streams themselves, never through stdio (its buffers,
+// locks and descriptor table, and the stdin and terminal imports its start asks the host for);
+// what it writes is written at once, so there is nothing to flush
+#if defined(Y_HOSTED) && defined(__wasip2__)
+#include <wasi/wasip2.h>
+static bool y_out(int fd, const void *data, size_t len) {
+	static streams_own_output_stream_t streams[2];
+	static bool opened[2];
+	const int k = fd == 2;
+	if (!opened[k]) {
+		streams[k] = k ? stderr_get_stderr() : stdout_get_stdout();
+		opened[k] = true;
+	}
+	const streams_borrow_output_stream_t to = streams_borrow_output_stream(streams[k]);
+	const uint8_t *at = data;
+	while (len > 0) {
+		// (at most 4096 bytes a write, as the stream takes them)
+		const size_t n = len > 4096 ? 4096 : len;
+		wasip2_list_u8_t chunk = { (uint8_t *)at, n };
+		streams_stream_error_t error;
+		if (!streams_method_output_stream_blocking_write_and_flush(to, &chunk, &error)) {
+			if (error.tag == STREAMS_STREAM_ERROR_LAST_OPERATION_FAILED) io_error_error_drop_own(error.val.last_operation_failed);
+			return false;
+		}
+		at += n;
+		len -= n;
+	}
+	return true;
+}
+#define y_out_flush() ((void)0)
+#else
+static bool y_out(int fd, const void *data, size_t len) { return fwrite(data, 1, len, fd == 2 ? stderr : stdout) == len; }
+#define y_out_flush() fflush(stdout)
+#endif
+
+static void y_out_text(int fd, const char *text) { (void)y_out(fd, text, strlen(text)); }
+
 Y_NORETURN void y_die(const char *message) {
-	fflush(stdout);
-	fprintf(stderr, "yel: %s\n", message);
+	y_out_flush();
+	// (no printf: a guest's build is smaller without it)
+	y_out_text(2, "yel: ");
+	y_out_text(2, message);
+	y_out_text(2, "\n");
 	y_stop();
 }
+
+// ---- a component's memory (Y_HOSTED on wasm), in place of libc's dlmalloc (a tenth of a small
+// component's code). Wasm's memory only grows, so what an allocator there needs is reuse, never
+// giving memory back. A block of up to 32 KiB is one of a size class (a power of two from 32
+// bytes, its first 16 bytes saying which), cut from a 64 KiB page and kept on its class's list
+// once free; a bigger one (or one aligned to more than 16 bytes: the collector's pages) is a run of
+// whole pages, its length in a table by its first page, kept once free on a list in address order,
+// merged with the free runs next to it. (Y_MEMORY_TEST: the same over a native arena, to test it)
+#if (defined(Y_HOSTED) && defined(__wasm__)) || defined(Y_MEMORY_TEST)
+#ifndef Y_MEMORY_TEST
+#define Y_MEMORY_GROW(pages) __builtin_wasm_memory_grow(0, pages)
+#define Y_MEMORY_BASE ((uintptr_t)0)
+#endif
+#define Y_MEM_PAGE ((size_t)65536)
+#define Y_MEM_CLASSES 11
+#define Y_MEM_HEAD ((size_t)16)
+
+typedef struct y_mem_run {
+	struct y_mem_run *next;
+	size_t pages;
+} y_mem_run;
+
+static void *y_mem_free[Y_MEM_CLASSES];
+static y_mem_run *y_mem_runs;
+static uint16_t y_mem_run_pages[65536];
+
+static size_t y_mem_page(const void *p) { return ((uintptr_t)p - Y_MEMORY_BASE) / Y_MEM_PAGE; }
+
+// a run of pages: the first free run long enough (the rest of it left free), else memory grown
+static void *y_mem_run_take(size_t pages) {
+	if (pages == 0 || pages > 65535) return NULL;
+	y_mem_run **link = &y_mem_runs;
+	for (y_mem_run *run = y_mem_runs; run; link = &run->next, run = run->next) {
+		if (run->pages < pages) continue;
+		if (run->pages == pages) *link = run->next;
+		else {
+			y_mem_run *rest = (y_mem_run *)((char *)run + pages * Y_MEM_PAGE);
+			rest->next = run->next;
+			rest->pages = run->pages - pages;
+			*link = rest;
+		}
+		y_mem_run_pages[y_mem_page(run)] = (uint16_t)pages;
+		return run;
+	}
+	const size_t was = (size_t)Y_MEMORY_GROW(pages);
+	if (was == SIZE_MAX) return NULL;
+	void *made = (void *)(Y_MEMORY_BASE + was * Y_MEM_PAGE);
+	y_mem_run_pages[y_mem_page(made)] = (uint16_t)pages;
+	return made;
+}
+
+static void y_mem_run_give(void *p) {
+	y_mem_run *run = p;
+	run->pages = y_mem_run_pages[y_mem_page(p)];
+	y_mem_run_pages[y_mem_page(p)] = 0;
+	y_mem_run *before = NULL;
+	y_mem_run *after = y_mem_runs;
+	while (after && after < run) {
+		before = after;
+		after = after->next;
+	}
+	run->next = after;
+	if (after && (char *)run + run->pages * Y_MEM_PAGE == (char *)after) {
+		run->pages += after->pages;
+		run->next = after->next;
+	}
+	if (!before) y_mem_runs = run;
+	else if ((char *)before + before->pages * Y_MEM_PAGE == (char *)run) {
+		before->pages += run->pages;
+		before->next = run->next;
+	} else before->next = run;
+}
+
+static void *y_mem_take(size_t bytes) {
+	if (bytes > ((size_t)32 << (Y_MEM_CLASSES - 1)) - Y_MEM_HEAD) return y_mem_run_take((bytes + Y_MEM_PAGE - 1) / Y_MEM_PAGE);
+	int c = 0;
+	while (((size_t)32 << c) - Y_MEM_HEAD < bytes) c++;
+	char *block = y_mem_free[c];
+	if (block) y_mem_free[c] = *(void **)block;
+	else {
+		// a page of the class's blocks: the first given, the others on its list
+		char *page = y_mem_run_take(1);
+		if (!page) return NULL;
+		const size_t size = (size_t)32 << c;
+		for (size_t at = Y_MEM_PAGE - size; at > 0; at -= size) {
+			*(void **)(page + at) = y_mem_free[c];
+			y_mem_free[c] = page + at;
+		}
+		block = page;
+	}
+	*(size_t *)block = (size_t)c;
+	return block + Y_MEM_HEAD;
+}
+
+// how many bytes a block given out holds (a run's: its pages)
+static size_t y_mem_held(const void *p) {
+	if (((uintptr_t)p - Y_MEMORY_BASE) % Y_MEM_PAGE == 0) return y_mem_run_pages[y_mem_page(p)] * Y_MEM_PAGE;
+	return ((size_t)32 << *(const size_t *)((const char *)p - Y_MEM_HEAD)) - Y_MEM_HEAD;
+}
+
+static void y_mem_give(void *p) {
+	if (!p) return;
+	if (((uintptr_t)p - Y_MEMORY_BASE) % Y_MEM_PAGE == 0) {
+		y_mem_run_give(p);
+		return;
+	}
+	char *block = (char *)p - Y_MEM_HEAD;
+	const size_t c = *(size_t *)block;
+	*(void **)block = y_mem_free[c];
+	y_mem_free[c] = block;
+}
+
+static void *y_mem_resize(void *p, size_t bytes) {
+	if (!p) return y_mem_take(bytes);
+	const size_t held = y_mem_held(p);
+	if (bytes <= held) return p;
+	void *moved = y_mem_take(bytes);
+	if (!moved) return NULL;
+	memcpy(moved, p, held);
+	y_mem_give(p);
+	return moved;
+}
+
+static void *y_mem_aligned(size_t align, size_t bytes) {
+	if (align <= Y_MEM_HEAD) return y_mem_take(bytes);
+	if (align > Y_MEM_PAGE) return NULL;
+	return y_mem_run_take((bytes + Y_MEM_PAGE - 1) / Y_MEM_PAGE);
+}
+
+#ifndef Y_MEMORY_TEST
+void *malloc(size_t bytes) { return y_mem_take(bytes); }
+void free(void *p) { y_mem_give(p); }
+void *realloc(void *p, size_t bytes) { return y_mem_resize(p, bytes); }
+void *calloc(size_t count, size_t size) {
+	if (size && count > SIZE_MAX / size) return NULL;
+	void *p = y_mem_take(count * size);
+	if (p) memset(p, 0, count * size);
+	return p;
+}
+void *aligned_alloc(size_t align, size_t bytes) { return y_mem_aligned(align, bytes); }
+int posix_memalign(void **out, size_t align, size_t bytes) {
+	void *p = y_mem_aligned(align, bytes);
+	if (!p) return 12;
+	*out = p;
+	return 0;
+}
+#endif
+#endif
+// ---- (end of a component's memory)
 
 // memory the runtime keeps for itself (never collected)
 void *y_alloc(size_t bytes) {
@@ -284,9 +474,11 @@ void y_collect(void) {
 	// is mostly live, growing, gains little from being marked often). A small program, a
 	// component's turns, stays at double
 	const size_t grow = live * 4 > y_heap_bytes * 3 ? 4 : live > ((size_t)16 << 20) ? 3 : 2;
+#if !defined(Y_HOSTED)
 	if (y_verbose)
 		fprintf(stderr, "yel gc: %.1f MiB -> %.1f MiB live, next at x%d\n", (double)y_heap_bytes / 1048576.0,
 			(double)live / 1048576.0, (int)grow);
+#endif
 	y_heap_bytes = live;
 	y_heap_limit = live * grow > y_heap_min ? live * grow : y_heap_min;
 }
@@ -355,7 +547,7 @@ void *y_new_bytes(size_t bytes) { return y_new_block(bytes, NULL, false); }
 void *y_new_block(size_t bytes, y_trace trace, bool zero) {
 	const size_t need = bytes + sizeof(y_head);
 #ifndef Y_NO_GC
-	if (!y_gc_hold && (y_stress ? --y_stress_left <= 0 : y_heap_bytes >= y_heap_limit)) {
+	if (!y_turns && !y_gc_hold && (y_stress ? --y_stress_left <= 0 : y_heap_bytes >= y_heap_limit)) {
 		y_stress_left = y_stress;
 		y_collect();
 	}
@@ -396,26 +588,309 @@ ystr y_str_of(const char *bytes, int64_t len) {
 	return (ystr){ len, d };
 }
 
+// ---------------------------------------------------------------- floats as text, exactly
+
+// a float's text without the C library's printf and strtod (a guest's build is smaller without
+// them): its exact decimal digits (a big integer's), rounded as %.*g and %.*f round them (to
+// nearest, ties to even, on the exact value), and whether a text reads back as the float (it lies
+// in the float's rounding interval, ties to the even mantissa: strtod's own rounding)
+
+// an unsigned big integer: 32-bit words, least first (a float's exact value needs 2600 bits at most,
+// a comparison of one with a decimal 3800)
+typedef struct {
+	uint32_t w[160];
+	int n;
+} y_big;
+
+static void y_big_set(y_big *b, uint64_t v) {
+	b->n = 0;
+	while (v) {
+		b->w[b->n++] = (uint32_t)v;
+		v >>= 32;
+	}
+}
+
+static void y_big_mul_small(y_big *b, uint32_t m) {
+	uint64_t carry = 0;
+	for (int i = 0; i < b->n; i++) {
+		const uint64_t t = (uint64_t)b->w[i] * m + carry;
+		b->w[i] = (uint32_t)t;
+		carry = t >> 32;
+	}
+	if (carry) b->w[b->n++] = (uint32_t)carry;
+}
+
+static void y_big_mul_pow5(y_big *b, int k) {
+	static const uint32_t small[13] = { 1, 5, 25, 125, 625, 3125, 15625, 78125, 390625, 1953125, 9765625, 48828125, 244140625 };
+	while (k >= 13) {
+		y_big_mul_small(b, 1220703125u);
+		k -= 13;
+	}
+	if (k > 0) y_big_mul_small(b, small[k]);
+}
+
+static void y_big_shl(y_big *b, int k) {
+	if (b->n == 0 || k == 0) return;
+	const int words = k / 32, bits = k % 32;
+	if (bits) {
+		uint32_t carry = 0;
+		for (int i = 0; i < b->n; i++) {
+			const uint32_t next = b->w[i] >> (32 - bits);
+			b->w[i] = (b->w[i] << bits) | carry;
+			carry = next;
+		}
+		if (carry) b->w[b->n++] = carry;
+	}
+	if (words) {
+		for (int i = b->n - 1; i >= 0; i--) b->w[i + words] = b->w[i];
+		for (int i = 0; i < words; i++) b->w[i] = 0;
+		b->n += words;
+	}
+}
+
+static int y_big_cmp(const y_big *a, const y_big *b) {
+	if (a->n != b->n) return a->n < b->n ? -1 : 1;
+	for (int i = a->n - 1; i >= 0; i--) {
+		if (a->w[i] != b->w[i]) return a->w[i] < b->w[i] ? -1 : 1;
+	}
+	return 0;
+}
+
+static uint32_t y_big_divmod_small(y_big *b, uint32_t d) {
+	uint64_t rest = 0;
+	for (int i = b->n - 1; i >= 0; i--) {
+		const uint64_t cur = (rest << 32) | b->w[i];
+		b->w[i] = (uint32_t)(cur / d);
+		rest = cur % d;
+	}
+	while (b->n > 0 && b->w[b->n - 1] == 0) b->n--;
+	return (uint32_t)rest;
+}
+
+// a positive finite float as m * 2^e (m its mantissa, the implied bit set where it is normal),
+// single or double; whether the gap below it is half the one above (a power of two, past the least)
+static void y_float_parts(double v, bool single, uint64_t *m, int *e, bool *narrow) {
+	if (single) {
+		uint32_t bits;
+		const float f = (float)v;
+		memcpy(&bits, &f, sizeof bits);
+		const uint32_t fraction = bits & 0x7fffff;
+		const int biased = (int)((bits >> 23) & 0xff);
+		*m = biased ? (fraction | 0x800000) : fraction;
+		*e = biased ? biased - 150 : -149;
+		*narrow = biased > 1 && fraction == 0;
+	} else {
+		uint64_t bits;
+		memcpy(&bits, &v, sizeof bits);
+		const uint64_t fraction = bits & ((1ull << 52) - 1);
+		const int biased = (int)((bits >> 52) & 0x7ff);
+		*m = biased ? (fraction | (1ull << 52)) : fraction;
+		*e = biased ? biased - 1075 : -1074;
+		*narrow = biased > 1 && fraction == 0;
+	}
+}
+
+// a positive finite float's exact decimal digits (into out, no leading or trailing zeros past the
+// first), how many, and the power of ten of the first (v = d.ddd × 10^x)
+static int y_float_digits(double v, char *out, int *x) {
+	uint64_t m;
+	int e;
+	bool narrow;
+	y_float_parts(v, false, &m, &e, &narrow);
+	y_big b;
+	y_big_set(&b, m);
+	int scale = 0;
+	if (e >= 0) y_big_shl(&b, e);
+	else {
+		y_big_mul_pow5(&b, -e);
+		scale = -e;
+	}
+	char reversed[900];
+	int n = 0;
+	while (b.n > 0) {
+		uint32_t chunk = y_big_divmod_small(&b, 1000000000u);
+		for (int k = 0; k < 9; k++) {
+			reversed[n++] = (char)('0' + chunk % 10);
+			chunk /= 10;
+		}
+	}
+	while (n > 1 && reversed[n - 1] == '0') n--;
+	for (int k = 0; k < n; k++) out[k] = reversed[n - 1 - k];
+	*x = n - 1 - scale;
+	int kept = n;
+	while (kept > 1 && out[kept - 1] == '0') kept--;
+	return kept;
+}
+
+// digits (n of them, the first's power of ten x) rounded to keep (≥ 1) digits, ties to even: into
+// out (keep of them, zeros past the last), the power of ten told again (a carry: one more)
+static void y_round_digits(const char *digits, int n, int keep, char *out, int *x) {
+	for (int k = 0; k < keep; k++) out[k] = k < n ? digits[k] : '0';
+	if (n <= keep) return;
+	bool up = digits[keep] > '5';
+	if (digits[keep] == '5') {
+		bool past = false;
+		for (int k = keep + 1; k < n; k++) past = past || digits[k] != '0';
+		up = past || ((out[keep - 1] - '0') & 1);
+	}
+	if (!up) return;
+	int k = keep - 1;
+	while (k >= 0 && out[k] == '9') out[k--] = '0';
+	if (k >= 0) out[k]++;
+	else {
+		out[0] = '1';
+		*x += 1;
+	}
+}
+
+// r × 10^q against m × 2^f: -1, 0 or 1
+static int y_compare_scaled(uint64_t r, int q, uint64_t m, int f) {
+	y_big a, b;
+	y_big_set(&a, r);
+	y_big_set(&b, m);
+	if (q >= 0) y_big_mul_pow5(&a, q);
+	else y_big_mul_pow5(&b, -q);
+	const int shift = q - f;
+	if (shift >= 0) y_big_shl(&a, shift);
+	else y_big_shl(&b, -shift);
+	return y_big_cmp(&a, &b);
+}
+
+// whether the decimal d (keep digits, the first's power of ten x) reads back as v (positive,
+// finite: single or double), as strtod and strtof round
+static bool y_reads_back(double v, bool single, const char *d, int keep, int x) {
+	uint64_t r = 0;
+	for (int k = 0; k < keep; k++) r = r * 10 + (uint64_t)(d[k] - '0');
+	const int q = x - (keep - 1);
+	uint64_t m;
+	int e;
+	bool narrow;
+	y_float_parts(v, single, &m, &e, &narrow);
+	const bool odd = m & 1;
+	// (above: halfway to the next float; below: halfway to the one before, a quarter gap at a power
+	// of two)
+	const int above = y_compare_scaled(r, q, 2 * m + 1, e - 1);
+	if (above > 0 || (above == 0 && odd)) return false;
+	const int below = narrow ? y_compare_scaled(r, q, 4 * m - 1, e - 2) : y_compare_scaled(r, q, 2 * m - 1, e - 1);
+	return !(below < 0 || (below == 0 && odd));
+}
+
+// %.*g's text of digits (keep of them, the first's power of ten x): its trailing zeros dropped
+static int y_g_text(char *out, bool negative, const char *d, int keep, int x, int precision) {
+	int len = 0;
+	if (negative) out[len++] = '-';
+	int last = keep;
+	while (last > 1 && d[last - 1] == '0') last--;
+	if (x < -4 || x >= precision) {
+		out[len++] = d[0];
+		if (last > 1) {
+			out[len++] = '.';
+			for (int k = 1; k < last; k++) out[len++] = d[k];
+		}
+		out[len++] = 'e';
+		out[len++] = x < 0 ? '-' : '+';
+		const int magnitude = x < 0 ? -x : x;
+		if (magnitude >= 100) out[len++] = (char)('0' + magnitude / 100);
+		out[len++] = (char)('0' + magnitude / 10 % 10);
+		out[len++] = (char)('0' + magnitude % 10);
+	} else if (x >= 0) {
+		for (int k = 0; k <= x; k++) out[len++] = k < last ? d[k] : '0';
+		if (last > x + 1) {
+			out[len++] = '.';
+			for (int k = x + 1; k < last; k++) out[len++] = d[k];
+		}
+	} else {
+		out[len++] = '0';
+		out[len++] = '.';
+		for (int k = 0; k < -x - 1; k++) out[len++] = '0';
+		for (int k = 0; k < last; k++) out[len++] = d[k];
+	}
+	return len;
+}
+
+// a float's text, the shortest %.*g that reads back as it (single: as a float), up to most digits
+static ystr y_shortest_text(double v, bool single, int most) {
+	char out[48];
+	const bool negative = signbit(v);
+	if (v == 0) return negative ? y_str_of("-0", 2) : y_str_of("0", 1);
+	const double size = negative ? -v : v;
+	char digits[900];
+	int x;
+	const int n = y_float_digits(size, digits, &x);
+	char rounded[24];
+	int len = 0;
+	for (int precision = 1; precision <= most; precision++) {
+		int rx = x;
+		y_round_digits(digits, n, precision, rounded, &rx);
+		len = y_g_text(out, negative, rounded, precision, rx, precision);
+		if (y_reads_back(size, single, rounded, precision, rx)) break;
+	}
+	return y_str_of(out, len);
+}
+
+// %.*f's text: places digits after the point, the last rounded (ties to even)
+static ystr y_fixed_text(double v, int places) {
+	const bool negative = signbit(v);
+	const double size = negative ? -v : v;
+	char digits[900];
+	int x = 0;
+	int n = 1;
+	if (size == 0) digits[0] = '0';
+	else n = y_float_digits(size, digits, &x);
+	// (the digits kept: those down to the places' last; none kept: 0, or 1 there where it rounds up)
+	const int keep = x + 1 + places;
+	char *out = malloc((size_t)(keep > 0 ? keep : 1) + (size_t)places + 8);
+	if (!out) y_die("out of memory");
+	char *kept = malloc((size_t)(keep > 0 ? keep : 1) + 2);
+	if (!kept) y_die("out of memory");
+	int kx = x;
+	int count;
+	if (keep > 0) {
+		y_round_digits(digits, n, keep, kept, &kx);
+		count = keep + (kx - x);
+		if (kx != x) kept[keep] = '0';
+	} else {
+		// (|v| < 10^-places: 10^-places where it is past halfway, ties to even: 0 is even)
+		bool up = false;
+		if (keep == 0 && size != 0) {
+			bool past = false;
+			for (int k = 1; k < n; k++) past = past || digits[k] != '0';
+			up = digits[0] > '5' || (digits[0] == '5' && past);
+		}
+		kept[0] = up ? '1' : '0';
+		count = 1;
+		kx = up ? -places : -places;
+	}
+	// kept: count digits, the first's power of ten kx (kept[k] is 10^(kx - k))
+	int len = 0;
+	if (negative) out[len++] = '-';
+	if (kx < 0) out[len++] = '0';
+	else {
+		for (int k = 0; k <= kx; k++) out[len++] = k < count ? kept[k] : '0';
+	}
+	if (places > 0) {
+		out[len++] = '.';
+		for (int p = 1; p <= places; p++) {
+			const int k = kx + p;
+			out[len++] = k >= 0 && k < count ? kept[k] : '0';
+		}
+	}
+	ystr text = y_str_of(out, len);
+	free(kept);
+	free(out);
+	return text;
+}
+
 // a float's text, the shortest that reads back as it (nan, inf, -inf): std's format.write-f64
 ystr yel_f64_text(double v) {
 	if (isnan(v)) return y_str_of("nan", 3);
 	if (isinf(v)) return v > 0 ? y_str_of("inf", 3) : y_str_of("-inf", 4);
-	char tmp[40];
-	for (int digits = 1; digits <= 17; digits++) {
-		snprintf(tmp, sizeof tmp, "%.*g", digits, v);
-		if (strtod(tmp, NULL) == v) break;
-	}
-	return y_str_of(tmp, (int64_t)strlen(tmp));
+	return y_shortest_text(v, false, 17);
 }
 
 ystr yel_f32_text(float v) {
 	if (isnan(v) || isinf(v)) return yel_f64_text(v);
-	char tmp[40];
-	for (int digits = 1; digits <= 9; digits++) {
-		snprintf(tmp, sizeof tmp, "%.*g", digits, (double)v);
-		if (strtof(tmp, NULL) == v) break;
-	}
-	return y_str_of(tmp, (int64_t)strlen(tmp));
+	return y_shortest_text(v, true, 9);
 }
 
 void y_trace_buffer(void *obj) { y_mark(((ybuffer *)obj)->data); }
@@ -441,14 +916,21 @@ ystr yel_buffer_string(ybuffer *b) { return b->len ? (ystr){ b->len, b->data } :
 
 // whether stderr may be colored: a terminal, and NO_COLOR not set
 bool yel_stderr_color(void) {
+#if defined(Y_HOSTED)
+	// (a host's stream: no terminal it knows of)
+	return false;
+#else
 	const char *no = y_getenv("NO_COLOR");
 	return (no == NULL || no[0] == 0) && isatty(2);
+#endif
 }
 
 // a match no arm fit: the program stops, showing the value
 Y_NORETURN void yel_no_match(ystr shown) {
-	fflush(stdout);
-	fprintf(stderr, "yel: no match arm for %.*s\n", (int)shown.len, shown.data);
+	y_out_flush();
+	y_out_text(2, "yel: no match arm for ");
+	(void)y_out(2, shown.data, (size_t)shown.len);
+	y_out_text(2, "\n");
 	y_stop();
 }
 
@@ -490,6 +972,58 @@ ylist *y_list_of(int64_t n, int64_t size, const void *items, y_scan scan) {
 	ylist *l = y_list_new(n, size, scan);
 	memcpy(l->items, items, (size_t)(size * n));
 	l->len = n;
+	return l;
+}
+
+// a list's static data (a literal of constants, the compiler's) made a list of the program's: its
+// items copied, and every list in them, by its type's descriptor (strings stay where they are:
+// static, and never written)
+static ylist *y_static_copy(const ylist *data, const ytype *t);
+
+static void y_static_fresh(char *at, const ytype *t) {
+	switch (t->kind) {
+	case Y_K_LIST: {
+		ylist **held = (ylist **)at;
+		if (*held) *held = y_static_copy(*held, t);
+		break;
+	}
+	case Y_K_TUPLE:
+	case Y_K_ANON_RECORD:
+	case Y_K_VALUE_RECORD:
+		for (uint32_t k = 0; k < t->count; k++) y_static_fresh(at + t->offsets[k], t->parts[k]);
+		break;
+	default:
+		break;
+	}
+}
+
+// whether a value of type t holds a list (its items then made fresh one by one)
+static bool y_static_holds_list(const ytype *t) {
+	if (t->kind == Y_K_LIST) return true;
+	if (t->kind == Y_K_TUPLE || t->kind == Y_K_ANON_RECORD || t->kind == Y_K_VALUE_RECORD) {
+		for (uint32_t k = 0; k < t->count; k++) if (y_static_holds_list(t->parts[k])) return true;
+	}
+	return false;
+}
+
+static ylist *y_static_copy(const ylist *data, const ytype *t) {
+	ylist *l = y_list_of(data->len, data->size, data->items, data->scan);
+	const ytype *item = t->parts[0];
+	if (y_static_holds_list(item)) {
+		for (int64_t i = 0; i < l->len; i++) y_static_fresh(l->items + i * l->size, item);
+	}
+	return l;
+}
+
+/** A list literal of constants holding no list: its static items (n, each size bytes) copied. */
+ylist *y_list_of_data(int64_t n, int64_t size, const void *items, y_scan scan) { return y_list_of(n, size, items, scan); }
+
+/** A list literal of constants: its static data (data, of type t: a list's descriptor) copied, each
+list in it too, the collector held while what is made is held by nothing else. */
+ylist *y_list_static(const ylist *data, const ytype *t) {
+	y_gc_hold++;
+	ylist *l = y_static_copy(data, t);
+	y_gc_hold--;
 	return l;
 }
 
@@ -576,32 +1110,46 @@ ystr yel_fixed(double value, int32_t digits) {
 	if (isinf(value)) return value > 0 ? y_str_of("inf", 3) : y_str_of("-inf", 4);
 	if (digits < 0) digits = 0;
 	if (digits > 100) digits = 100;
-	int len = snprintf(NULL, 0, "%.*f", digits, value);
-	char *text = malloc((size_t)len + 1);
-	if (!text) y_die("out of memory");
-	snprintf(text, (size_t)len + 1, "%.*f", digits, value);
-	ystr out = y_str_of(text, len);
-	free(text);
-	return out;
+	return y_fixed_text(value, digits);
 }
 
 // ---------------------------------------------------------------- the process
 
 ylist *y_args;
 
+// an integer's decimal digits written at out (ends it): where they end
+static char *y_put_int(char *out, int64_t v) {
+	char digits[24];
+	int n = 0;
+	uint64_t size = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+	do {
+		digits[n++] = (char)('0' + size % 10);
+		size /= 10;
+	} while (size > 0);
+	if (v < 0) *out++ = '-';
+	while (n > 0) *out++ = digits[--n];
+	*out = 0;
+	return out;
+}
+
 Y_NORETURN void y_index_out_of_range(int64_t i, int64_t n) {
 	char message[96];
-	snprintf(message, sizeof message, "index %lld out of range (length %lld)", (long long)i, (long long)n);
+	char *at = message;
+	memcpy(at, "index ", 6);
+	at = y_put_int(at + 6, i);
+	memcpy(at, " out of range (length ", 22);
+	at = y_put_int(at + 22, n);
+	memcpy(at, ")", 2);
 	y_die(message);
 }
 
 yunit yel_print(ystr s) {
-	fwrite(s.data, 1, (size_t)s.len, stdout);
+	(void)y_out(1, s.data, (size_t)s.len);
 	return 0;
 }
 
 yunit yel_eprint(ystr s) {
-	fwrite(s.data, 1, (size_t)s.len, stderr);
+	(void)y_out(2, s.data, (size_t)s.len);
 	return 0;
 }
 
@@ -626,15 +1174,15 @@ ystr yel_host_triple(void) {
 
 /** What main does last: stdout flushed, main's value the exit code. */
 int y_finish(int64_t code) {
-	fflush(stdout);
+	y_out_flush();
 	return (int)code;
 }
 
 Y_NORETURN yunit yel_panic(ystr message) {
-	fflush(stdout);
-	fputs("panic: ", stderr);
+	y_out_flush();
+	y_out_text(2, "panic: ");
 	yel_eprint(message);
-	fputc('\n', stderr);
+	y_out_text(2, "\n");
 	y_stop();
 }
 
@@ -655,6 +1203,10 @@ double yel_parse_f64(ystr s) {
 
 // YEL_GC_STATS: how the collector did, on stderr at exit
 void y_stats(void) {
+#if defined(Y_HOSTED)
+	// (a guest's: none, so no printf)
+	return;
+#endif
 	if (y_heap_bytes > y_peak_bytes) y_peak_bytes = y_heap_bytes;
 	fprintf(stderr, "yel gc: %ld collections, heap %.1f MiB at exit, %.1f MiB at most\n", y_collections,
 		(double)y_heap_bytes / 1048576.0, (double)y_peak_bytes / 1048576.0);
@@ -683,17 +1235,26 @@ void y_abi_free_temps(void) {
 	y_abi_ntemps = 0;
 }
 
-/** A string the host wrote (into memory from cabi_realloc): copied to the heap, the host's freed. */
-void y_flush_stdout(void) { fflush(stdout); }
+void y_flush_stdout(void) { y_out_flush(); }
 
 Y_NORETURN void y_abi_bad(int32_t what) {
 	static const char *const said[] = { "a value outside its type crossed the boundary", "a case the union does not have crossed the boundary", "a case the variant does not have", "a case the enum does not have crossed the boundary", "a char that is not a Unicode scalar value crossed the boundary", "a tag out of its type's range crossed the boundary", "a future's writer was dropped before it wrote" };
 	y_die(said[what < 0 || what > 6 ? 0 : what]);
 }
 
+// what cabi_realloc gives for no bytes (an empty string or list the host lowers): no memory taken
+static max_align_t y_abi_nothing;
+
+/** What the host wrote (len bytes or items, from cabi_realloc) freed, once lifted: an empty one's
+ *  never (the host may not have asked for memory: its pointer is then any, jco's 1). */
+void y_abi_free_host(void *ptr, size_t len) {
+	if (len > 0 && ptr != (void *)&y_abi_nothing) free(ptr);
+}
+
+/** A string the host wrote: copied to the heap, the host's freed. */
 ystr y_abi_lift_str(yabi_str *s) {
 	ystr out = y_str_of(s->ptr, (int64_t)s->len);
-	free(s->ptr);
+	y_abi_free_host(s->ptr, s->len);
 	return out;
 }
 
@@ -703,6 +1264,7 @@ ystr y_abi_lift_str(yabi_str *s) {
 __attribute__((export_name("cabi_realloc"))) void *cabi_realloc(void *old, size_t old_size, size_t align, size_t new_size) {
 	(void)old_size;
 	(void)align;
+	if (!old && new_size == 0) return &y_abi_nothing;
 	void *p = realloc(old, new_size ? new_size : 1);
 	if (!p) y_die("out of memory");
 	return p;
@@ -716,11 +1278,19 @@ void y_ready(void) {
 	if (!y_started) y_start(0, NULL);
 }
 
-// a turn's end (an export's post-return: nothing of the component is on the stack): the
-// collector runs when the heap has grown past half of what starts one
+bool y_turns;
+void y_ready_turns(void) {
+	y_turns = true;
+	y_ready();
+}
+
+// a turn's end (an export's post-return, an async export's call given back to the host: nothing
+// of the component is on the stack): where y_turns, its only collections (see yel.h), once the
+// heap has grown past what starts one (every turn under YEL_GC_STRESS); elsewhere one runs early,
+// past half of it
 void y_turn_end(void) {
 #ifndef Y_NO_GC
-	if (!y_stress && y_heap_bytes >= y_heap_limit / 2) y_collect();
+	if (y_turns ? y_stress || y_heap_bytes >= y_heap_limit : !y_stress && y_heap_bytes >= y_heap_limit / 2) y_collect();
 #endif
 }
 
@@ -790,6 +1360,10 @@ static int64_t y_ntraces, y_traces_cap, y_task_count;
 
 /** How much is told (YEL_ASYNC_TRACE, read once). */
 static int y_async_tracing(void) {
+#if defined(Y_HOSTED)
+	// (a guest's: none, so no printf)
+	return 0;
+#endif
 	if (y_trace_level < 0) {
 		const char *v = y_getenv("YEL_ASYNC_TRACE");
 		y_trace_level = v ? atoi(v) : 0;
@@ -867,13 +1441,12 @@ static void y_trace_waiting(const char *what) {
 }
 
 yunit yel_async_trace_deadlock(void) {
+	y_out_flush();
 	if (!y_async_tracing()) {
-		fflush(stdout);
-		fprintf(stderr, "yel: YEL_ASYNC_TRACE=1 tells each task and what it waits for\n");
+		y_out_text(2, "yel: YEL_ASYNC_TRACE=1 tells each task and what it waits for\n");
 		return 0;
 	}
-	fflush(stdout);
-	fprintf(stderr, "async: a deadlock: every task waits, and nothing will wake one\n");
+	y_out_text(2, "async: a deadlock: every task waits, and nothing will wake one\n");
 	y_trace_waiting("waits for");
 	return 0;
 }
@@ -1109,11 +1682,16 @@ int32_t y_export_drive(y_async *root, bool (*run)(y_async *)) {
 		if (done && !y_async_owned_live(root) && !y_async_host_pending(root)) {
 			y_host_root_end(root);
 			yel_async_prune();
+			y_turn_end();
 			return 0;
 		}
 		break;
 	}
-	if (y_async_host_pending(root)) return (int32_t)(2u | (y_host_root(root)->set << 4));
+	if (y_async_host_pending(root)) {
+		const int32_t waits = (int32_t)(2u | (y_host_root(root)->set << 4));
+		y_turn_end();
+		return waits;
+	}
 	yel_async_trace_deadlock();
 	y_die("every task of this call waits, and nothing will wake one: a deadlock");
 }
@@ -1188,6 +1766,14 @@ y_async *yel_async_park(void) {
 int64_t yel_async_now_ms(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+}
+
+/** Milliseconds since 1970 by the wall clock, through the C library: natively the system's, in a
+WASI 0.2 component its wall clock (what a guest a shell hosts has; std:time's now reads WASI 0.3's). */
+int64_t yel_wall_ms(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
 	return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
 }
 
@@ -2055,10 +2641,14 @@ int64_t yel_host_read(int64_t fd, int64_t at, int64_t count) { return (int64_t)r
 
 /** count bytes at at written to stdout or stderr (2 for stderr), after what print wrote, and flushed. */
 int64_t yel_host_write_out(int64_t fd, int64_t at, int64_t count) {
+#if defined(Y_HOSTED) && defined(__wasip2__)
+	return y_out((int)fd, (const void *)(uintptr_t)at, (size_t)count) ? count : -1;
+#else
 	FILE *out = fd == 2 ? stderr : stdout;
 	const size_t wrote = fwrite((const void *)(uintptr_t)at, 1, (size_t)count, out);
 	if (fflush(out) != 0 || wrote != (size_t)count) return -1;
 	return (int64_t)wrote;
+#endif
 }
 
 Y_NORETURN void y_no_host(void) { y_die("this waits for a host: build it as a component (WASI 0.3)"); }
@@ -2292,7 +2882,7 @@ int64_t yel_host_cli_argument(int64_t a1) { return ((int64_t)(uintptr_t)y_argv[a
 int64_t yel_host_cli_variable(int64_t a1) { return ((int64_t)(uintptr_t)environ[a1]); }
 int64_t yel_host_cli_working_directory(void) { return ((int64_t)(uintptr_t)getcwd(NULL, 0)); }
 ystr yel_host_cli_c_string(int64_t a1) { return (y_str_of((const char *)(uintptr_t)(a1), (int64_t)strlen((const char *)(uintptr_t)(a1)))); }
-yunit yel_host_cli_exit(int64_t a1) { return (fflush(stdout), exit((int)(a1)), (yunit)0); }
+yunit yel_host_cli_exit(int64_t a1) { return (y_out_flush(), exit((int)(a1)), (yunit)0); }
 int64_t yel_host_clocks_realtime(void) { return ((int64_t)CLOCK_REALTIME); }
 int64_t yel_host_clocks_monotonic(void) { return ((int64_t)CLOCK_MONOTONIC); }
 yunit yel_host_clocks_get_time(int64_t a1, int64_t a2) { return (clock_gettime((clockid_t)(a1), (struct timespec *)(uintptr_t)(a2)), (yunit)0); }
@@ -2361,12 +2951,51 @@ bool yel_host_terminal_is_terminal(int64_t a1) { return (isatty((int)(a1)) != 0)
 // fork gives -1 there
 #if defined(__wasm__)
 int64_t yel_process_fork(void) { return -1; }
+int64_t yel_process_run(ystr arguments, int64_t count, ystr dir, ystr environment, int64_t variables, ystr output) {
+	(void)arguments;
+	(void)count;
+	(void)dir;
+	(void)environment;
+	(void)variables;
+	(void)output;
+	return -1;
+}
 int64_t yel_process_wait(int64_t child) {
 	(void)child;
 	return -1;
 }
+int64_t yel_process_start(ystr arguments, int64_t count, ystr dir, ystr environment, int64_t variables, ystr output) {
+	(void)arguments;
+	(void)count;
+	(void)dir;
+	(void)environment;
+	(void)variables;
+	(void)output;
+	return 0;
+}
+bool yel_process_done(int64_t child) {
+	(void)child;
+	return true;
+}
+int64_t yel_process_status(int64_t child) {
+	(void)child;
+	return -1;
+}
+yunit yel_process_free(int64_t child) {
+	(void)child;
+	return 0;
+}
+ystr yel_build_entries(ystr dir) {
+	(void)dir;
+	return (ystr){ 0, "" };
+}
+bool yel_build_runnable(ystr at) {
+	(void)at;
+	return false;
+}
+int64_t yel_build_parallelism(void) { return 1; }
 Y_NORETURN void yel_process_end(int64_t code) {
-	fflush(NULL);
+	y_out_flush();
 	exit((int)code);
 }
 #else
@@ -2395,5 +3024,247 @@ int64_t yel_process_wait(int64_t child) {
 Y_NORETURN void yel_process_end(int64_t code) {
 	fflush(NULL);
 	_exit((int)code);
+}
+#include <fcntl.h>
+#include <spawn.h>
+extern char **environ;
+/** count NUL-ended strings of joined (a copy of text's bytes), each an entry of a NULL-ended array. */
+static char **y_split_nul(char *joined, int64_t length, int64_t count) {
+	char **out = calloc((size_t)count + 1, sizeof(char *));
+	int64_t at = 0;
+	for (int64_t index = 0; index < count; index++) {
+		out[index] = joined + at;
+		while (at < length && joined[at] != 0) at++;
+		at++;
+	}
+	out[count] = NULL;
+	return out;
+}
+
+// a program's arguments and environment, as C has them: argv (count of them in arguments, each
+// ended by a NUL byte), envp (this process's environment, those of environment's variables in place
+// of one of their name, then the rest), and the strings they point into
+typedef struct {
+	char *joined, **argv, *given, **added, **envp;
+} y_command;
+
+static y_command y_command_of(ystr arguments, int64_t count, ystr environment, int64_t variables) {
+	y_command c;
+	c.joined = y_cstr(arguments);
+	c.argv = y_split_nul(c.joined, arguments.len, count);
+	c.given = y_cstr(environment);
+	c.added = y_split_nul(c.given, environment.len, variables);
+	int64_t own = 0;
+	while (environ[own] != NULL) own++;
+	c.envp = calloc((size_t)(own + variables) + 1, sizeof(char *));
+	int64_t kept = 0;
+	for (int64_t index = 0; index < own; index++) {
+		const char *equals = strchr(environ[index], '=');
+		const size_t name = equals ? (size_t)(equals - environ[index]) + 1 : strlen(environ[index]);
+		bool replaced = false;
+		for (int64_t other = 0; other < variables; other++) {
+			if (strncmp(environ[index], c.added[other], name) == 0) replaced = true;
+		}
+		if (!replaced) c.envp[kept++] = environ[index];
+	}
+	for (int64_t other = 0; other < variables; other++) c.envp[kept++] = c.added[other];
+	c.envp[kept] = NULL;
+	return c;
+}
+
+static void y_command_free(y_command c) {
+	free(c.envp);
+	free(c.added);
+	free(c.given);
+	free(c.argv);
+	free(c.joined);
+}
+
+/**
+ * A program run, and waited for: arguments are its count arguments, the first its command (looked
+ * for on PATH), each ended by a NUL byte; it runs in dir (empty: this process's), with this
+ * process's environment and variables more (environment: NAME=value, each ended by a NUL byte, one
+ * of a name this process has in place of its), its standard output and error to the file output
+ * (made or emptied; empty: this process's). How it ended, as yel_process_wait tells it; -1 where it
+ * could not be started.
+ */
+int64_t yel_process_run(ystr arguments, int64_t count, ystr dir, ystr environment, int64_t variables, ystr output) {
+	if (count <= 0) return -1;
+	y_command c = y_command_of(arguments, count, environment, variables);
+	fflush(NULL);
+	posix_spawn_file_actions_t actions;
+	posix_spawn_file_actions_init(&actions);
+	char *to = NULL;
+	if (output.len > 0) {
+		to = y_cstr(output);
+		posix_spawn_file_actions_addopen(&actions, 1, to, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		posix_spawn_file_actions_adddup2(&actions, 1, 2);
+	}
+	char *in = NULL;
+	if (dir.len > 0) {
+		in = y_cstr(dir);
+		// (POSIX 2024's name where the system is that new: macOS 26 deprecates the _np one)
+#if defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 260000
+		posix_spawn_file_actions_addchdir(&actions, in);
+#else
+		posix_spawn_file_actions_addchdir_np(&actions, in);
+#endif
+	}
+	pid_t child = 0;
+	const int started = posix_spawnp(&child, c.argv[0], &actions, NULL, c.argv, c.envp);
+	posix_spawn_file_actions_destroy(&actions);
+	free(to);
+	free(in);
+	y_command_free(c);
+	if (started != 0) return -1;
+	return yel_process_wait((int64_t)child);
+}
+
+// a child started on the loop (yel_process_start's): the task that waits for it, and how it ended
+typedef struct y_child {
+	uv_process_t process;
+	y_async *task;
+	int64_t status;
+	bool done;
+	struct y_child *next;
+} y_child;
+
+// every child not let go yet, so the collector keeps the tasks they wake
+static y_child *y_children;
+
+static void y_trace_children(void) {
+	for (y_child *c = y_children; c; c = c->next) y_mark(c->task);
+}
+
+static void y_child_exited(uv_process_t *process, int64_t status, int signal) {
+	y_child *c = process->data;
+	c->status = signal ? 128 + signal : status;
+	c->done = true;
+	y_uv_pending--;
+	y_wake(c->task);
+}
+
+static void y_child_closed(uv_handle_t *handle) { free(handle->data); }
+
+/**
+ * A program started as yel_process_run runs one, without waiting for it: the child, which the
+ * task parks for until yel_process_done (how it ended then yel_process_status, as
+ * yel_process_wait tells it, and the child let go with yel_process_free); 0 where it could not be
+ * started.
+ */
+int64_t yel_process_start(ystr arguments, int64_t count, ystr dir, ystr environment, int64_t variables, ystr output) {
+	static bool traced;
+	if (!traced) {
+		y_tracer(y_trace_children);
+		traced = true;
+	}
+	if (count <= 0) return 0;
+	y_command c = y_command_of(arguments, count, environment, variables);
+	int out = -1;
+	if (output.len > 0) {
+		char *to = y_cstr(output);
+		out = open(to, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+		free(to);
+		if (out < 0) {
+			y_command_free(c);
+			return 0;
+		}
+	}
+	uv_stdio_container_t stdio[3];
+	stdio[0].flags = UV_INHERIT_FD;
+	stdio[0].data.fd = 0;
+	for (int index = 1; index < 3; index++) {
+		stdio[index].flags = UV_INHERIT_FD;
+		stdio[index].data.fd = out >= 0 ? out : index;
+	}
+	char *in = dir.len > 0 ? y_cstr(dir) : NULL;
+	uv_process_options_t options;
+	memset(&options, 0, sizeof options);
+	options.file = c.argv[0];
+	options.args = c.argv;
+	options.env = c.envp;
+	options.cwd = in;
+	options.stdio_count = 3;
+	options.stdio = stdio;
+	options.exit_cb = y_child_exited;
+	y_child *child = calloc(1, sizeof(y_child));
+	if (!child) y_die("out of memory");
+	child->process.data = child;
+	child->task = y_async_now;
+	fflush(NULL);
+	const int started = uv_spawn(uv_default_loop(), &child->process, &options);
+	if (out >= 0) close(out);
+	free(in);
+	y_command_free(c);
+	if (started != 0) {
+		// (a handle uv_spawn failed for is still closed)
+		uv_close((uv_handle_t *)&child->process, y_child_closed);
+		return 0;
+	}
+	y_trace_waits("a child process");
+	y_uv_pending++;
+	child->next = y_children;
+	y_children = child;
+	return (int64_t)(uintptr_t)child;
+}
+
+// std:build's, as a build program declares (no task to park: it is not running yet)
+
+/** dir's names (not . nor ..), each ended by a newline, a directory's by "/" and a newline; "" where it cannot be read. */
+ystr yel_build_entries(ystr dir) {
+	char *at = y_cstr(dir);
+	DIR *opened = opendir(at);
+	if (!opened) {
+		free(at);
+		return (ystr){ 0, "" };
+	}
+	size_t length = 0, capacity = 256;
+	char *out = malloc(capacity);
+	for (struct dirent *entry = readdir(opened); entry; entry = readdir(opened)) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+		const size_t name = strlen(entry->d_name);
+		char *full = malloc(strlen(at) + name + 2);
+		sprintf(full, "%s/%s", at, entry->d_name);
+		struct stat st;
+		const bool directory = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
+		free(full);
+		while (length + name + 2 > capacity) out = realloc(out, capacity *= 2);
+		if (length > 0) out[length++] = '\n';
+		memcpy(out + length, entry->d_name, name);
+		length += name;
+		if (directory) out[length++] = '/';
+	}
+	closedir(opened);
+	free(at);
+	const ystr names = y_str_of(out, (int64_t)length);
+	free(out);
+	return names;
+}
+
+/** Whether at is a file that can be run. */
+bool yel_build_runnable(ystr at) {
+	char *path = y_cstr(at);
+	struct stat st;
+	const bool runnable = stat(path, &st) == 0 && S_ISREG(st.st_mode) && access(path, X_OK) == 0;
+	free(path);
+	return runnable;
+}
+
+/** How many programs can usefully run at once: the system's cores (libuv's count). */
+int64_t yel_build_parallelism(void) { return (int64_t)uv_available_parallelism(); }
+
+bool yel_process_done(int64_t child) { return ((y_child *)(uintptr_t)child)->done; }
+int64_t yel_process_status(int64_t child) { return ((y_child *)(uintptr_t)child)->status; }
+
+yunit yel_process_free(int64_t child) {
+	y_child *done = (y_child *)(uintptr_t)child;
+	for (y_child **at = &y_children; *at; at = &(*at)->next) {
+		if (*at == done) {
+			*at = done->next;
+			break;
+		}
+	}
+	uv_close((uv_handle_t *)&done->process, y_child_closed);
+	return 0;
 }
 #endif

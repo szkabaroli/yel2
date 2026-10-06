@@ -77,6 +77,14 @@ resource Checker {
 }
 
 module checker {
+    // what a view in another's tree is given each prop through (lower.yel's: view-set-<prop>)
+    const PROP-SETTER: string = "view-set-";
+    // and what reads one kept current is typed by (lower.yel's: view-as-<prop>)
+    const PROP-AS: string = "view-as-";
+    // what a widget's element is made through (lower.yel's: widget-<Tag>-make, -set-<attribute>,
+    // -on-<event>, -container), each of the module of a widget set in scope
+    const WIDGET-FUNC: string = "widget-";
+
     // an error at what is being checked (the innermost expression), told: the checker goes on (what
     // was wrong given the error type, which fits anything)
     type-error: func(c: Checker, message: string) { tell(c, diagnostics.error(c.span, message, "")); }
@@ -106,6 +114,132 @@ module checker {
             diagnostics.note(d, "a WIT func that needs a WIT type that is not known is left out");
         }
         tell(c, d);
+    }
+
+    // a prop a view in another's tree is given that its view has not (its module's view-set-<prop>,
+    // lower.yel's: one for each field of the view not @(private))
+    no-prop: func(c: Checker, module: string, setter: string, key: string) {
+        let prefix = if setter.starts-with(PROP-AS) { PROP-AS } else { PROP-SETTER };
+        let prop = prop-name(setter.substring(prefix.len(), setter.len()));
+        // (items given: its children, which only a view with #children takes)
+        if prop == "view-children" {
+            let given = diagnostics.error(c.span, "the view of module {module} takes no items: it has no #children", "");
+            diagnostics.help(given, "put #children in its tree where what it is given goes");
+            tell(c, given);
+            return;
+        }
+        let d = diagnostics.error(c.span, "the view of module {module} has no prop {prop}", "");
+        let props: list<string> = [];
+        for f in funcs-of(c, key) {
+            if f.starts-with(PROP-SETTER) { props.push(prop-name(f.substring(PROP-SETTER.len(), f.len()))); }
+        }
+        let like = diagnostics.closest(prop, props);
+        if like != "" { diagnostics.help(d, "did you mean {like}?"); }
+        diagnostics.note(d, "a view's props are its fields, but those @(private)");
+        tell(c, d);
+    }
+
+    // the f of the module x's type is declared in (pkg/module.T: pkg/module.f), where it is
+    // visible here and takes x first ("": none such, or x's type in no module)
+    type-module-key: func(c: Checker, target: Expr, f: string, args: list<Expr>) -> string {
+        let named = match resolve(check(c, target, fresh(c), "a method's target")) {
+            named(n) => name-text(n),
+            _ => { return ""; }
+        };
+        // (a module's type: pkg/module.T, or module.T; one of a package's top level, pkg/T or T,
+        // has no module)
+        let dot = named.len() - base-name(named).len() - 1;
+        if dot <= 0 || named.byte-at(dot) != 46 { return ""; }
+        let key = named.substring(0, dot) + "." + f;
+        if !c.symbols.funcs.has(key) || !visible(c, c.scope, key) || !takes-first(c, key, args) { return ""; }
+        key
+    }
+
+    // the modules a widget's funcs may be in: those included where sc is, and its package's
+    widget-modules: func(c: Checker, sc: Scope) -> list<string> {
+        let out: list<string> = [];
+        for key in sc.includes.values() { if !out.contains(key) { out.push(key); } }
+        for m in sc.pkg.modules.keys() {
+            let key = sc.pkg.prefix + m;
+            if !out.contains(key) { out.push(key); }
+        }
+        out
+    }
+
+    // a widget's func not found (widget-Tag-what): told as what is missing. A widget not found is
+    // told once, at its make (its attributes', events' and items' calls say nothing more)
+    no-widget: func(c: Checker, n: string) {
+        let rest = n.substring(WIDGET-FUNC.len(), n.len());
+        let dash = find-byte(rest, 45).unwrap-or(-1);
+        if dash < 0 { type-error(c, "no func {n}"); return; }
+        let tag = rest.substring(0, dash);
+        let what = rest.substring(dash + 1, rest.len());
+        let widgets: list<string> = [];
+        let parts: list<string> = [];
+        let known = false;
+        for key in widget-modules(c, c.scope) {
+            for f in funcs-of(c, key) {
+                if !f.starts-with(WIDGET-FUNC) { continue; }
+                let inner = f.substring(WIDGET-FUNC.len(), f.len());
+                let at = find-byte(inner, 45).unwrap-or(-1);
+                if at < 0 { continue; }
+                let name = inner.substring(0, at);
+                let part = inner.substring(at + 1, inner.len());
+                if part == "make" && !widgets.contains(name) { widgets.push(name); }
+                if name == tag {
+                    known = true;
+                    parts.push(part);
+                }
+            }
+        }
+        if what == "make" {
+            let d = diagnostics.error(c.span, "no widget {tag}", "");
+            let like = diagnostics.closest(tag, widgets);
+            if like != "" { diagnostics.help(d, "did you mean {like}?"); }
+            diagnostics.note(d, "a widget is a widget set's, its module included (from \"yel:widgets\" include meshx;)");
+            tell(c, d);
+            return;
+        }
+        // (its widget not found: told at its make)
+        if !known { return; }
+        if what == "container" {
+            type-error(c, "{tag} is not a container: it takes no items");
+            return;
+        }
+        // (one it may not hold: told only where it holds parts, a container with none is told
+        // at container)
+        if what.starts-with("holds-") {
+            let holds: list<string> = [];
+            for part in parts { if part.starts-with("holds-") { holds.push(part.substring(6, part.len())); } }
+            if holds.len() == 0 { return; }
+            let held = what.substring(6, what.len());
+            type-error(c, "{tag} holds {holds.join(", ")}, not {held}");
+            return;
+        }
+        let kind = if what.starts-with("on-") || what.starts-with("when-") { "event" } else { "attribute" };
+        let prefix = if what.starts-with("when-") { "when-" } else if kind == "event" { "on-" } else if what.starts-with("as-") { "as-" } else if what.starts-with("value-") { "value-" } else { "set-" };
+        let name = what.substring(prefix.len(), what.len());
+        let names: list<string> = [];
+        for part in parts { if part.starts-with(prefix) { names.push(part.substring(prefix.len(), part.len())); } }
+        let d = diagnostics.error(c.span, "{tag} has no {kind} {if kind == "event" { "on." } else { "" }}{name}", "");
+        let like = diagnostics.closest(name, names);
+        if like != "" { diagnostics.help(d, "did you mean {if kind == "event" { "on." } else { "" }}{like}?"); }
+        tell(c, d);
+    }
+
+    // the attribute a widget's func of that part is for (widget-Tag-set-name, part -set-: name;
+    // "" for another func)
+    widget-attribute: func(f: string, part: string) -> string {
+        if !f.starts-with(WIDGET-FUNC) { return ""; }
+        match f.find(part) {
+            some(i) => f.substring(i + part.len(), f.len()),
+            none => "",
+        }
+    }
+
+    // a prop as it is written: a callback's field (on-name) on.name
+    prop-name: func(field: string) -> string {
+        if field.starts-with("on-") { "on.{field.substring(3, field.len())}" } else { field }
     }
 
     // the names a name may be here: the locals in scope, the funcs, the constants and the cases
@@ -370,6 +504,14 @@ module checker {
             span: { source: -1, line: 0, col: 0, end-line: 0, end-col: 0, }, scope: blank-scope(file),
             prelude: prelude, loops: 0,
         };
+        // (a cache kept: its funcs' bodies taken where every declaration's interface and the
+        // sources read are as its check found them: no body's check reads more)
+        let sources = context.sources.map({ x -> x.path });
+        let reusing = match context.cache {
+            some(cache) => same-texts(cache.interface, context.interface) && same-texts(cache.sources, sources),
+            none => false,
+        };
+        let kept: map<string, CheckedBody> = map.new();
         // the builtins, by name: the prelude's funcs (keyed by their names) and the standard
         // library's
         for d in decls {
@@ -430,6 +572,10 @@ module checker {
             }
         }
         for d in decls {
+            // (each declaration's errors its own: a global's or a const's check before it leaves
+            // in-func its own)
+            c.in-func = "the declarations";
+            c.quiet = false;
             match d {
                 record-decl(r) => {
                     r.field-types = resolve-types(c, r.scope, r.field-types, []);
@@ -496,14 +642,83 @@ module checker {
                     for k in v.cases { k.payload = known(c, k.payload, "variant {v.name}", false); }
                 }
                 func-decl(f) => {
+                    // (one declared twice, told: its body is not the signature kept's, so unchecked)
+                    match c.symbols.funcs.get(f.name) {
+                        some(sig) => { if sig.params.len() != f.params.len() { continue; } }
+                        none => {}
+                    }
                     check-crossings(c, f);
-                    check-func(c, f);
+                    checked-func(c, f, reusing, kept);
                 }
                 _ => {}
             }
         }
         note-type-uses(c);
+        // (what the next check of the program may take: what this one checked and kept)
+        match context.cache {
+            some(cache) => {
+                cache.funcs = kept;
+                cache.interface = context.interface;
+                cache.sources = sources;
+            }
+            none => {}
+        }
         c.sites
+    }
+
+    // whether two lists hold the same texts, in the same order
+    same-texts: func(a: list<string>, b: list<string>) -> bool {
+        if a.len() != b.len() { return false; }
+        for index in 0..a.len() { if a[index] != b[index] { return false; } }
+        true
+    }
+
+    // a func checked; or, where the cache has it as it is written now and nothing any body's
+    // check reads has changed (reusing), its body as that check left it, and what it made and told
+    // (its effect sites, its notes, its errors) told again. What it is now kept, by its text
+    checked-func: func(c: Checker, f: Func, reusing: bool, kept: map<string, CheckedBody>) {
+        begin-func(c, f);
+        let cache = match c.context.cache {
+            some(x) => x,
+            none => {
+                check-body(c, f);
+                return;
+            }
+        };
+        let key = c.context.func-texts.get(f).unwrap-or("");
+        if reusing && key != "" && cache.funcs.has(key) {
+            let old = cache.funcs[key];
+            f.body = old.func.body;
+            f.marks = old.func.marks;
+            f.unit = old.func.unit;
+            f.bindings = old.func.bindings;
+            f.is-generator = old.func.is-generator;
+            for site in old.sites { c.sites.push(site); }
+            for u in old.uses { c.context.uses.push(u); }
+            for x in old.locals { c.context.locals.push(x); }
+            for m in old.members { c.context.members.push(m); }
+            for b in old.bodies { c.context.bodies.push(b); }
+            for d in old.errors { diagnostics.report(c.context, d); }
+            kept.set(key, { func: f, sites: old.sites, uses: old.uses, locals: old.locals, members: old.members, bodies: old.bodies, errors: old.errors, });
+            return;
+        }
+        let sites = c.sites.len();
+        let uses = c.context.uses.len();
+        let locals = c.context.locals.len();
+        let members = c.context.members.len();
+        let bodies = c.context.bodies.len();
+        let errors = c.context.errors.len();
+        check-body(c, f);
+        if key == "" { return; }
+        kept.set(key, {
+            func: f,
+            sites: c.sites.slice(sites, c.sites.len()),
+            uses: c.context.uses.slice(uses, c.context.uses.len()),
+            locals: c.context.locals.slice(locals, c.context.locals.len()),
+            members: c.context.members.slice(members, c.context.members.len()),
+            bodies: c.context.bodies.slice(bodies, c.context.bodies.len()),
+            errors: c.context.errors.slice(errors, c.context.errors.len()),
+        });
     }
 
     // ---- uses: each name resolved, and what it names (Context.uses: analysis's, a language server's)
@@ -665,6 +880,19 @@ module checker {
         }
         let out: list<string> = [];
         if sc.module != "" { out.push(sc.pkg.prefix + sc.module + "." + n); }
+        // (a widget's: the module of a widget set in scope, included or the package's own. What
+        // one holds (widget-Tag-holds-Part) is its part's, else holds-any: a container that holds
+        // anything)
+        if kind == "func" && n.starts-with(WIDGET-FUNC) {
+            for key in widget-modules(c, sc) { out.push(key + "." + n); }
+            match n.find("-holds-") {
+                some(at) => {
+                    let any = n.substring(0, at) + "-holds-any";
+                    for key in widget-modules(c, sc) { out.push(key + "." + any); }
+                }
+                none => {}
+            }
+        }
         // (a program without a package's name keys its items as the prelude does: a prelude's func
         // is the prelude's)
         if !(kind == "func" && sc.pkg.prefix == "" && c.prelude.has(n)) { out.push(sc.pkg.prefix + n); }
@@ -1289,7 +1517,11 @@ module checker {
     // a func's symbol, with whether it is async, an extern, and a WIT interface's func
     add-sig: func(c: Checker, n: string, sig: FuncSymbol, is-async: bool, is-extern: bool, wit-module: string) {
         c.span = sig.span;
-        if c.symbols.funcs.has(n) { type-error(c, "func {n} is declared twice"); }
+        // (declared again: told, the first kept)
+        if c.symbols.funcs.has(n) {
+            type-error(c, "func {n} is declared twice");
+            return;
+        }
         sig.is-async = is-async;
         sig.is-extern = is-extern;
         sig.wit-module = wit-module;
@@ -1319,7 +1551,8 @@ module checker {
 
     // a directive's value where it is written (as Odin's): #file, its file's path; #line and
     // #column, its place's; #func, the func it is in; #location, all of them (std's
-    // source-location). #caller-location and #caller-expression are a parameter's default's only:
+    // source-location); #embed(path), a file's bytes (as Zig's @embedFile: the path from the
+    // file's directory, or one yelc --embed names). #caller-location and #caller-expression are a parameter's default's only:
     // the call's
     directive-value: func(c: Checker, e: Expr, d: Directive, want: Type) -> Type {
         let place = e.span;
@@ -1339,11 +1572,34 @@ module checker {
             e.kind = location-literal(c, place);
             return check(c, e, location-type(c), "#location");
         }
+        if d.name == "embed" {
+            // (the file read as the sources were: diagnostics.read-embeds)
+            let name = match d.args.get(0) {
+                some(given) => match given.kind {
+                    str-lit(written) => written,
+                    _ => "",
+                },
+                none => "",
+            };
+            if name == "" || d.args.len() != 1 {
+                type-error(c, "#embed takes the file's path, a string written out: #embed(\"motd.txt\")");
+                return Type.error-type;
+            }
+            let at = diagnostics.embed-path(c.context, source-path(c, place), name);
+            match c.context.embeds.get(at) {
+                some(text) => { e.kind = ExprKind.str-lit(text); }
+                none => {
+                    type-error(c, "#embed: cannot read {at}");
+                    return Type.error-type;
+                }
+            }
+            return Type.string-type;
+        }
         if d.name == "caller-location" || d.name == "caller-expression" {
             type-error(c, "#{d.name} is a parameter's default: the {if d.name == "caller-location" { "place" } else { "text" }} of a call that leaves it out");
             return Type.error-type;
         }
-        type-error(c, "#{d.name}: no such directive (#file, #line, #column, #func, #location; a parameter's default: #caller-location, #caller-expression(param))");
+        type-error(c, "#{d.name}: no such directive (#file, #line, #column, #func, #location, #embed(path); a parameter's default: #caller-location, #caller-expression(param))");
         Type.error-type
     }
 
@@ -1478,14 +1734,25 @@ module checker {
     }
 
     check-func: func(c: Checker, f: Func) {
+        begin-func(c, f);
+        check-body(c, f);
+    }
+
+    // a func's check begun: the checker's state set for it, and its parameters' defaults checked
+    // (its signature's: checked whatever its body)
+    begin-func: func(c: Checker, f: Func) {
         c.quiet = false;
         c.in-func = f.name;
         c.bindings = f.bindings;
         c.scope = f.scope;
         c.span = f.span;
         c.type-params = f.type-params;
+        check-defaults(c, c.symbols.funcs[f.name]);
+    }
+
+    // a func's body checked (begin-func's first)
+    check-body: func(c: Checker, f: Func) {
         let sig = c.symbols.funcs[f.name];
-        check-defaults(c, sig);
         c.scopes = [];
         c.marks = [];
         c.depths = [];
@@ -1552,12 +1819,14 @@ module checker {
             match b.stmts[i] {
                 let-stmt(l) => {
                     let t = fresh(c);
+                    // (a let the compiler made, written nowhere: told where its value is)
+                    if c.span.source < 0 { c.span = l.value.span; }
                     match l.ty {
                         some(ty) => {
                             t = known(
                                 c,
                                 generalize(resolve-type(c, c.scope, ty, c.type-params), c.type-params),
-                                "the type of {l.name}",
+                                if l.mark.span.source < 0 { "a view's tag" } else { "the type of {l.name}" },
                                 true,
                             );
                         }
@@ -1960,7 +2229,19 @@ module checker {
         // whether it is a start's call (read before the argument's own calls clear it)
         let started = c.starting;
         c.starting = false;
-        let what = "argument {i + 1} of {callee}";
+        let what = if widget-attribute(base-name(callee), "-as-") != "" {
+            "attribute {widget-attribute(base-name(callee), "-as-")}"
+        } else if widget-attribute(base-name(callee), "-value-") != "" {
+            "attribute {widget-attribute(base-name(callee), "-value-")}"
+        } else if widget-attribute(base-name(callee), "-set-") != "" {
+            "attribute {widget-attribute(base-name(callee), "-set-")}"
+        } else if base-name(callee).starts-with(PROP-AS) {
+            "prop {prop-name(base-name(callee).substring(PROP-AS.len(), base-name(callee).len()))}"
+        } else if base-name(callee).starts-with(PROP-SETTER) {
+            "prop {prop-name(base-name(callee).substring(PROP-SETTER.len(), base-name(callee).len()))}"
+        } else {
+            "argument {i + 1} of {callee}"
+        };
         let saved = c.span;
         c.span = arg.span;
         // a readonly parameter is the call's (what it is lent, it reads: a borrow, checked below
@@ -2421,7 +2702,11 @@ module checker {
                     if c.noting { note-use(c, m.target.span, mk, none); }
                     let key = member(c, mk, m.name, "func");
                     if key == "" {
-                        wit-not-found(c, "module {expr-name(m.target)} has no func {m.name}", m.name, mk);
+                        if m.name.starts-with(PROP-SETTER) || m.name.starts-with(PROP-AS) {
+                            no-prop(c, expr-name(m.target), m.name, mk);
+                        } else {
+                            wit-not-found(c, "module {expr-name(m.target)} has no func {m.name}", m.name, mk);
+                        }
                         return Type.error-type;
                     }
                     e.kind = ExprKind.call({ name: key, args: m.args, type-args: [], name-span: m.name-span, });
@@ -2456,6 +2741,16 @@ module checker {
                         }
                         _ => {}
                     }
+                }
+                // x.f(a): the f of the module x's type is declared in, where it takes x first (a
+                // module's funcs on its own types are their methods wherever they go: b.component(…)
+                // of std:build's builder)
+                let typed = type-module-key(c, m.target, m.name, args);
+                if typed != "" {
+                    if c.noting { note-use(c, m.name-span, typed, none); }
+                    e.kind = ExprKind.call({ name: typed, args: args, type-args: [], name-span: m.name-span, });
+                    own-call();
+                    return infer(c, e, want);
                 }
                 // x.f(a): the module's own f (or its package's) where its first parameter takes x,
                 // else the one of the builtins named f that does (a set's add in a module with an
@@ -2796,7 +3091,9 @@ module checker {
         for a in args {
             if is-error(check(c, a, fresh(c), "an argument of {n}")) { echo = true; }
         }
-        if !echo { type-error(c, "no func {n}"); }
+        if !echo {
+            if n.starts-with(WIDGET-FUNC) { no-widget(c, n); } else { type-error(c, "no func {n}"); }
+        }
         Type.error-type
     }
 
@@ -4473,14 +4770,20 @@ module checker {
         }
     }
 
-    // a constant: its value a literal, of its type (when written)
+    // a constant: its value a literal (or a directive, which is one where it is written), of its
+    // type (when written)
     check-const: func(c: Checker, x: ConstDecl) {
         c.quiet = false;
         c.span = x.span;
         c.scope = x.scope;
         c.in-func = "const {base-name(x.name)}";
-        if !is-literal(x.value) {
-            type-error(c, "a const's value is a literal: a number, a string, a char or a bool");
+        // (a directive a literal where it is written: #embed's file, #file, #line)
+        let directive = match x.value.kind {
+            directive(_) => true,
+            _ => false,
+        };
+        if !is-literal(x.value) && !directive {
+            type-error(c, "a const's value is a literal: a number, a string, a char or a bool (or a directive: #embed(path), #file, #line)");
         }
         match x.ty {
             some(t0) => {

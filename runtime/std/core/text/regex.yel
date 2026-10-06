@@ -121,6 +121,42 @@ module regex {
 
     // ---- what a matcher calls
 
+    // A matcher keeps a stack of threes: a choice (where to go on, at, and -1), and a slot's value
+    // before it was set (-1, the slot, its value). A failure goes back to the last choice, the
+    // slots set since given back their values
+
+    // a choice kept: going on at to, from at, if what follows fails
+    choose: func(stack: list<s64>, to: s64, at: s64) {
+        stack.push(to);
+        stack.push(at);
+        stack.push(-1);
+    }
+
+    // slot set to at, its value before kept
+    save: func(stack: list<s64>, slots: list<s64>, slot: s64, at: s64) {
+        stack.push(-1);
+        stack.push(slot);
+        stack.push(slots[slot]);
+        slots[slot] = at;
+    }
+
+    // back to the last choice, the slots set since given back: where it goes on (its at left on
+    // the stack), -1 for none (no match from here)
+    back: func(stack: list<s64>, slots: list<s64>) -> s64 {
+        loop {
+            if stack.len() == 0 { return -1; }
+            let value = stack.pop();
+            let where = stack.pop();
+            let to = stack.pop();
+            if to == -1 {
+                slots[where] = value;
+            } else {
+                stack.push(where);
+                return to;
+            }
+        }
+    }
+
     // the code point at at, and its length in bytes: (code << 3) | length (a byte no UTF-8 starts
     // with: itself, one byte)
     next-code: func(text: string, at: s64) -> s64 {

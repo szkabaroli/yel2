@@ -19,9 +19,10 @@ YELC=${YELC:-build/yelc2}
 [ $# -ge 1 ] || { echo "usage: tools/test-component.sh <package> [names...]"; exit 2; }
 package=$1
 shift
-out=build/test-component
-mkdir -p "$out"
 name=$(basename "$package" .yel)
+# (a directory of its own, each package's and backend's: several may run at once)
+out=build/test-component/${BACKEND:-c}-$name
+mkdir -p "$out"
 if [ "${BACKEND:-c}" = bitcode ]; then
 	"$YELC" test "$package" "$out/$name.bc" --wit "$out/$name-wit" --backend bitcode --triple wasm32-unknown-wasip3 || exit 1
 	"$WASI_SDK/bin/clang" --target=wasm32-wasip3 -O2 -c -emit-llvm -Iruntime -o "$out/runtime-wasm.bc" runtime/yel.c || exit 1

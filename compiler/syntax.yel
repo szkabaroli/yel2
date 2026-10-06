@@ -8,9 +8,7 @@
 record Span { source: s64, line: s64, col: s64, end-line: s64, end-col: s64, }
 
 // a file the compiler read: its path and its text (the program's sources, in the order read)
-// origin: where what made it is written, for a source made, not read (a view's lowered yel: its
-// name's span), none for a file
-record Source { path: string, text: string, origin: option<Span>, }
+record Source { path: string, text: string, }
 
 // indent: a multiline string's (the spaces taken off each of its lines), -1 for any other token
 record Token {
@@ -316,7 +314,9 @@ resource GlobalDecl { span: Span, scope: Scope, name: string, ty: Type, value: o
 // included one), its module and a dot (at a module's top), and its name: `lex`, `lexer.lex`,
 // `yel:ui/api.render`.
 // a module's: yel's own (""), or extern (a WIT package's interface, which the host implements)
-type direction = "" | "extern";
+// a module's: its package's own (""), a WIT interface it imports ("extern"), or a widget set's,
+// never an interface ("widgets")
+type direction = "" | "extern" | "widgets";
 
 resource Package {
     id: string,
@@ -327,15 +327,24 @@ resource Package {
     // the modules not everyone may name (@(private) module m { … }), by name
     private-modules: map<string, Visibility>,
     state: s64,
+    // read from a WIT package (its interfaces made modules), not written in yel
+    wit: bool,
+    // whether it declares a view (its view-host module then added: packages.yel), and where its
+    // views' dom comes from (an include's spec, as a view's file writes it; "": the package's own)
+    views: bool,
+    views-dom: string,
+    // included by the program (not its root package): known as it is read, before its id is
+    included: bool,
 }
 
 // whether a func declared where sc is is one of the component's exports: the program is a reactor
 // (no main: a component of exports; a command's modules are its own), the func is the program's
 // own (its root package's, keyed without a prefix), in one of its modules, and visible (itself,
 // and its module: a private module's items are private). Each such module is a WIT interface the
-// component exports; @(private) keeps a module or a func in
+// component exports; @(private) keeps a module or a func in, as does a widget set's module (its
+// funcs are views' to call, never the host's)
 is-export: func(sc: Scope, reactor: bool) -> bool {
-    reactor && sc.pkg.prefix == "" && sc.module != "" && sc.private == "" && sc.pkg.modules[sc.module] != "extern"
+    reactor && sc.pkg.prefix == "" && sc.module != "" && sc.private == "" && sc.pkg.modules[sc.module] == ""
 }
 
 // whether a program is a reactor: its root package has no func main
@@ -604,7 +613,7 @@ node: func(kind: ExprKind, span: Span) -> Expr { { kind: kind, span: span, ty: T
 // a scope of its own, in a package of its own (a file read alone: the prelude, an interpolation)
 blank-scope: func(file: string) -> Scope {
     {
-        pkg: { id: "", version: "", prefix: "", dir: "", modules: map.new(), private-modules: map.new(), state: 1, },
+        pkg: { id: "", version: "", prefix: "", dir: "", modules: map.new(), private-modules: map.new(), state: 1, wit: false, views: false, views-dom: "", included: false, },
         module: "",
         file: file,
         build: "",
@@ -683,13 +692,16 @@ enum NodeKind {
     case-decl,
     // a view: its fields, its element and what is in one
     view-decl,
+    // a widget: an element the host draws, its attributes and events (view-field nodes)
+    widget-decl,
     view-field,
     view-element,
     view-attribute,
-    view-handler,
     view-if,
     view-for,
     view-text,
+    // #children: where a view puts what the view it is in gives it
+    view-children,
     // types: a name (module.name), with its arguments (list<T>, result<T, E>, list<T, 3>), a
     // func's, (), { field: T }, a literal's (a value: "get", 3, -1), a range's (1..=9), T &
     // readonly, A | B

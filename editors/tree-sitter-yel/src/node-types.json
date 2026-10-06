@@ -449,6 +449,16 @@
           }
         ]
       },
+      "part": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
       "value": {
         "multiple": false,
         "required": false,
@@ -2042,6 +2052,10 @@
         },
         {
           "type": "view_declaration",
+          "named": true
+        },
+        {
+          "type": "widget_declaration",
           "named": true
         }
       ]
@@ -6456,6 +6470,10 @@
         {
           "type": "view_declaration",
           "named": true
+        },
+        {
+          "type": "widget_declaration",
+          "named": true
         }
       ]
     }
@@ -7282,12 +7300,26 @@
     "named": true,
     "fields": {
       "name": {
-        "multiple": false,
+        "multiple": true,
         "required": true,
         "types": [
           {
             "type": "identifier",
             "named": true
+          }
+        ]
+      },
+      "namespace": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "on",
+            "named": false
+          },
+          {
+            "type": "style",
+            "named": false
           }
         ]
       },
@@ -7470,6 +7502,16 @@
     "type": "view_element",
     "named": true,
     "fields": {
+      "module": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
       "tag": {
         "multiple": false,
         "required": true,
@@ -7485,6 +7527,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "directive",
+          "named": true
+        },
         {
           "type": "multiline_string",
           "named": true
@@ -7506,10 +7552,6 @@
           "named": true
         },
         {
-          "type": "view_handler",
-          "named": true
-        },
-        {
           "type": "view_if",
           "named": true
         }
@@ -7520,6 +7562,26 @@
     "type": "view_field",
     "named": true,
     "fields": {
+      "callback": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "on",
+            "named": false
+          }
+        ]
+      },
+      "derived": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "let",
+            "named": false
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
@@ -7594,7 +7656,7 @@
       },
       "value": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "binary_expression",
@@ -7978,6 +8040,10 @@
       "required": false,
       "types": [
         {
+          "type": "directive",
+          "named": true
+        },
+        {
           "type": "multiline_string",
           "named": true
         },
@@ -7998,40 +8064,10 @@
           "named": true
         },
         {
-          "type": "view_handler",
-          "named": true
-        },
-        {
           "type": "view_if",
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "view_handler",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "block",
-            "named": true
-          }
-        ]
-      },
-      "event": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
@@ -8162,6 +8198,10 @@
       "required": false,
       "types": [
         {
+          "type": "directive",
+          "named": true
+        },
+        {
           "type": "multiline_string",
           "named": true
         },
@@ -8179,10 +8219,6 @@
         },
         {
           "type": "view_for",
-          "named": true
-        },
-        {
-          "type": "view_handler",
           "named": true
         },
         {
@@ -8522,6 +8558,46 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "widget_declaration",
+    "named": true,
+    "fields": {
+      "base": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute",
+          "named": true
+        },
+        {
+          "type": "view_field",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -9088,6 +9164,10 @@
   },
   {
     "type": "wait",
+    "named": false
+  },
+  {
+    "type": "widget",
     "named": false
   },
   {

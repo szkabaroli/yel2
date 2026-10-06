@@ -60,6 +60,7 @@ module exprs {
                 add("is", 2);
                 add("test", 3);
                 add("flag", 1);
+                add("regex", 2);
             }
             char-t => { add("cast", 2); }
             string-t => {
@@ -67,6 +68,7 @@ module exprs {
                 add("interp", 5);
                 add("text-op", 4);
                 add("join", 1);
+                add("regex-replace", 1);
             }
             list-t(x) => {
                 add("list-op", 4);
@@ -108,6 +110,8 @@ module exprs {
         if k == "is" { return is-test(g, d); }
         if k == "test" { return test(g, d); }
         if k == "flag" { return flag(g, d); }
+        if k == "regex" { return regex-test(g, d); }
+        if k == "regex-replace" { return regex-replace(g, d); }
         if k == "concat" { return "({expr(g, Ty.string-t, d, true)} + {expr(g, Ty.string-t, d, true)})"; }
         if k == "interp" { return interp(g, d); }
         if k == "text-op" { return text-op(g, d); }
@@ -228,7 +232,7 @@ module exprs {
             anon-t(f) => f.types.any({ x -> needs-want(g, x) }),
             named-t(n) => {
                 let k = gen.decl(g, n).kind;
-                k == "record" || k == "strings" || k == "range" || k == "union"
+                k == "record" || k == "value" || k == "strings" || k == "range" || k == "union"
             }
             _ => false,
         }
@@ -239,6 +243,8 @@ module exprs {
         let signed = types.is-signed(n);
         let bits = types.bits(n);
         let roll = dice.below(g.dice, 10);
+        // (#line: the line it is on, a literal; a 16-bit type's and wider)
+        if bits > 8 && dice.chance(g.dice, 3) { return "#line"; }
         if roll < 4 { return "{dice.between(g.dice, 0, 9)}"; }
         if roll < 6 { return "{dice.between(g.dice, 10, 120)}"; }
         if roll == 6 {
@@ -260,14 +266,14 @@ module exprs {
     text-literal: func(g: Gen) -> string {
         dice.pick(g.dice, [
             "\"\"", "\"a\"", "\"hello\"", "\"get\"", "\"x y z\"", "\"tab\\there\"", "\"line\\n\"", "\"quote\\\"d\"",
-            "\"back\\\\slash\"", "\"héllo\"", "\"日本\"", "\"\\u\{1F600\}\"", "\",\"", "\"a,b,,c\"", "\"  padded  \"", "\"brace \\\{ \\\}\"",
+            "\"back\\\\slash\"", "\"héllo\"", "c\"if (a) \{ b; \}\"", "c\"\{ \}\"", "\"\"\"\nfirst line\n  second line\n\"\"\"", "\"日本\"", "\"\\u\{1F600\}\"", "\",\"", "\"a,b,,c\"", "\"  padded  \"", "\"brace \\\{ \\\}\"",
         ])
     }
 
     named-literal: func(g: Gen, decl: TypeDecl, depth: s64, wanted: bool) -> string {
         let d = depth + 1;
         let k = decl.kind;
-        if k == "record" {
+        if k == "record" || k == "value" {
             if !wanted { return gen.hoist(g, Ty.named-t(decl.name), depth); }
             let parts: list<string> = [];
             for i in 0..decl.names.len() { parts.push("{decl.names[i]}: {expr(g, decl.types[i], d, true)}"); }
@@ -436,7 +442,31 @@ module exprs {
             };
             parts.push(gen.lb() + name + spec + gen.rb());
         }
+        // (a C template's at times: its { an interpolation's only before a name, the rest C's)
+        if dice.chance(g.dice, 20) { return "c\"\{ " + parts.join("") + " \}\""; }
         "\"" + parts.join("") + "\""
+    }
+
+    // whether a regex matches a string: a literal compiled with the program (its flags too)
+    regex-test: func(g: Gen, d: s64) -> string {
+        let pattern = regex(g);
+        let how = dice.pick(g.dice, ["test", "find",]);
+        let text = expr(g, Ty.string-t, d, true);
+        if how == "find" { return "{pattern}.find({text}).is-some()"; }
+        "{pattern}.test({text})"
+    }
+
+    // a string with each of a regex's matches replaced
+    regex-replace: func(g: Gen, d: s64) -> string {
+        "{regex(g)}.replace-all({expr(g, Ty.string-t, d, true)}, {dice.pick(g.dice, ["\"-\"", "\"\"", "\"<$&>\"",])})"
+    }
+
+    // a regex literal: /pattern/flags, in parens
+    @(private) regex: func(g: Gen) -> string {
+        let pattern = dice.pick(g.dice, ["a+", "[a-z]+", "\\d+", "^h", "o$", "(ab|cd)", "x*", "[^ ]+", "\\s", "l\{2\}", "(?<word>\\w+)",]);
+        let flags = dice.pick(g.dice, ["", "", "i", "m",]);
+        // (in parens: after a block's } a / is a division's, where a statement may start)
+        "(/{pattern}/{flags})"
     }
 
     text-op: func(g: Gen, d: s64) -> string {
@@ -585,10 +615,13 @@ module exprs {
         g.results.push(out);
         g.loops.push(0);
         g.yields.push(none);
+        // (a closure's body: no wait in it)
+        g.asyncs.push(false);
         let e = gen.scoped(g, out, d, true);
         g.results.pop();
         g.loops.pop();
         g.yields.pop();
+        g.asyncs.pop();
         gen.pop-scope(g);
         e
     }
@@ -600,10 +633,13 @@ module exprs {
         g.results.push(out);
         g.loops.push(0);
         g.yields.push(none);
+        // (a closure's body: no wait in it)
+        g.asyncs.push(false);
         let e = gen.scoped(g, out, d, false);
         g.results.pop();
         g.loops.pop();
         g.yields.pop();
+        g.asyncs.pop();
         gen.pop-scope(g);
         e
     }
@@ -617,7 +653,7 @@ module exprs {
             _ => panic("fuzz: a closure of {types.show(t)}"),
         };
         // a top-level func of that type, by its name
-        let same = if !wanted { [] } else { g.funcs.filter({ fi -> fi.type-params.len() == 0 && !fi.yields && !fi.readonly.any({ r -> r }) && types.same(Ty.func-t({ params: fi.params, result: fi.result, }), t) && !fi.name.contains(".") }) };
+        let same = if !wanted { [] } else { g.funcs.filter({ fi -> fi.type-params.len() == 0 && !fi.yields && !fi.is-async && !fi.readonly.any({ r -> r }) && types.same(Ty.func-t({ params: fi.params, result: fi.result, }), t) && !fi.name.contains(".") }) };
         if same.len() > 0 && dice.chance(g.dice, 30) { return dice.pick(g.dice, same).name; }
         gen.push-scope(g);
         let params: list<string> = [];
@@ -629,6 +665,8 @@ module exprs {
         g.results.push(f.result);
         g.loops.push(0);
         g.yields.push(none);
+        // (a closure is no async func: no wait in it)
+        g.asyncs.push(false);
         let body = if !wanted {
             gen.scoped(g, f.result, d, false)
         } else if dice.chance(g.dice, 50) {
@@ -639,6 +677,7 @@ module exprs {
         g.results.pop();
         g.loops.pop();
         g.yields.pop();
+        g.asyncs.pop();
         gen.pop-scope(g);
         // { -> e } for none (a bare { e } is a block)
         let head = if params.len() > 0 { params.join(", ") + " -> " } else { "-> " };
@@ -679,6 +718,8 @@ module exprs {
         let args-of: list<list<Ty>> = [];
         for f in g.funcs {
             if f.yields { continue; }
+            // (an async func's call only where a wait may be written)
+            if f.is-async && !gen.in-async(g) { continue; }
             if f.type-params.len() == 0 {
                 if types.same(f.result, t) {
                     fits.push(f);
@@ -705,7 +746,7 @@ module exprs {
         let ps = args-of[i];
         let generic = f.type-params.len() > 0;
         let args: list<string> = [];
-        for k in 0..ps.len() {
+        for k in 0..decls.given(g, f) {
             if f.readonly[k] {
                 // a list made here: new, so readonly at once
                 args.push(literal(g, ps[k], d, true));
@@ -713,6 +754,14 @@ module exprs {
                 // a generic func's arguments say their types (its T is found from them)
                 args.push(expr(g, ps[k], d, !generic));
             }
+        }
+        // an async func's: waited for, or started (its future) and then waited for
+        if f.is-async {
+            let call = "{f.name}({args.join(", ")})";
+            if dice.chance(g.dice, 50) { return "(wait {call})"; }
+            let future = gen.fresh(g, "fut");
+            g.pending[g.pending.len() - 1].push("let {future} = start {call};");
+            return "(wait {future})";
         }
         // x.f(a): the first argument first, at times (not a module's func)
         if args.len() > 0 && !f.name.contains(".") && dice.chance(g.dice, 25) {
@@ -724,7 +773,7 @@ module exprs {
 
     // a record's field of type t: from a record (declared or anonymous) that has one
     field: func(g: Gen, t: Ty, d: s64, wanted: bool) -> string {
-        for decl in gen.decls-of(g, "record") {
+        for decl in g.decls.filter({ x -> x.kind == "record" || x.kind == "value" }) {
             for i in 0..decl.names.len() {
                 if types.same(decl.types[i], t) && dice.chance(g.dice, 50) {
                     return "{obj(g, Ty.named-t(decl.name), d)}.{decl.names[i]}";

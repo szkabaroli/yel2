@@ -60,6 +60,9 @@ resource Context {
     // interface the host calls, a test a call
     testing: bool,
     test-exports: bool,
+    // a component's of exports only (a reactor): collected only between turns (its exports call
+    // y_ready_turns), so its funcs keep no frames (no roots, no stack records traced)
+    turns: bool,
     overlays: map<string, string>,
     exits: bool,
     type-names: list<TypeName>,
@@ -71,10 +74,63 @@ resource Context {
     bodies: list<BodyScope>,
     // each file's syntax tree (an analysis's: syntax.yel's, lossless), by its source
     trees: map<s64, GreenNode>,
+    // what an earlier check of the same program kept (a language server's: what is unchanged
+    // since is not parsed or checked again), and what this check notes for the next: each
+    // declaration's interface (what other declarations' checks read of it), in order, and each
+    // func's text as written, where it is
+    cache: option<Incremental>,
+    interface: list<string>,
+    func-texts: map<Func, string>,
+    // #embed: the files yelc --embed name=path names, by name; each file an #embed reads, by its
+    // path (read as the sources are: the checker reads none itself)
+    embed-names: map<string, string>,
+    embeds: map<string, string>,
     // the declarations by key, as the checker resolves them (syntax.yel's Symbols): the
     // checker's, the generator's and an analysis's one table
     symbols: Symbols,
 }
+
+// what a check keeps for the next of the same program (a language server's, as its files are
+// edited): each file's tree as parsed from its text (the parse's errors with it), and each func's
+// body as checked, by its text as written where it is; with what every declaration's interface
+// was (each one's: a func's head, any other's whole text) and the sources read, in order. Where a
+// check's interface and sources are the last's, an unchanged func's body is not checked again:
+// what checking it made and told (its body's types and bindings, its effect sites, its notes, its
+// errors) is taken from here. Anything else is checked as if nothing were kept
+resource Incremental {
+    files: map<string, ParsedFile>,
+    funcs: map<string, CheckedBody>,
+    interface: list<string>,
+    sources: list<string>,
+}
+
+// (source: the index its errors' places are of, then)
+record ParsedFile { text: string, green: GreenNode, errors: list<Diagnostic>, source: s64, }
+
+// a func's body as checked, and what checking it made and told
+resource CheckedBody {
+    func: Func,
+    sites: list<EffectSite>,
+    uses: list<NameUse>,
+    locals: list<LocalExtent>,
+    members: list<MemberSite>,
+    bodies: list<BodyScope>,
+    errors: list<Diagnostic>,
+}
+
+// a diagnostic told again of another source: its places in from moved to to
+moved-diagnostic: func(d: Diagnostic, from: s64, to: s64) -> Diagnostic {
+    let labels: list<Label> = [];
+    for label in d.labels {
+        let at = label.span;
+        if at.source == from { at.source = to; }
+        labels.push({ span: at, message: label.message, primary: label.primary, });
+    }
+    { message: d.message, path: d.path, labels: labels, notes: d.notes, helps: d.helps, }
+}
+
+// a cache with nothing in it yet
+incremental: func() -> Incremental { { files: map.new(), funcs: map.new(), interface: [], sources: [], } }
 
 // a member's place after a dot (x.name, module.name, Type.name; zero wide where none is written yet:
 // x.), and what is before the dot: a value of type ty, a module (its key), or a type (its key)
@@ -171,18 +227,46 @@ module diagnostics {
     read-source: async func(context: Context, path: string) -> s64 {
         match context.overlays.get(path) {
             some(text) => {
-                context.sources.push({ path: path, text: text, origin: none, });
+                context.sources.push({ path: path, text: text, });
                 return context.sources.len() - 1;
             }
             none => {}
         }
         match wait read-file(path) {
             ok(text) => {
-                context.sources.push({ path: path, text: text, origin: none, });
+                context.sources.push({ path: path, text: text, });
                 context.sources.len() - 1
             }
             err(error) => {
                 fail("cannot read {path}: {error}")
+            }
+        }
+    }
+
+    // the file #embed(name) names in the file from: --embed name=path's path, else name as a path
+    // from from's directory
+    embed-path: func(context: Context, from: string, name: string) -> string {
+        match context.embed-names.get(name) {
+            some(at) => at,
+            none => {
+                if name.starts-with("/") { return name; }
+                match from.find-last("/") {
+                    some(slash) => from.substring(0, slash + 1) + name,
+                    none => name,
+                }
+            }
+        }
+    }
+
+    // the files a file's #embed directives name (names, in from) read, each once: what the
+    // checker puts in their place (one it cannot read is its error)
+    read-embeds: async func(context: Context, from: string, names: list<string>) {
+        for name in names {
+            let at = embed-path(context, from, name);
+            if context.embeds.has(at) { continue; }
+            match wait read-file(at) {
+                ok(text) => context.embeds.set(at, text),
+                err(_) => {}
             }
         }
     }
@@ -244,6 +328,20 @@ module diagnostics {
         }
     }
 
+    // a file, or a directory and everything in it, removed (nothing there: nothing done)
+    remove-all: async func(path: string) {
+        if wait is-dir(path) {
+            for name in wait entries(path) { wait remove-all(path + "/" + name); }
+            let root = working-dir();
+            let _ = wait root.remove-directory-at(path);
+            root.drop();
+            return;
+        }
+        let root = working-dir();
+        let _ = wait root.unlink-file-at(path);
+        root.drop();
+    }
+
     // a directory's entries, sorted (so what is made of them does not depend on the system)
     entries: async func(dir: string) -> list<string> {
         let root = working-dir();
@@ -276,6 +374,17 @@ module diagnostics {
             err(error) => {
                 fail("cannot read the directory {dir}: {error}")
             }
+        }
+    }
+
+    // whether something is at path
+    exists: async func(path: string) -> bool {
+        let root = working-dir();
+        let found = wait root.stat-at(types.path-flags.symlink-follow, path);
+        root.drop();
+        match found {
+            ok(_) => true,
+            err(_) => false,
         }
     }
 

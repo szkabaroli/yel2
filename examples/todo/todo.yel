@@ -1,0 +1,120 @@
+// A todo list as a yel view: an input whose text a view keeps (on.input: what an input carries),
+// Enter to add a task (on.keydown: the key), a row for each task kept by its id (a row stays when
+// others come and go, and is given its task when it changes: its checkbox told), a checkbox's
+// change (what a widget chose: its value, "true" or "false") and a button to remove one. A row is
+// a view of its own (task-row.TaskRow, in a module the component does not export): given its task,
+// it tells the list what was done to it (on.toggle, on.remove: callbacks), the list's state the
+// list's. The host is told only what changes: a row added, a checkbox set, the count's text.
+
+package yel:todo@0.1.0;
+
+from "yel:ui" include dom;
+from "yel:widgets" include meshx;
+
+// a task: its id (what its row is kept by), its title, whether it is done
+record task { id: s32, title: string, done: bool, }
+
+module app-component {
+    view App {
+        title: string = "Today";
+        @(private) draft: string = "";
+        @(private) tasks: list<task> = [];
+        @(private) made: s32 = 0;
+
+        Card {
+            title: title
+            VStack {
+                style.gap: 100.0
+                HStack {
+                    style.gap: 100.0
+                    Input {
+                        value: draft
+                        placeholder: "What needs doing?"
+                        aria-label: "New task"
+                        on.input: { change: input-change -> draft = change.value; }
+                        on.keydown: { pressed: key-event ->
+                            if pressed.key == "Enter" && draft.trim() != "" {
+                                made += 1;
+                                tasks = added(tasks, { id: made, title: draft.trim(), done: false, });
+                                draft = "";
+                            }
+                        }
+                    }
+                    Button {
+                        disabled: draft.trim() == ""
+                        "Add"
+                        on.click: { ->
+                            made += 1;
+                            tasks = added(tasks, { id: made, title: draft.trim(), done: false, });
+                            draft = "";
+                        }
+                    }
+                }
+                if tasks.len() == 0 {
+                    EmptyState {
+                        icon: "check-circle"
+                        title: "Nothing to do"
+                        description: "Add a task above."
+                    }
+                } else {
+                    Text {
+                        style.fg: "muted"
+                        "{left(tasks)} of {tasks.len()} left"
+                    }
+                }
+                for one in tasks key(one.id) {
+                    task-row.TaskRow {
+                        task: one
+                        on.toggle: { done -> tasks = marked(tasks, one.id, done); }
+                        on.remove: { -> tasks = tasks.filter({ other -> other.id != one.id }); }
+                    }
+                }
+            }
+        }
+    }
+
+    // tasks with one more at the end (a new list: the view's field set, so what reads it is told)
+    @(private) added: func(tasks: list<task>, one: task) -> list<task> {
+        let next = tasks.slice(0, tasks.len());
+        next.push(one);
+        next
+    }
+
+    // tasks with the one of id marked done or not
+    @(private) marked: func(tasks: list<task>, id: s32, done: bool) -> list<task> {
+        tasks.map({ one ->
+            if one.id != id { return one; }
+            let changed: task = { id: one.id, title: one.title, done: done, };
+            changed
+        })
+    }
+
+    // how many tasks are not done
+    @(private) left: func(tasks: list<task>) -> s64 { tasks.filter({ one -> !one.done }).len() }
+}
+
+// a task's row: its checkbox and its remove button, each telling the list (on.toggle, on.remove)
+@(private) module task-row {
+    view TaskRow {
+        task: task = { id: 0, title: "", done: false, };
+        on.toggle: func(bool);
+        on.remove: func();
+
+        HStack {
+            style.gap: 100.0
+            style.align: "center"
+            Checkbox {
+                checked: task.done
+                label: task.title
+                on.change: { value: string -> on.toggle(value == "true"); }
+            }
+            Button {
+                variant: "ghost"
+                size: "icon-sm"
+                aria-label: "Remove {task.title}"
+                Icon { name: "x" }
+                on.click: { -> on.remove(); }
+            }
+        }
+    }
+}
