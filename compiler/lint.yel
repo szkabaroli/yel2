@@ -1,0 +1,837 @@
+// The linter's side in the compiler: `yelc lint` checks a package, then runs the project's lint.yel
+// (std:lint: its rules, yel) in the interpreter, giving it the package's tree. The tree is the
+// checked declarations as std:lint's nodes, each with what the checker found it names: a local's
+// binding, a func's, a const's or a type's key (runtime/std/lint/lint.yel says what each kind
+// holds), and the uses the checker noted where the tree no longer has them (a const it put its
+// value in place of).
+
+module lint {
+    // yelc lint [package dir]... [-I <dir>]...: each package (the working directory's by default)
+    // checked, then the project's lint.yel (the nearest, here or above; else std:lint's recommended
+    // rules) run in the interpreter on their trees (lint.files() their files, one program's: what
+    // one uses of another's is a use), what the rules find told, 1 where one is an error
+    project: async func(argv: list<string>) -> s64 {
+        let dirs: list<string> = [];
+        let search: list<string> = [];
+        let at = 0;
+        loop {
+            if at >= argv.len() { break; }
+            if argv[at] == "-I" && at + 1 < argv.len() {
+                search.push(argv[at + 1]);
+                at += 2;
+            } else if argv[at] == "--help" {
+                print("usage: yelc lint [package dir]... [-I <dir>]...\n");
+                return 0;
+            } else {
+                dirs.push(argv[at]);
+                at += 1;
+            }
+        }
+        if dirs.len() == 0 { dirs.push("."); }
+        let prelude = if wait diagnostics.exists("runtime/prelude.yel") {
+            "runtime/prelude.yel"
+        } else {
+            home() + "/runtime/prelude.yel"
+        };
+        let targets: list<LintTarget> = [];
+        for dir in dirs { targets.push(wait checked(dir, prelude, search)); }
+        // lint.yel, here or above (none: the recommended rules)
+        let config = ".";
+        let found = false;
+        for level in 0..32 {
+            if wait diagnostics.exists(config + "/lint.yel") {
+                found = true;
+                break;
+            }
+            config = if config == "." { ".." } else { config + "/.." };
+        }
+        let overlays: map<string, string> = map.new();
+        let input = if found { config + "/lint.yel" } else { "lint.yel" };
+        if !found {
+            overlays.set(
+                input,
+                "from \"std:lint\" include lint, rules;\nmain: func() \{ lint.run(\{ l -> l.use(rules.recommended()); \}); \}\n",
+            );
+        }
+        let configuring = analysis.context(input, overlays);
+        configuring.mode = "resolve";
+        configuring.exits = true;
+        let rules = wait analysis.compile(configuring, prelude, search, false);
+        let hosted: map<string, func(Interp, list<Value>) -> Value> = map.new();
+        hosted.set("std:lint/lint.files", { run, _ ->
+            let all: list<Value> = [];
+            // (a target's keys as its own compile has them: another target's compile names it as
+            // a package it includes, its id and a / before each)
+            let roots = targets.map({ one -> one.package }).filter({ one -> one != "" });
+            for target in targets { for one in files(run, target, roots) { all.push(one); } }
+            Value.list({ items: all, fixed: false, version: 0, })
+        });
+        wait interp.run-hosted(rules.prog.decls, input, [], hosted)
+    }
+
+    // the package at dir checked only, each name's use noted (as for the language server: what a
+    // const or a case named is gone from the tree once checked); its errors told, and the end
+    @(private) checked: async func(
+        dir: string,
+        prelude: string,
+        search: list<string>,
+    ) -> LintTarget {
+        let checking = analysis.context(dir, map.new());
+        // (check's: its tests too, whose uses are uses)
+        checking.mode = "check";
+        checking.exits = false;
+        let compiled = wait analysis.compile(checking, prelude, search, false);
+        if checking.errors.len() > 0 {
+            checking.exits = true;
+            diagnostics.abort-if-errors(checking);
+        }
+        // (its own package: the one whose directory it is, else the first not std's nor WIT's)
+        let package = "";
+        let wanted = if dir.ends-with("/") { dir.substring(0, dir.len() - 1) } else { dir };
+        for declaration in compiled.prog.decls {
+            let scope = decl-scope(declaration);
+            let own = scope.pkg.id != "yel:std" && !scope.pkg.id.starts-with("std:")
+                && !scope.pkg.wit;
+            if !own { continue; }
+            if package == "" { package = scope.pkg.id; }
+            if scope.pkg.dir == wanted || scope.pkg.dir.ends-with("/" + wanted) {
+                package = scope.pkg.id;
+                break;
+            }
+        }
+        { decls: compiled.prog.decls, context: checking, package: package, prelude: prelude, }
+    }
+
+    // the package being linted: its checked declarations, their sources, and its package's id
+    resource LintTarget { decls: list<Decl>, context: Context, package: string, prelude: string, }
+
+    // the linted package's tree as std:lint's values (the run's records': i), a file each, its
+    // includes and declarations (each node: its kind, what the checker found it names, where it
+    // is)
+    @(private) files: func(run: Interp, target: LintTarget, roots: list<string>) -> list<Value> {
+        let linting: Linting = {
+            i: run,
+            context: target.context,
+            node-type: record-key(run, "std:lint/lint", "node"),
+            file-type: record-key(run, "std:lint/lint", "file"),
+            bindings: { exprs: map.new(), assigns: map.new(), },
+            numbers: map.new(),
+            roots: roots,
+            modules: map.new(),
+        };
+        // (each type's module, by its key: a type's key has none)
+        for declaration in target.decls {
+            let scope = decl-scope(declaration);
+            if scope.module == "" { continue; }
+            let name = match declaration {
+                record-decl(held) => held.name,
+                variant-decl(held) => held.name,
+                flags-decl(fl) => fl.name,
+                resource-decl(held) => held.name,
+                type-decl(held) => held.name,
+                _ => "",
+            };
+            if name != "" { linting.modules.set(name, canonical(linting, scope.pkg.prefix + scope.module)); }
+        }
+        let paths: list<string> = [];
+        let nodes: map<string, list<Value>> = map.new();
+        // each file's declarations' first lines and children, in order (where the checker's uses
+        // go: each in the declaration it is in)
+        let starts: map<string, list<tuple<s64, list<Value>>>> = map.new();
+        for declaration in target.decls {
+            let scope = decl-scope(declaration);
+            if scope.pkg.id != target.package { continue; }
+            let path = match decl-span(declaration) {
+                some(span) => source-path(linting, span),
+                none => scope.file,
+            };
+            if path == target.prelude { continue; }
+            if !nodes.has(path) {
+                paths.push(path);
+                nodes.set(path, []);
+                // (the file's includes, once)
+                for request in scope.requests {
+                    for alias in request.aliases {
+                        nodes.at(path).push(
+                            lint-node(
+                                linting,
+                                "include",
+                                alias,
+                                scope.includes.get-or(alias, ""),
+                                -1,
+                                false,
+                                [],
+                                request.span,
+                                [],
+                            )
+                        );
+                    }
+                }
+            }
+            let made = decl-node(linting, declaration);
+            let (node, children) = made;
+            nodes.at(path).push(node);
+            if !starts.has(path) { starts.set(path, []); }
+            match decl-span(declaration) {
+                some(span) => starts.at(path).push((span.line, children)),
+                none => {}
+            }
+        }
+        // what the checker found each name names (a const it put its value in place of, a case,
+        // a type): a use, in the declaration it is in (the last to start at or before it)
+        for one in target.context.uses {
+            if one.key == "" { continue; }
+            let path = source-path(linting, one.span);
+            match starts.get(path) {
+                some(declared) => {
+                    let within: option<list<Value>> = none;
+                    for each in declared {
+                        let (line, children) = each;
+                        if line <= one.span.line { within = some(children); }
+                    }
+                    match within {
+                        some(children) => children.push(
+                            lint-node(
+                                linting,
+                                "use",
+                                base-name(one.key),
+                                one.key,
+                                -1,
+                                false,
+                                [],
+                                one.span,
+                                [],
+                            )
+                        ),
+                        none => {}
+                    }
+                }
+                none => {}
+            }
+        }
+        paths.map({ path ->
+            Value.object({
+                type: linting.file-type,
+                fields: ["path", "nodes",],
+                values: [
+                    Value.text(path),
+                    Value.list({ items: nodes.at(path), fixed: false, version: 0, }),
+                ],
+                copied: false, anon: false, observers: Value.unit, ignored: [],
+            })
+        })
+    }
+
+    // what lint-files builds with: the program's records' keys, the func being built's bindings,
+    // and each binding's number (one for its declaration and every use)
+    resource Linting {
+        i: Interp,
+        context: Context,
+        node-type: string,
+        file-type: string,
+        bindings: Bindings,
+        numbers: map<Mark, s64>,
+        // the targets' package ids, whose keys another's compile gives with the id and a / first
+        roots: list<string>,
+        // each type's module, by its key
+        modules: map<string, string>,
+    }
+
+    // a record of module's of that name, by its key as the program has it
+    @(private) record-key: func(run: Interp, module: string, name: string) -> string {
+        for key in run.records.keys() {
+            if key.starts-with(module) && (key.ends-with("." + name) || key.ends-with("#" + name)) {
+                return key;
+            }
+        }
+        module + "." + name
+    }
+
+    @(private) source-path: func(linting: Linting, span: Span) -> string {
+        if span.source >= 0 && span.source < linting.context.sources.len() {
+            linting.context.sources[span.source].path
+        } else {
+            ""
+        }
+    }
+
+    // a node: std:lint's node
+    @(private) lint-node: func(
+        linting: Linting,
+        kind: string,
+        name: string,
+        given: string,
+        binding: s64,
+        written: bool,
+        attributes: list<string>,
+        span: Span,
+        children: list<Value>,
+    ) -> Value {
+        let key = canonical(linting, given);
+        // (the module of what it names: a type's where it is declared, else its key's to its last
+        // .)
+        let module = match linting.modules.get(key) {
+            some(found) => found,
+            none => match key.find-last(".") {
+                some(dot) => key.substring(0, dot),
+                none => "",
+            },
+        };
+        Value.object({
+            type: linting.node-type,
+            fields: [
+                "kind",
+                "name",
+                "key",
+                "module",
+                "binding",
+                "written",
+                "attributes",
+                "file",
+                "line",
+                "column",
+                "children",
+            ],
+            values: [
+                Value.text(kind), Value.text(name), Value.text(key), Value.text(module), Value.int({
+                    bits: binding as u64,
+                    kind: number-kind.s64,
+                }),
+                Value.bool(written), Value.list({
+                    items: attributes.map({ one -> Value.text(one) }),
+                    fixed: false,
+                    version: 0,
+                }),
+                Value.text(source-path(linting, span)), Value.int({
+                    bits: span.line as u64,
+                    kind: number-kind.s64,
+                }),
+                Value.int({ bits: span.col as u64, kind: number-kind.s64, }), Value.list({
+                    items: children,
+                    fixed: false,
+                    version: 0,
+                }),
+            ],
+            copied: false, anon: false, observers: Value.unit, ignored: [],
+        })
+    }
+
+    // a key as the target's own compile has it (another target's compile: its id and a / first)
+    @(private) canonical: func(linting: Linting, key: string) -> string {
+        for root in linting.roots {
+            if key.starts-with(root + "/") { return key.substring(root.len() + 1, key.len()); }
+        }
+        key
+    }
+
+    // a binding's number
+    @(private) binding-number: func(linting: Linting, mark: Mark) -> s64 {
+        match linting.numbers.get(mark) {
+            some(number) => number,
+            none => {
+                let number = linting.numbers.len();
+                linting.numbers.set(mark, number);
+                number
+            }
+        }
+    }
+
+    // a binding made: its node (where its name is written)
+    @(private) binding-node: func(linting: Linting, mark: Mark, origin: string) -> Value {
+        lint-node(
+            linting,
+            "binding",
+            mark.name,
+            "",
+            binding-number(linting, mark),
+            false,
+            [origin,],
+            mark.span,
+            [],
+        )
+    }
+
+    @(private) decl-scope: func(declaration: Decl) -> Scope {
+        match declaration {
+            func-decl(declared) => declared.scope,
+            extern-decl(declared) => declared.scope,
+            record-decl(declared) => declared.scope,
+            variant-decl(declared) => declared.scope,
+            flags-decl(fl) => fl.scope,
+            resource-decl(declared) => declared.scope,
+            const-decl(declared) => declared.scope,
+            global-decl(declared) => declared.scope,
+            type-decl(declared) => declared.scope,
+        }
+    }
+
+    @(private) decl-span: func(declaration: Decl) -> option<Span> {
+        match declaration {
+            func-decl(declared) => some(declared.span),
+            extern-decl(declared) => some(declared.span),
+            record-decl(declared) => some(declared.span),
+            variant-decl(declared) => some(declared.span),
+            flags-decl(fl) => some(fl.span),
+            resource-decl(declared) => some(declared.span),
+            const-decl(declared) => some(declared.span),
+            global-decl(declared) => some(declared.span),
+            type-decl(declared) => some(declared.span),
+        }
+    }
+
+    // (what one may name of it: one private to its package or its file)
+    @(private) privacy: func(scope: Scope) -> list<string> {
+        if scope.private != "" { ["private",] } else { [] }
+    }
+
+    // a declaration's node and its children (a list more may be put in: the checker's uses)
+    @(private) declared: func(
+        linting: Linting,
+        kind: string,
+        name: string,
+        key: string,
+        attributes: list<string>,
+        span: Span,
+        children: list<Value>,
+    ) -> tuple<Value, list<Value>> {
+        (lint-node(linting, kind, name, key, -1, false, attributes, span, children), children)
+    }
+
+    // a declaration's node, and its children (what more may be put among them)
+    @(private) decl-node: func(linting: Linting, declaration: Decl) -> tuple<Value, list<Value>> {
+        match declaration {
+            func-decl(held) => {
+                linting.bindings = held.bindings;
+                let attributes = privacy(held.scope);
+                if held.is-test { attributes.push("test"); }
+                if held.is-async { attributes.push("async"); }
+                if held.is-generator { attributes.push("generator"); }
+                // (one an interpolation calls: the checker's own test, or one named so)
+                if gen.is-display(held) || base-name(held.name) == "display" && held.params.len() == 1 {
+                    attributes.push("display");
+                }
+                if base-name(held.name) == "main" && held.scope.module == "" { attributes.push("main"); }
+                let children: list<Value> = [];
+                for mark in held.marks { children.push(binding-node(linting, mark, "param")); }
+                for one in held.param-types { type-refs(linting, one, held.span, children); }
+                type-refs(linting, held.result, held.span, children);
+                children.push(body-node(linting, held.body, "func"));
+                for default in held.defaults {
+                    match default {
+                        some(value) => children.push(expr-node(linting, value)),
+                        none => {}
+                    }
+                }
+                declared(linting, "func", base-name(held.name), held.name, attributes, held.span, children)
+            }
+            extern-decl(held) => {
+                let attributes = privacy(held.scope);
+                attributes.push("extern");
+                let children: list<Value> = [];
+                for one in held.param-types { type-refs(linting, one, held.span, children); }
+                type-refs(linting, held.result, held.span, children);
+                declared(linting, "func", base-name(held.name), held.name, attributes, held.span, children)
+            }
+            record-decl(held) => {
+                let children: list<Value> = [];
+                for one in held.field-types { type-refs(linting, one, held.span, children); }
+                declared(linting, "type", base-name(held.name), held.name, privacy(held.scope), held.span, children)
+            }
+            variant-decl(held) => {
+                let children: list<Value> = [];
+                for one in held.cases {
+                    if one.has-payload { type-refs(linting, one.payload, held.span, children); }
+                }
+                declared(linting, "type", base-name(held.name), held.name, privacy(held.scope), held.span, children)
+            }
+            flags-decl(fl) => declared(
+                linting,
+                "type",
+                base-name(fl.name),
+                fl.name,
+                privacy(fl.scope),
+                fl.span,
+                [],
+            ),
+            // (a WIT resource: the component's, its uses the host's too)
+            resource-decl(held) => declared(
+                linting,
+                "type",
+                base-name(held.name),
+                held.name,
+                ["exported",],
+                held.span,
+                [],
+            ),
+            const-decl(held) => {
+                linting.bindings = { exprs: map.new(), assigns: map.new(), };
+                declared(linting, "const", base-name(held.name), held.name, privacy(held.scope), held.span, [
+                    expr-node(linting, held.value),
+                ])
+            }
+            global-decl(held) => {
+                linting.bindings = { exprs: map.new(), assigns: map.new(), };
+                let children: list<Value> = [];
+                type-refs(linting, held.ty, held.span, children);
+                match held.value {
+                    some(value) => children.push(expr-node(linting, value)),
+                    none => {}
+                }
+                let attributes = privacy(held.scope);
+                if held.context { attributes.push("context"); }
+                declared(linting, "global", base-name(held.name), held.name, attributes, held.span, children)
+            }
+            // (an alias's uses are its target's once the checker resolved them: kept)
+            type-decl(held) => {
+                let children: list<Value> = [];
+                type-refs(linting, held.target, held.span, children);
+                let attributes = privacy(held.scope);
+                attributes.push("alias");
+                declared(linting, "type", base-name(held.name), held.name, attributes, held.span, children)
+            }
+        }
+    }
+
+    // a type's named parts, each a type-ref
+    @(private) type-refs: func(linting: Linting, given: Type, span: Span, out: list<Value>) {
+        match given {
+            named(written) => out.push(
+                lint-node(
+                    linting,
+                    "type-ref",
+                    base-name(name-text(written)),
+                    name-text(written),
+                    -1,
+                    false,
+                    [],
+                    span,
+                    [],
+                )
+            ),
+            list-type(item) => type-refs(linting, item, span, out),
+            option-type(item) => type-refs(linting, item, span, out),
+            readonly-type(item) => type-refs(linting, item, span, out),
+            future-type(item) => type-refs(linting, item, span, out),
+            seq-type(item) => type-refs(linting, item, span, out),
+            canonical-type(item) => type-refs(linting, item, span, out),
+            fixed-list(fixed) => type-refs(linting, fixed.item, span, out),
+            stream-type(streamed) => type-refs(linting, streamed.item, span, out),
+            result-type(outcome) => {
+                type-refs(linting, outcome.ok, span, out);
+                type-refs(linting, outcome.err, span, out);
+            }
+            map-type(mapped) => {
+                type-refs(linting, mapped.key, span, out);
+                type-refs(linting, mapped.value, span, out);
+            }
+            func-type(function) => {
+                for one in function.params { type-refs(linting, one, span, out); }
+                type-refs(linting, function.result, span, out);
+            }
+            tuple-type(xs) => { for one in xs { type-refs(linting, one, span, out); } }
+            union-type(xs) => { for one in xs { type-refs(linting, one, span, out); } }
+            anon-record(anonymous) => { for one in anonymous.types { type-refs(linting, one, span, out); } }
+            _ => {}
+        }
+    }
+
+    // a block as a body: its statements, and what it is the body of (func, for, loop, closure,
+    // if)
+    @(private) body-node: func(linting: Linting, block: Block, owner: string) -> Value {
+        let statements: list<Value> = [];
+        block-nodes(linting, block, statements);
+        lint-node(linting, "body", "", "", -1, false, [owner,], block.span, statements)
+    }
+
+    // ["float"] for a name of a float (x != x is its NaN test, no constant), else none
+    @(private) floats: func(expression: Expr) -> list<string> {
+        match settled-type(expression.ty) {
+            num(kind) => if kind == "f32" || kind == "f64" { ["float",] } else { [] },
+            _ => [],
+        }
+    }
+
+    // ["never"] for a call of a func that never returns, else none
+    @(private) never: func(expression: Expr) -> list<string> {
+        match expression.ty {
+            never-type => ["never",],
+            _ => [],
+        }
+    }
+
+    // a literal as written (a char's as its code point, a string's in quotes)
+    @(private) literal-text: func(expression: Expr) -> string {
+        match expression.kind {
+            int-lit(text) => text,
+            float-lit(text) => text,
+            char-lit(code) => "'{code}'",
+            bool-lit(truth) => if truth { "true" } else { "false" },
+            str-lit(quoted) => "\"{quoted}\"",
+            unary(negated) => if negated.op == "-" { "-" + literal-text(negated.value) } else { "" },
+            _ => "",
+        }
+    }
+
+    // a pattern as text: two arms whose patterns read the same match the same values (a binding
+    // reads *, whatever its name)
+    @(private) pattern-text: func(pattern: Pattern) -> string {
+        match pattern {
+            wild => "_",
+            literal(value) => literal-text(value),
+            name(reading) => if reading.kind == "case" { reading.name } else if reading.kind == "const" { reading.key } else { "*" },
+            case(variant-case) => "{variant-case.name}({pattern-text(variant-case.sub)})",
+            record(destructured) => {
+                let parts: list<string> = [];
+                for at in 0..destructured.fields.len() { parts.push("{destructured.fields[at]}: {pattern-text(destructured.patterns[at])}"); }
+                "\{" + parts.join(", ") + (if destructured.rest != "" { ", ..." } else { "" }) + "\}"
+            }
+            tuple(ps) => "(" + ps.map({ one -> pattern-text(one) }).join(", ") + ")",
+            alt(ps) => ps.map({ one -> pattern-text(one) }).join(" | "),
+            range(ranged) => literal-text(ranged.lo) + (if ranged.inclusive { "..=" } else { ".." }) + literal-text(ranged.hi),
+            typed(annotated) => "{pattern-text(annotated.sub)}: {shown-type(annotated.ty, true)}",
+            member(qualified) => "{shown-type(qualified.ty, true)}({pattern-text(qualified.sub)})",
+        }
+    }
+
+    // whether a pattern matches every value (_, a binding, a tuple of them)
+    @(private) catch-all: func(pattern: Pattern) -> bool {
+        match pattern {
+            wild => true,
+            name(reading) => reading.kind == "bind",
+            tuple(ps) => ps.all({ one -> catch-all(one) }),
+            _ => false,
+        }
+    }
+
+    // (each statement's place the block's: a break and a continue have none of their own)
+    @(private) block-nodes: func(linting: Linting, block: Block, out: list<Value>) {
+        for at in 0..block.stmts.len() { out.push(stmt-node(linting, block.stmts[at], block.spans[at])); }
+    }
+
+    @(private) stmt-node: func(linting: Linting, statement: Stmt, place: Span) -> Value {
+        match statement {
+            let-stmt(declared) => {
+                let children = [binding-node(linting, declared.mark, "let"),];
+                match declared.ty {
+                    some(written) => type-refs(linting, written, declared.mark.span, children),
+                    none => {}
+                }
+                children.push(expr-node(linting, declared.value));
+                lint-node(linting, "let", declared.name, "", -1, false, [], declared.mark.span, children)
+            }
+            let-pattern(destructured) => {
+                let children: list<Value> = [];
+                for mark in walk.pattern-marks(destructured.pattern) {
+                    children.push(binding-node(linting, mark, "let"));
+                }
+                children.push(expr-node(linting, destructured.value));
+                lint-node(linting, "let", "", "", -1, false, [], destructured.value.span, children)
+            }
+            return-stmt(returned) => lint-node(linting, "return", "", "", -1, false, [], returned.span, [
+                expr-node(linting, returned),
+            ]),
+            expr-stmt(evaluated) => expr-node(linting, evaluated.value),
+            for-stmt(iteration) => {
+                let children = [binding-node(linting, iteration.mark, "for"), expr-node(linting, iteration.start),];
+                match iteration.stop {
+                    some(stop) => children.push(expr-node(linting, stop)),
+                    none => {}
+                }
+                children.push(body-node(linting, iteration.body, "for"));
+                lint-node(linting, "for", iteration.name, "", -1, false, [], iteration.mark.span, children)
+            }
+            loop-stmt(repeating) => {
+                lint-node(linting, "loop", "", "", -1, false, [], repeating.body.span, [body-node(linting, repeating.body, "loop"),])
+            }
+            assign(assigned) => {
+                let binding = match linting.bindings.assigns.get(assigned) {
+                    some(mark) => binding-number(linting, mark),
+                    none => -1,
+                };
+                let key = if binding < 0 { name-text(assigned.name) } else { "" };
+                let target = lint-node(
+                    linting,
+                    "name",
+                    base-name(name-text(assigned.name)),
+                    key,
+                    binding,
+                    assigned.op == "=",
+                    [],
+                    assigned.name-span,
+                    [],
+                );
+                lint-node(linting, "assign", assigned.op, "", -1, false, [], assigned.name-span, [
+                    target,
+                    expr-node(linting, assigned.value),
+                ])
+            }
+            assign-field(assigned) => lint-node(
+                linting,
+                "assign-field",
+                assigned.name,
+                "",
+                -1,
+                false,
+                [],
+                assigned.name-span,
+                [expr-node(linting, assigned.target), expr-node(linting, assigned.value),],
+            ),
+            break-stmt => lint-node(linting, "break", "", "", -1, false, [], place, []),
+            continue-stmt => lint-node(linting, "continue", "", "", -1, false, [], place, []),
+        }
+    }
+
+    @(private) expr-node: func(linting: Linting, expression: Expr) -> Value {
+        // (a type an expression makes or names, where it names one: a record literal's, a case's)
+        let type-key = match expression.ty {
+            named(written) => name-text(written),
+            _ => "",
+        };
+
+        let generic = { kind: string, name: string ->
+            let children: list<Value> = [];
+            let xs: list<Expr> = [];
+            let bs: list<Block> = [];
+            walk.expr-parts(expression, xs, bs);
+            for one in xs { children.push(expr-node(linting, one)); }
+            // (a block expression's statements its own; another's blocks each a body: an if's two)
+            for one in bs { if kind == "block" { block-nodes(linting, one, children); } else { children.push(body-node(linting, one, kind)); } }
+            lint-node(linting, kind, name, type-key, -1, false, [], expression.span, children)
+        };
+
+        match expression.kind {
+            name(reading) => match linting.bindings.exprs.get(expression) {
+                some(mark) => lint-node(
+                    linting,
+                    "name",
+                    mark.name,
+                    "",
+                    binding-number(linting, mark),
+                    false,
+                    floats(expression),
+                    expression.span,
+                    [],
+                ),
+                none => lint-node(
+                    linting,
+                    "name",
+                    base-name(name-text(reading)),
+                    name-text(reading),
+                    -1,
+                    false,
+                    floats(expression),
+                    expression.span,
+                    [],
+                ),
+            },
+            call(called) => lint-node(
+                linting,
+                "call",
+                base-name(called.name),
+                called.name,
+                -1,
+                false,
+                // (one of a func that never returns: panic, exit)
+                never(expression),
+                called.name-span,
+                called.args.map({ one -> expr-node(linting, one) }),
+            ),
+            method(invoked) => {
+                let children = [expr-node(linting, invoked.target),];
+                for one in invoked.args { children.push(expr-node(linting, one)); }
+                lint-node(
+                    linting,
+                    "method",
+                    base-name(invoked.name),
+                    invoked.name,
+                    -1,
+                    false,
+                    never(expression),
+                    invoked.name-span,
+                    children,
+                )
+            }
+            field(accessed) => lint-node(linting, "field", accessed.name, type-key, -1, false, [], accessed.name-span, [
+                expr-node(linting, accessed.target),
+            ]),
+            closure(closed) => {
+                let children: list<Value> = [];
+                for mark in closed.marks { children.push(binding-node(linting, mark, "closure")); }
+                for one in closed.types {
+                    match one {
+                        some(written) => type-refs(linting, written, expression.span, children),
+                        none => {}
+                    }
+                }
+                children.push(body-node(linting, closed.body, "closure"));
+                lint-node(linting, "closure", "", "", -1, false, [], expression.span, children)
+            }
+            match-expr(matching) => {
+                let children = [expr-node(linting, matching.value),];
+                for arm in matching.arms {
+                    let parts: list<Value> = [];
+                    for mark in walk.pattern-marks(arm.pattern) {
+                        parts.push(binding-node(linting, mark, "arm"));
+                    }
+                    pattern-names(linting, arm.pattern, arm.span, parts);
+                    match arm.guard {
+                        some(guard) => parts.push(expr-node(linting, guard)),
+                        none => {}
+                    }
+                    parts.push(expr-node(linting, arm.body));
+                    // (its pattern as text, what two arms that match the same values share; whether
+                    // it matches any value, and has a guard)
+                    let attributes: list<string> = [];
+                    if catch-all(arm.pattern) { attributes.push("catch-all"); }
+                    if arm.guard != none { attributes.push("guarded"); }
+                    children.push(lint-node(linting, "arm", pattern-text(arm.pattern), "", -1, false, attributes, arm.span, parts));
+                }
+                lint-node(linting, "match", "", type-key, -1, false, [], expression.span, children)
+            }
+            // (a value the checker widened: the value itself)
+            widen(widened) => expr-node(linting, widened.value),
+            int-lit(_) => lint-node(linting, "literal", literal-text(expression), "", -1, false, [], expression.span, []),
+            float-lit(_) => lint-node(linting, "literal", literal-text(expression), "", -1, false, [], expression.span, []),
+            char-lit(_) => lint-node(linting, "literal", literal-text(expression), "", -1, false, [], expression.span, []),
+            bool-lit(_) => lint-node(linting, "literal", literal-text(expression), "", -1, false, [], expression.span, []),
+            str-lit(_) => lint-node(linting, "literal", literal-text(expression), "", -1, false, [], expression.span, []),
+            binary(operation) => generic("binary", operation.op),
+            unary(operation) => generic("unary", operation.op),
+            if-else(_) => generic("if", ""),
+            block(_) => generic("block", ""),
+            record-lit(_) => generic("record", ""),
+            list-lit(_) => generic("list", ""),
+            tuple-lit(_) => generic("tuple", ""),
+            interp(_) => generic("interpolation", ""),
+            cast(_) => generic("cast", ""),
+            is-test(_) => generic("is", ""),
+            try-as(_) => generic("try-as", ""),
+            apply(_) => generic("apply", ""),
+            yield-expr(_) => generic("yield", ""),
+            start-expr(_) => generic("start", ""),
+            wait-expr(_) => generic("wait", ""),
+            _ => generic("expression", ""),
+        }
+    }
+
+    // what a pattern names that is no binding: a constant's key, a case's type
+    @(private) pattern-names: func(linting: Linting, pattern: Pattern, span: Span, out: list<Value>) {
+        match pattern {
+            name(reading) => {
+                if reading.kind == "const" {
+                    out.push(lint-node(linting, "name", reading.name, reading.key, -1, false, [], span, []));
+                }
+            }
+            literal(value) => out.push(expr-node(linting, value)),
+            typed(annotated) => {
+                type-refs(linting, annotated.ty, span, out);
+                pattern-names(linting, annotated.sub, span, out);
+            }
+            member(qualified) => {
+                type-refs(linting, qualified.ty, span, out);
+                pattern-names(linting, qualified.sub, span, out);
+            }
+            _ => { for one in walk.sub-patterns(pattern) { pattern-names(linting, one, span, out); } }
+        }
+    }
+}

@@ -1,0 +1,589 @@
+// The linter: a project's lint.yel is a program, its main handing lint.run the rules to use, and
+// `yelc lint [dir]` checks the package at dir (the working directory by default) and runs lint.yel
+// in the interpreter on it (no C made). A rule is yel: it is given a context when the run begins,
+// asks it for the kinds of node it looks at (context.on), and tells what it finds (context.report).
+// A plugin is a list of rules, written where the project likes (lint.yel's own funcs, or a package
+// it includes).
+//
+//   from "std:lint" include lint, rules;
+//
+//   main: func() {
+//       lint.run({ l ->
+//           l.use(rules.recommended());
+//           l.severity("unused-parameters", "off");
+//           l.use([no-todo(),]);
+//       });
+//   }
+//
+//   no-todo: func() -> lint.rule {
+//       {
+//           name: "no-todo",
+//           description: "no func named todo",
+//           severity: "warn",
+//           create: { c -> c.on("func", { n -> if n.name == "todo" { c.report(n, "a func named todo"); } }) },
+//       }
+//   }
+//
+// What a rule sees is the package's tree after the checker: each node a declaration, a statement or
+// an expression, with what the checker found of it (a name's binding or key). A run walks each file
+// once, each node before its children, giving each to the visitors that asked for its kind, then
+// calls each rule's end (context.on-end: what a rule finds of the whole package). Without a
+// lint.yel, `yelc lint` uses rules.recommended(). Each report is told as `path:line:column:
+// severity: message [rule]`; the run ends with 1 where one is an error.
+
+package std:lint@0.1.0;
+
+from "std:cli" include exit;
+
+module lint {
+    // a node of the package's tree: its kind (below), what it names, and where it is
+    //
+    //   kind       what           name, key, binding
+    //   func       a func         its name, its key; attributes: private, test, async, generator,
+    //                             display (one an interpolation calls), main
+    //   const      a const        its name, its key
+    //   global     a global       its name, its key
+    //   type       a record, a resource, a variant, a flags or an alias: its name, its key
+    //   include    an include     its alias, the module's key
+    //   binding    a local made   its name, its binding; attributes: let, param, for, arm (a match
+    //                             arm's or a pattern's), closure (a closure's parameter)
+    //   name       a name read    its name; a local's binding, else its key (a func's, a const's,
+    //                             a global's); written: true where it is assigned (x = v)
+    //   call       a call         the func's name, its key
+    //   method     x.f(...)       the func's name, its key
+    //   field      x.f            the field's name
+    //   body       a block        its statements; attributes: what it is the body of (func, for,
+    //                             loop, closure, if)
+    //   arm        a match's arm  its pattern as text (a binding *: two arms of the same text match
+    //                             the same values); attributes: catch-all (it matches any value),
+    //                             guarded; children: its bindings, guard and body
+    //   literal    a literal      as written (a char's code point in quotes, a string in ")
+    //   (a call's or a method's attributes: never, where its func never returns: panic, exit; a
+    //   name's: float, where it names a float)
+    //   type-ref   a type named   its name as written, its key
+    //   use        a name the checker found used where the tree no longer has it (a const it
+    //              put its value in place of, a case): its key
+    //   (each other statement and expression: its kind as the syntax names it, let, return, for,
+    //   loop, assign, if, match, arm, block, closure, literal, binary, ...)
+    resource node {
+        kind: string,
+        name: string,
+        key: string,
+        // the module what it names is in (an include's: the module it includes)
+        module: string,
+        binding: s64,
+        written: bool,
+        attributes: list<string>,
+        file: string,
+        line: s64,
+        column: s64,
+        children: list<node>,
+    }
+
+    // a file of the package: its path and its declarations' nodes
+    resource file { path: string, nodes: list<node>, }
+
+    // a rule: its name, what it checks, how bad what it finds is ("error", "warn", "off"), and
+    // what it does when a run begins (its visitors asked for)
+    resource rule {
+        name: string,
+        description: string,
+        severity: string,
+        create: func(context),
+    }
+
+    // a rule's run: its visitors, its ends, and what it told
+    resource context {
+        rule: string,
+        severity: string,
+        visitors: map<string, list<func(node)>>,
+        ends: list<func()>,
+        reports: list<finding>,
+    }
+
+    // what a rule told: where, and the message
+    resource finding {
+        rule: string,
+        severity: string,
+        file: string,
+        line: s64,
+        column: s64,
+        message: string,
+    }
+
+    // the rules a run uses, and the severities lint.yel set
+    resource linter { rules: list<rule>, severities: map<string, string>, }
+
+    // visit called with each node of that kind
+    on: func(c: context, kind: string, visit: func(node)) {
+        if !c.visitors.has(kind) { c.visitors.set(kind, []); }
+        c.visitors.at(kind).push(visit);
+    }
+
+    // visit called once every file is walked (what a rule finds of the whole package)
+    on-end: func(c: context, visit: func()) { c.ends.push(visit); }
+
+    // a finding at node n
+    report: func(c: context, n: node, message: string) {
+        c.reports.push({
+            rule: c.rule,
+            severity: c.severity,
+            file: n.file,
+            line: n.line,
+            column: n.column,
+            message: message,
+        });
+    }
+
+    // a plugin's rules used (one of a name used before: this one in its place)
+    use: func(l: linter, plugin: list<rule>) {
+        for one in plugin {
+            let at = l.rules.map({ r -> r.name }).index-of(one.name);
+            if at >= 0 { l.rules[at] = one; } else { l.rules.push(one); }
+        }
+    }
+
+    // a rule's severity: "error", "warn" or "off"
+    severity: func(l: linter, name: string, level: string) { l.severities.set(name, level); }
+
+    // the package's files: yelc lint gives them (the interpreter's own); none where the program
+    // is not run by yelc lint
+    files: func() -> list<file> { [] }
+
+    // the rules declare names, run over the package's files: each finding told, the run ended with
+    // 1 where one is an error
+    run: func(declare: func(linter)) {
+        let l: linter = { rules: [], severities: map.new(), };
+        declare(l);
+        let contexts: list<context> = [];
+        let visitors: map<string, list<func(node)>> = map.new();
+        for one in l.rules {
+            let level = l.severities.get-or(one.name, one.severity);
+            if level == "off" { continue; }
+            let c: context = {
+                rule: one.name,
+                severity: level,
+                visitors: map.new(),
+                ends: [],
+                reports: [],
+            };
+            let create = one.create;
+            create(c);
+            for kind in c.visitors.keys() {
+                if !visitors.has(kind) { visitors.set(kind, []); }
+                for visit in c.visitors.at(kind) { visitors.at(kind).push(visit); }
+            }
+            contexts.push(c);
+        }
+        for f in files() {
+            for n in f.nodes { walk(n, visitors); }
+        }
+        for c in contexts {
+            for end in c.ends { end(); }
+        }
+        let findings: list<finding> = [];
+        for c in contexts {
+            for one in c.reports { findings.push(one); }
+        }
+        findings.sort({ a, b -> before(a, b) });
+        let errors = 0;
+        let warnings = 0;
+        for one in findings {
+            print("{one.file}:{one.line}:{one.column}: {if one.severity == "warn" { "warning" } else { one.severity }}: {one.message} [{one.rule}]\n");
+            if one.severity == "error" { errors += 1; } else { warnings += 1; }
+        }
+        if errors + warnings > 0 {
+            print("{errors} {if errors == 1 { "error" } else { "errors" }}, {warnings} {if warnings == 1 { "warning" } else { "warnings" }}\n");
+        }
+        if errors > 0 { exit.exit(err(())); }
+    }
+
+    // each node before its children, given to the visitors of its kind
+    @(private) walk: func(n: node, visitors: map<string, list<func(node)>>) {
+        match visitors.get(n.kind) {
+            some(found) => { for visit in found { visit(n); } }
+            none => {}
+        }
+        for child in n.children { walk(child, visitors); }
+    }
+
+    // a finding's place before another's: by file, then line, then column
+    @(private) before: func(a: finding, b: finding) -> bool {
+        let order = a.file.compare(b.file);
+        if order != 0 { return order < 0; }
+        if a.line != b.line { return a.line < b.line; }
+        a.column < b.column
+    }
+
+    // every node under n (n's children, theirs, ...): what a rule looks through itself
+    descendants: func(n: node) -> seq<node> {
+        for child in n.children {
+            yield child;
+            for inner in descendants(child) { yield inner; }
+        }
+    }
+}
+
+// the rules the linter has: what is declared and never used
+module rules {
+    // the rules a project starts with (empty-blocks among them, off: l.severity turns it on)
+    recommended: func() -> list<lint.rule> {
+        [
+            unused-locals(),
+            unused-parameters(),
+            unused-funcs(),
+            unused-includes(),
+            unused-consts(),
+            unused-globals(),
+            unused-types(),
+            unreachable-arms(),
+            unreachable-code(),
+            self-assignment(),
+            constant-condition(),
+            duplicate-arms(),
+            empty-blocks(),
+            short-names(),
+        ]
+    }
+
+    // an arm after one that matches every value (_, a binding) without a guard: never reached
+    unreachable-arms: func() -> lint.rule {
+        {
+            name: "unreachable-arms",
+            description: "an arm after one that matches every value",
+            severity: "warn",
+            create: { c ->
+                c.on("match", { n ->
+                    let first: option<lint.node> = none;
+                    for arm in n.children {
+                        if arm.kind != "arm" { continue; }
+                        match first {
+                            some(all) => c.report(arm, "this arm is never reached: the arm at line {all.line} matches every value"),
+                            none => {}
+                        }
+                        if first == none && arm.attributes.contains("catch-all") && !arm.attributes.contains("guarded") { first = some(arm); }
+                    }
+                });
+            },
+        }
+    }
+
+    // a statement after a return, a break, a continue or a call that never returns (panic, exit)
+    // in the same block: never run (told once, at the first)
+    unreachable-code: func() -> lint.rule {
+        {
+            name: "unreachable-code",
+            description: "a statement after a return, a break, a continue or a panic",
+            severity: "warn",
+            create: { c ->
+                let look = { n: lint.node ->
+                    let ended: option<lint.node> = none;
+                    for statement in n.children {
+                        match ended {
+                            some(last) => {
+                                c.report(statement, "this is never run: the {ending(last)} before it leaves");
+                                break;
+                            }
+                            none => {}
+                        }
+                        if ends(statement) { ended = some(statement); }
+                    }
+                };
+                c.on("body", look);
+                c.on("block", look);
+            },
+        }
+    }
+
+    // x = x; p.f = p.f;
+    self-assignment: func() -> lint.rule {
+        {
+            name: "self-assignment",
+            description: "a local, a global or a field assigned itself",
+            severity: "warn",
+            create: { c ->
+                c.on("assign", { n ->
+                    if n.name == "=" && n.children.len() == 2 && same-name(n.children[0], n.children[1]) {
+                        c.report(n, "{n.children[0].name} is assigned itself");
+                    }
+                });
+                c.on("assign-field", { n ->
+                    if n.children.len() != 2 { return; }
+                    let target = n.children[0];
+                    let value = n.children[1];
+                    if value.kind == "field" && value.name == n.name && value.children.len() == 1 && same-name(target, value.children[0]) {
+                        c.report(n, "field {n.name} is assigned itself");
+                    }
+                });
+            },
+        }
+    }
+
+    // a condition always true or always false: if true, x == x, a loop that breaks at once
+    constant-condition: func() -> lint.rule {
+        {
+            name: "constant-condition",
+            description: "a condition that is always true or always false",
+            severity: "warn",
+            create: { c ->
+                c.on("if", { n ->
+                    if n.children.len() == 0 { return; }
+                    let condition = n.children[0];
+                    if condition.kind == "literal" && (condition.name == "true" || condition.name == "false") {
+                        c.report(condition, "the condition is always {condition.name}");
+                    }
+                });
+                c.on("binary", { n ->
+                    // (x != x of a float: its NaN test)
+                    let compares = ["==", "!=", "<", ">", "<=", ">=",].contains(n.name)
+                        && !n.children.any({ one -> one.attributes.contains("float") });
+                    if compares && n.children.len() == 2 && same-name(n.children[0], n.children[1]) {
+                        let always = if ["==", "<=", ">=",].contains(n.name) { "true" } else { "false" };
+                        c.report(n, "{n.children[0].name} is compared with itself: always {always}");
+                    }
+                });
+                c.on("loop", { n ->
+                    match n.children.get(0) {
+                        some(body) => {
+                            match body.children.get(0) {
+                                some(first) => {
+                                    if first.kind == "break" { c.report(first, "the loop breaks before it runs anything: no loop"); }
+                                }
+                                none => {}
+                            }
+                        }
+                        none => {}
+                    }
+                });
+            },
+        }
+    }
+
+    // an arm whose pattern an arm before it (without a guard) has already: never reached
+    duplicate-arms: func() -> lint.rule {
+        {
+            name: "duplicate-arms",
+            description: "an arm that matches what an arm before it matches",
+            severity: "warn",
+            create: { c ->
+                c.on("match", { n ->
+                    let seen: map<string, s64> = map.new();
+                    for arm in n.children {
+                        if arm.kind != "arm" || arm.name == "" || arm.attributes.contains("catch-all") { continue; }
+                        let alternatives = arm.name.split(" | ");
+                        if alternatives.all({ one -> seen.has(one) }) {
+                            c.report(arm, "this arm matches what the arm at line {seen.at(alternatives[0])} does: never reached");
+                            continue;
+                        }
+                        if !arm.attributes.contains("guarded") {
+                            for one in alternatives { if !seen.has(one) { seen.set(one, arm.line); } }
+                        }
+                    }
+                });
+            },
+        }
+    }
+
+    // an if's, a for's or a loop's body, or an arm, that does nothing (off unless asked: none =>
+    // {} is often meant)
+    empty-blocks: func() -> lint.rule {
+        {
+            name: "empty-blocks",
+            description: "a body or an arm that does nothing",
+            severity: "off",
+            create: { c ->
+                c.on("body", { n ->
+                    let owner = n.attributes.get(0).unwrap-or("");
+                    if n.children.len() == 0 && ["if", "for", "loop",].contains(owner) { c.report(n, "an empty {owner} body"); }
+                });
+                c.on("arm", { n ->
+                    match n.children.get(n.children.len() - 1) {
+                        some(body) => {
+                            if body.kind == "block" && body.children.len() == 0 { c.report(n, "an arm that does nothing"); }
+                        }
+                        none => {}
+                    }
+                });
+            },
+        }
+    }
+
+    // a local's, a parameter's or a func's name shorter than least characters (2 by default: a
+    // one-character name says nothing; _ and a name starting with _ are meant to)
+    short-names: func(least: s64 = 2) -> lint.rule {
+        {
+            name: "short-names",
+            description: "a name shorter than {least} characters",
+            severity: "warn",
+            create: { c ->
+                let look = { n: lint.node ->
+                    if n.name != "" && !n.name.starts-with("_") && n.name.len() < least {
+                        c.report(n, "{n.name} is shorter than {least} characters: name what it is");
+                    }
+                };
+                c.on("binding", look);
+                c.on("func", look);
+            },
+        }
+    }
+
+    // whether a statement leaves its block: a return, a break, a continue, a call that never
+    // returns
+    @(private) ends: func(n: lint.node) -> bool {
+        ["return", "break", "continue",].contains(n.kind) || (n.kind == "call" || n.kind == "method") && n.attributes.contains("never")
+    }
+
+    @(private) ending: func(n: lint.node) -> string {
+        if n.kind == "call" || n.kind == "method" { "call of {n.name}" } else { n.kind }
+    }
+
+    // whether two nodes name the same local (its binding) or the same global (its key)
+    @(private) same-name: func(a: lint.node, b: lint.node) -> bool {
+        a.kind == "name" && b.kind == "name"
+            && (a.binding >= 0 && a.binding == b.binding || a.binding < 0 && a.key != "" && a.key == b.key)
+    }
+
+    // a local made (a let's, a pattern's) and never read; one whose name starts with _ is meant
+    // to be
+    unused-locals: func() -> lint.rule {
+        {
+            name: "unused-locals",
+            description: "a local that is never read",
+            severity: "warn",
+            create: { c -> unused-bindings(c, ["let", "arm",], "local") },
+        }
+    }
+
+    // a func's or a closure's parameter never read (one whose name starts with _ is meant to be)
+    unused-parameters: func() -> lint.rule {
+        {
+            name: "unused-parameters",
+            description: "a parameter that is never read",
+            severity: "warn",
+            create: { c -> unused-bindings(c, ["param", "closure",], "parameter") },
+        }
+    }
+
+    // a func never called nor named: one the package keeps to itself (@(private)), or any of a
+    // program's (a package with a main: no other package calls it). main, a test, an extern, a
+    // display (an interpolation's) are used where they are
+    unused-funcs: func() -> lint.rule {
+        {
+            name: "unused-funcs",
+            description: "a func that is never called",
+            severity: "warn",
+            create: { c -> unused-keys(c, "func", "func") },
+        }
+    }
+
+    // a const never named
+    unused-consts: func() -> lint.rule {
+        {
+            name: "unused-consts",
+            description: "a const that is never named",
+            severity: "warn",
+            create: { c -> unused-keys(c, "const", "const") },
+        }
+    }
+
+    // a global never read
+    unused-globals: func() -> lint.rule {
+        {
+            name: "unused-globals",
+            description: "a global that is never read",
+            severity: "warn",
+            create: { c -> unused-keys(c, "global", "global") },
+        }
+    }
+
+    // a type (a record, a resource, a variant, a flags, an alias) never named
+    unused-types: func() -> lint.rule {
+        {
+            name: "unused-types",
+            description: "a type that is never named",
+            severity: "warn",
+            create: { c -> unused-keys(c, "type", "type") },
+        }
+    }
+
+    // an include whose names nothing in its file names
+    unused-includes: func() -> lint.rule {
+        {
+            name: "unused-includes",
+            description: "an include nothing in its file uses",
+            severity: "warn",
+            create: { c ->
+                let includes: list<lint.node> = [];
+                let named: map<string, set<string>> = map.new();
+                c.on("include", { n -> includes.push(n) });
+                // (the modules each file names: of a name, a call, a type, a use)
+                let note = { n: lint.node ->
+                    if n.module != "" {
+                        if !named.has(n.file) { named.set(n.file, set.new()); }
+                        named.at(n.file).add(n.module);
+                    }
+                };
+                for kind in ["name", "call", "method", "type-ref", "use",] { c.on(kind, note); }
+                c.on-end({ ->
+                    for n in includes {
+                        let uses = match named.get(n.file) {
+                            some(modules) => modules.has(n.key),
+                            none => false,
+                        };
+                        if !uses { c.report(n, "{n.name} is included and never used"); }
+                    }
+                });
+            },
+        }
+    }
+
+    // a binding of those origins never read
+    @(private) unused-bindings: func(c: lint.context, origins: list<string>, what: string) {
+        let made: list<lint.node> = [];
+        let read: set<s64> = set.new();
+        c.on("binding", { n ->
+            if n.name.starts-with("_") || n.name == "" { return; }
+            if n.attributes.any({ one -> origins.contains(one) }) { made.push(n); }
+        });
+        c.on("name", { n -> if n.binding >= 0 && !n.written { read.add(n.binding); } });
+        c.on-end({ ->
+            for n in made {
+                if !read.has(n.binding) { c.report(n, "{what} {n.name} is never read"); }
+            }
+        });
+    }
+
+    // a declaration of that kind whose key nothing names (but from inside itself: its own
+    // recursion is no use)
+    @(private) unused-keys: func(c: lint.context, kind: string, what: string) {
+        let declared: list<lint.node> = [];
+        let program = false;
+        let used: set<string> = set.new();
+        for each in ["func", "const", "global", "type",] {
+            c.on(each, { n ->
+                if each == "func" && n.attributes.contains("main") { program = true; }
+                if each == kind { declared.push(n); }
+                for inner in lint.descendants(n) {
+                    if inner.key != "" && inner.key != n.key && named-by(inner) {
+                        used.add(inner.key);
+                    }
+                }
+            });
+        }
+        c.on-end({ ->
+            for n in declared {
+                let kept = n.attributes.any({ one ->
+                    ["main", "test", "display", "extern", "exported",].contains(one)
+                });
+                if kept || used.has(n.key) { continue; }
+                if !program && !n.attributes.contains("private") { continue; }
+                c.report(n, "{what} {n.name} is never used");
+            }
+        });
+    }
+
+    // whether a node names a declaration (a name, a call, a type)
+    @(private) named-by: func(n: lint.node) -> bool {
+        ["name", "call", "method", "type-ref", "use",].contains(n.kind)
+    }
+}

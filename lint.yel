@@ -1,0 +1,8 @@
+// The compiler's lint (yelc lint compiler tools/lsp tools/runner: the compiler and the tools built
+// from its modules, one program): std:lint's recommended rules
+
+from "std:lint" include lint, rules;
+
+main: func() {
+    lint.run({ l -> l.use(rules.recommended()); });
+}
