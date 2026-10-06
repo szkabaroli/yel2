@@ -34,7 +34,8 @@ jobs:
         id: version
         shell: bash
         run: |
-          latest=$(git tag --list 'pre-alpha-*' | sed 's/^pre-alpha-//' | grep -E '^[0-9]+$' | sort -n | tail -1)
+          # (|| true: none yet is no match, which pipefail would fail the step for)
+          latest=$(git tag --list 'pre-alpha-*' | sed 's/^pre-alpha-//' | { grep -E '^[0-9]+$' || true; } | sort -n | tail -1)
           latest=${latest:-0}
           next=$((latest + 1))
           sha=${GITHUB_SHA::7}

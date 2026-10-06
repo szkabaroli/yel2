@@ -1,0 +1,1255 @@
+// The build system, as Zig's: a project's build.yel is a program (no build.sh), its main handing
+// build.run what the project is made of, and `yelc build [step]... [-Dname=value]... [--help]`
+// compiles it and runs it. The program declares, the runner here does: what was declared runs as
+// steps, each after those it depends on, each made once.
+//
+//   from "std:build" include build;
+//
+//   main: async func() {
+//       wait build.run({ b ->
+//           let cloud = b.component("cloud", "src");
+//           cloud.wit("wit/deps/meshx-ui");
+//           cloud.include("../../packages/yel-host/yel");
+//           b.install(cloud);
+//           let tests = b.test("tests", "src");
+//           b.step("test", "Run the tests", [b.run-artifact(tests),]);
+//       });
+//   }
+//
+// An artifact is yel compiled: a component (a WASI 0.2 component for the shell's hosts: yelc, then
+// the WASI SDK's clang), an executable (yelc, then the system's cc) or tests (yelc test, an
+// executable that runs them; b.run-artifact runs one). Install (the default step) puts what was
+// asked to be installed in the prefix (yel-out; --prefix <dir> or -p <dir> another); each artifact is made in .yel-cache, by a key of all that goes into it (its sources, the
+// directories it includes, its WIT, the compiler and the runtime), so one made before is not made
+// again. Options: -Doptimize=size|speed|none (b.optimize()), -Dwasi-sdk=<dir> (WASI_SDK by
+// default), and each the program declares (b.option). Paths are the project's (the directory
+// build.yel is in).
+//
+// A step may make files, as Zig's: an output of a command (step.output-file(name),
+// step.output-dir(name): its path given to the command as an argument, in the step's own
+// directory of .yel-cache) is a path the rest of the build takes as it takes the project's (an
+// artifact's root, its wit and include, another command's argument or input, install-file), and
+// whatever takes it runs after the step that makes it. A step that makes files is made once for
+// what goes into it (its arguments, the files its input names), like an artifact; one that makes
+// none runs each time. b.write-files() makes files the build program writes itself.
+//
+// A run or a command may check what it does, as Zig's run steps: step.expect-output(file) (what it
+// prints, its standard output and error, must be what file holds), step.expect-exit(code) (how it
+// ends: 0 where neither is asked), and step.set-environment(name, value) gives it a variable.
+//
+// The steps run together, each once what it depends on is done, at most -j of their programs at
+// once (-j<n>; as many as the system has cores by default). A step that fails fails those that
+// depend on it, and no others: the rest go on, the build fails at the end (--summary: how many
+// ran, and failed).
+//
+//   let generator = b.command(["node", "generate.mjs", "--out",]);
+//   let made = generator.output-dir("widgets");
+//   generator.input("generate.mjs");
+//   app.include(made);
+
+package std:build@0.1.0;
+
+from "std:cli" include environment, exit;
+from "std:filesystem" include types, preopens;
+from "std:process" include process;
+
+module build {
+    // the build being declared, and run
+    resource builder {
+        // the project's directory, where .yel-cache is, and where installs go (yel-out: --prefix)
+        project: string,
+        prefix: string,
+        steps: list<step>,
+        options: list<build-option>,
+        // what was given: -Dname=value, and the steps asked for
+        given: map<string, string>,
+        wanted: list<string>,
+        // --help: the steps and options told, nothing made
+        help: bool,
+        // the compiler, its directory (its runtime and std), the C compiler
+        yelc: string,
+        home: string,
+        cc: string,
+        installed: step,
+        // the WASI SDK's directory ("": none given), for components
+        wasi-sdk: string,
+        // what the toolchain is, for cache keys (the compiler's and the runtime's bytes)
+        toolchain: u64,
+        // the runtime compiled for wasm (once for every component, at each level), and where
+        wasm-runtimes: map<string, future<()>>,
+        wasm-objects: map<string, string>,
+        // how many programs run at once (-j), how many are running, the tasks waiting for a place
+        // (each woken as one ends, in turn), --summary, the steps that ran their work and those
+        // that failed
+        jobs: s64,
+        running: s64,
+        waiting: list<future<()>>,
+        // the files read for keys, by their hash
+        hashes: map<string, u64>,
+        hashing: map<string, future<()>>,
+        summary: bool,
+        performed: s64,
+        failures: s64,
+        failed: bool,
+    }
+
+    // a step: what it does (kind: group, compile, install, install-file, run, command, write), the
+    // artifact it is of, its arguments (a command's first its program), the files it reads (inputs)
+    // and makes (outputs, and write's files), where install-file puts its file, the steps before
+    // it, and the directory its outputs are in (once it has run). Its name is told as it runs
+    // (a command's: "command" unless named)
+    resource step {
+        name: string,
+        description: string,
+        kind: string,
+        artifact: option<artifact>,
+        arguments: list<place>,
+        inputs: list<place>,
+        outputs: list<generated>,
+        files: list<tuple<string, string>>,
+        to: string,
+        depends: list<step>,
+        out: string,
+        // its work, once begun (every step that depends on it waits for the one task), and whether
+        // it failed (or what it depends on did)
+        task: option<future<()>>,
+        failed: bool,
+        // how long its work took (milliseconds), once done
+        took: s64,
+        // a run's or a command's environment's variables more, what it must print and the code it
+        // must end with (neither asked: 0)
+        environment: list<tuple<string, string>>,
+        expected: option<place>,
+        exit: option<s64>,
+        // an install-file's file a program (its bits kept)
+        executable: bool,
+    }
+
+    // an artifact: its name, its kind (component, executable, tests), its root (the package
+    // directory or file it is made of), the WIT and yel packages it includes, how it is optimized,
+    // and where it was made (once it is)
+    resource artifact {
+        name: string,
+        kind: string,
+        root: place,
+        wits: list<place>,
+        includes: list<place>,
+        optimize: string,
+        // the yelc compiling it (none: the build's), the C compiler's flags
+        yelc: option<place>,
+        // the files #embed(name) reads in it, by name (yelc --embed)
+        embeds: list<tuple<string, place>>,
+        // a component's: Binaryen's wasm-opt's flags for its core module (none: not run)
+        wasm-opt: list<string>,
+        // the backend yelc builds it with: "c" (C, then clang or cc) or "bitcode" (LLVM's, then
+        // clang: a component's only)
+        backend: string,
+        flags: list<string>,
+        made: string,
+        compile: step,
+    }
+
+    // a path the build reads: one of the project's (a string, as written), or one a step makes
+    type place = string | generated;
+
+    // a file (or a directory) a step makes: its name in the step's directory, and its path once the
+    // step has run ("" before)
+    resource generated { step: step, name: string, dir: bool, at: string, }
+
+    // an option: -Dname=value
+    record build-option { name: string, description: string, default: string, }
+
+    // ---- declaring
+
+    // a component of the package at root (relative to the project): a WASI 0.2 component (made by
+    // the WASI SDK's clang: -Dwasi-sdk, WASI_SDK by default)
+    component: func(b: builder, name: string, root: place) -> artifact {
+        if !b.options.any({ one -> one.name == "wasi-sdk" }) {
+            b.wasi-sdk = option(b, "wasi-sdk", "The WASI SDK's directory, for components", variable("WASI_SDK", ""));
+        }
+        artifact-of(b, name, "component", root)
+    }
+
+    // an executable of the package at root, for this system
+    executable: func(b: builder, name: string, root: place) -> artifact { artifact-of(b, name, "executable", root) }
+
+    // the @(test) funcs of the package at root, as an executable that runs them (b.run-artifact:
+    // run them)
+    test: func(b: builder, name: string, root: place) -> artifact { artifact-of(b, name, "tests", root) }
+
+    // a WIT directory the artifact includes from (-I)
+    wit: func(a: artifact, dir: place) {
+        a.wits.push(dir);
+        needs(a.compile, dir);
+    }
+
+    // a directory of yel packages the artifact includes from (-I)
+    include: func(a: artifact, dir: place) {
+        a.includes.push(dir);
+        needs(a.compile, dir);
+    }
+
+    // the yelc that compiles the artifact (one of the project's, or one a step makes), in place of
+    // the one running the build
+    compiler: func(a: artifact, yelc: place) {
+        a.yelc = some(yelc);
+        needs(a.compile, yelc);
+    }
+
+    // the file (one of the project's, or one a step makes) #embed(name) reads in the artifact, as
+    // Zig's addAnonymousImport: a file the build makes, embedded, made again where it changes
+    embed: func(a: artifact, name: string, file: place) {
+        a.embeds.push((name, file));
+        needs(a.compile, file);
+    }
+
+    // a component's core module optimized by Binaryen's wasm-opt with flags (as -Oz) before it is
+    // made a component (wasm-opt reads core modules only: clang links one, wasm-opt optimizes it,
+    // wasm-tools embeds the component's WIT in it and makes the component of it)
+    wasm-opt: func(a: artifact, flags: list<string>) { a.wasm-opt = flags; }
+
+    // the backend yelc builds the artifact with: "c" (the default) or "bitcode" (LLVM's bitcode,
+    // which clang builds: a component's only; built for size it is the smaller, its GC roots
+    // values LLVM keeps in registers where C's are slots in memory)
+    backend: func(a: artifact, name: string) { a.backend = name; }
+
+    // the C compiler's flags for the artifact (an executable, tests), in place of -O2
+    c-flags: func(a: artifact, flags: list<string>) { a.flags = flags; }
+
+    // the artifact put in the prefix (a component as <name>.wasm, an executable as bin/<name>): a
+    // step of its own, and one the install step (the default) runs
+    install: func(b: builder, a: artifact) -> step {
+        let installing = made-step(b, "install {a.name}", "", "install", some(a), [a.compile,]);
+        b.installed.depends.push(installing);
+        installing
+    }
+
+    // a file (one of the project's, or one a step makes; a directory: each file in it) put in
+    // the prefix as to: a step of its own, and one the install step runs
+    install-file: func(b: builder, from: place, to: string) -> step {
+        let installing = made-step(b, "install {to}", "", "install-file", none, []);
+        installing.arguments.push(from);
+        installing.to = to;
+        needs(installing, from);
+        b.installed.depends.push(installing);
+        installing
+    }
+
+    // a program (a file one runs) put in the prefix as to, as install-file does, its bits kept
+    install-executable: func(b: builder, from: place, to: string) -> step {
+        let installing = install-file(b, from, to);
+        installing.executable = true;
+        installing
+    }
+
+    // a variable more in the environment of what the step runs (one of a name the build's has, in
+    // place of its)
+    set-environment: func(s: step, name: string, value: string) { s.environment.push((name, value)); }
+
+    // what the step runs must print what file holds (its standard output and error, together),
+    // else the build fails
+    expect-output: func(s: step, file: place) {
+        s.expected = some(file);
+        needs(s, file);
+    }
+
+    // what the step runs must end with code, else the build fails (where neither this nor
+    // expect-output is asked: 0)
+    expect-exit: func(s: step, code: s64) { s.exit = some(code); }
+
+    // the names in the project's directory dir, sorted, a directory's ending with / (none where it
+    // cannot be read): what a build program declares steps from, as it declares
+    entries: func(b: builder, dir: string) -> list<string> {
+        let listed = c-entries(path(b, dir));
+        if listed == "" { return []; }
+        let names = listed.split("\n");
+        names.sort({ one, other -> text.compare(one, other) < 0 });
+        names
+    }
+
+    // where a program is: name itself where it has a /, else the first of PATH's directories that
+    // has it (none: none has)
+    find-program: func(b: builder, name: string) -> option<string> {
+        let _ = b;
+        if name.contains("/") { return if c-runnable(name) { some(name) } else { none }; }
+        for dir in variable("PATH", "").split(":") {
+            let at = (if dir == "" { "." } else { dir }) + "/" + name;
+            if c-runnable(at) { return some(at); }
+        }
+        none
+    }
+
+    // the libraries an executable for this system links (C's, threads; on Linux dl and rt)
+    system-libraries: func(b: builder) -> list<string> {
+        let _ = b;
+        if process.target().contains("linux") { ["-lm", "-lpthread", "-ldl", "-lrt",] } else { ["-lm", "-lpthread",] }
+    }
+
+    // a step running the artifact (an executable: it; tests: them), with its arguments (add-argument,
+    // output-file, …) and those after --
+    run-artifact: func(b: builder, a: artifact) -> step {
+        made-step(b, "run {a.name}", "", "run", some(a), [a.compile,])
+    }
+
+    // a step running a command: its first the program (looked for on PATH where it has no /), the
+    // rest its arguments
+    command: func(b: builder, arguments: list<place>) -> step {
+        let made = made-step(b, "command", "", "command", none, []);
+        for one in arguments { add-argument(made, one); }
+        made
+    }
+
+    // one more argument of what a step runs (a path a step makes: run after it)
+    add-argument: func(s: step, argument: place) {
+        s.arguments.push(argument);
+        needs(s, argument);
+    }
+
+    // a file (or a directory: every file in it) what a step runs reads: what makes it again where
+    // it changes
+    input: func(s: step, at: place) {
+        s.inputs.push(at);
+        needs(s, at);
+    }
+
+    // a file the step's program makes: its path an argument of it, in the step's own directory
+    output-file: func(s: step, name: string) -> generated { output(s, name, false) }
+
+    // a directory the step's program makes files in (made for it first): its path an argument of
+    // it
+    output-dir: func(s: step, name: string) -> generated { output(s, name, true) }
+
+    // a step writing files the build program gives (add-file): its directory, in .yel-cache
+    write-files: func(b: builder) -> step { made-step(b, "write files", "", "write", none, []) }
+
+    // the step's whole directory (a write-files step's: the packages written in it, to include)
+    directory: func(s: step) -> generated {
+        let made: generated = { step: s, name: "", dir: true, at: "", };
+        s.outputs.push(made);
+        made
+    }
+
+    // a file the step writes, of content
+    add-file: func(s: step, name: string, content: string) -> generated {
+        s.files.push((name, content));
+        let made: generated = { step: s, name: name, dir: false, at: "", };
+        s.outputs.push(made);
+        made
+    }
+
+    // a step `yelc build <name>` runs: what it is for, and the steps it runs
+    step: func(b: builder, name: string, description: string, depends: list<step>) -> step {
+        made-step(b, name, description, "group", none, depends)
+    }
+
+    // step run after before
+    depend: func(s: step, before: step) { s.depends.push(before); }
+
+    // the step, told as name as it runs (a command's is "command" otherwise)
+    named: func(s: step, name: string) -> step {
+        s.name = name;
+        s
+    }
+
+    @(private) output: func(s: step, name: string, dir: bool) -> generated {
+        let made: generated = { step: s, name: name, dir: dir, at: "", };
+        s.outputs.push(made);
+        s.arguments.push(made);
+        made
+    }
+
+    // a path a step makes, given to s: s run after the step that makes it
+    @(private) needs: func(s: step, at: place) {
+        match at {
+            let made: generated => { if made.step != s && !s.depends.contains(made.step) { s.depends.push(made.step); } }
+            _ => {}
+        }
+    }
+
+    // the value of -Dname (default where it is not given), the option told by --help
+    option: func(b: builder, name: string, description: string, default: string) -> string {
+        // (declared once, however many ask for it)
+        if !b.options.any({ one -> one.name == name }) {
+            b.options.push({ name: name, description: description, default: default, });
+        }
+        b.given.get(name).unwrap-or(default)
+    }
+
+    // how the artifacts are optimized: -Doptimize=size (the default), speed or none
+    optimize: func(b: builder) -> string {
+        let mode = option(b, "optimize", "How yelc optimizes: size, speed or none", "size");
+        if mode != "size" && mode != "speed" && mode != "none" {
+            report(b, "-Doptimize is size, speed or none, not {mode}");
+            return "size";
+        }
+        mode
+    }
+
+    // ---- running
+
+    // the build: declared by declare, then each step asked for run (install where none is); its
+    // process ends with how that went
+    run: async func(declare: func(builder)) {
+        let b = arguments();
+        declare(b);
+        if b.failed { exit.exit(err(())); }
+        // (-D options none declared)
+        for name in b.given.keys() {
+            if !b.options.any({ one -> one.name == name }) {
+                report(b, "-D{name}: no such option (yelc build --help tells them)");
+            }
+        }
+        if b.failed { exit.exit(err(())); }
+        if b.help {
+            told(b);
+            return;
+        }
+        if b.wanted.len() == 0 { b.wanted.push("install"); }
+        let asked: list<step> = [];
+        for name in b.wanted {
+            match b.steps.filter({ one -> one.name == name && one.kind == "group" }).get(0) {
+                some(found) => asked.push(found),
+                none => report(b, "no step {name} (yelc build --help tells them)"),
+            }
+        }
+        if b.failed { exit.exit(err(())); }
+        b.toolchain = wait toolchain(b);
+        // (the steps asked for in turn: one that fails ends the build)
+        for one in asked {
+            wait perform(b, one);
+            if one.failed { break; }
+        }
+        wait checked-by(b);
+        if b.summary || b.failures > 0 {
+            eprint("build: {b.performed} steps ran, {b.failures} failed\n");
+        }
+        if b.summary {
+            // (the slowest, those a faster build would start from)
+            let slowest = b.steps.filter({ one -> one.took >= 1000 });
+            slowest.sort({ one, other -> one.took > other.took });
+            for one in slowest.slice(0, if slowest.len() < 8 { slowest.len() } else { 8 }) {
+                eprint("build:   {one.took / 1000}.{(one.took % 1000) / 100}s {one.name}\n");
+            }
+        }
+        if b.failed { exit.exit(err(())); }
+    }
+
+    // the builder, as yelc build runs the program: --yelc <compiler> --home <its directory>
+    // --project <dir>, then the steps asked for, -Dname=value, --prefix <dir> (-p), -j<n>,
+    // --summary and --help
+    @(private) arguments: func() -> builder {
+        let given: list<string> = environment.get-arguments();
+        let installed = new-step("install", "Build what is installed, into the prefix (the default)", "group", none, []);
+        let b: builder = {
+            project: ".",
+            prefix: "yel-out",
+            steps: [installed,],
+            options: [],
+            given: map.new(),
+            wanted: [],
+            help: false,
+            yelc: "yelc",
+            home: ".",
+            cc: variable("CC", "cc"),
+            installed: installed,
+            wasi-sdk: "",
+            toolchain: 0,
+            wasm-runtimes: map.new(),
+            wasm-objects: map.new(),
+            jobs: c-parallelism(),
+            running: 0,
+            waiting: [],
+            hashes: map.new(),
+            hashing: map.new(),
+            summary: false,
+            performed: 0,
+            failures: 0,
+            failed: false,
+        };
+        let index = 1;
+        loop {
+            if index >= given.len() { break; }
+            let argument = given[index];
+            let next = if index + 1 < given.len() { given[index + 1] } else { "" };
+            if argument == "--yelc" { b.yelc = next; index += 2; continue; }
+            if argument == "--home" { b.home = next; index += 2; continue; }
+            if argument == "--project" { b.project = next; index += 2; continue; }
+            if argument == "--prefix" || argument == "-p" { b.prefix = next; index += 2; continue; }
+            if argument == "--help" { b.help = true; index += 1; continue; }
+            if argument == "--summary" { b.summary = true; index += 1; continue; }
+            if argument.starts-with("-j") {
+                let count = if argument == "-j" { index += 1; next } else { argument.substring(2, argument.len()) };
+                match number.parse-int(count) {
+                    some(jobs) => { if jobs > 0 { b.jobs = jobs; } }
+                    none => report(b, "-j takes how many programs run at once, not {count}"),
+                }
+                index += 1;
+                continue;
+            }
+            if argument.starts-with("-D") {
+                let set = argument.substring(2, argument.len());
+                match set.find("=") {
+                    some(at) => b.given.set(set.substring(0, at), set.substring(at + 1, set.len())),
+                    none => b.given.set(set, "true"),
+                }
+                index += 1;
+                continue;
+            }
+            b.wanted.push(argument);
+            index += 1;
+        }
+        b
+    }
+
+    // the steps and options, as zig build --help tells them
+    @(private) told: func(b: builder) {
+        print("Steps:\n");
+        for one in b.steps {
+            if one.kind != "group" { continue; }
+            print("  {padded(one.name, 22)}{one.description}\n");
+        }
+        print("\nOptions:\n");
+        for one in b.options {
+            let shown = "-D{one.name}={if one.default == "" { "<value>" } else { one.default }}";
+            print("  {padded(shown, 30)}{one.description}\n");
+        }
+        print("\nGeneral:\n");
+        print("  {padded("-p, --prefix <dir>", 30)}Where installs go (yel-out)\n");
+        print("  {padded("-j<n>", 30)}How many programs run at once ({c-parallelism()}, the cores)\n");
+        print("  {padded("--summary", 30)}How many steps ran and failed, and the slowest\n");
+        print("  {padded("--help", 30)}These\n");
+    }
+
+    // a step's work, once: the task doing it begun by the first step to need it, waited for by
+    // each
+    @(private) perform: async func(b: builder, s: step) {
+        match s.task {
+            some(running) => { wait running; }
+            none => {
+                let running = start performed(b, s);
+                s.task = some(running);
+                wait running;
+            }
+        }
+    }
+
+    // a step's work, after that of each it depends on (begun together): none where one of them
+    // failed
+    @(private) performed: async func(b: builder, s: step) {
+        let befores: list<future<()>> = [];
+        for before in s.depends { befores.push(start perform(b, before)); }
+        for one in befores { wait one; }
+        if s.depends.any({ before -> before.failed }) {
+            s.failed = true;
+            return;
+        }
+        if s.kind == "group" { return; }
+        b.performed += 1;
+        let began = async.now-ms();
+        let worked = wait work(b, s);
+        s.took = async.now-ms() - began;
+        if !worked {
+            s.failed = true;
+            b.failures += 1;
+        }
+    }
+
+    // what a step does: whether it went well (else it told why)
+    @(private) work: async func(b: builder, s: step) -> bool {
+        if s.kind == "compile" {
+            match s.artifact {
+                some(a) => wait compile(b, a),
+                none => true,
+            }
+        } else if s.kind == "run" || s.kind == "command" {
+            wait executed(b, s)
+        } else if s.kind == "write" {
+            wait wrote(b, s)
+        } else if s.kind == "install" {
+            match s.artifact {
+                some(a) => wait installed(b, a),
+                none => true,
+            }
+        } else if s.kind == "install-file" && s.arguments.len() > 0 {
+            let to = path(b, b.prefix + "/" + s.to);
+            // (a program replaced, not written over: macOS ends one whose signed file changed)
+            if s.executable && !wait ran(b, "rm", ["-f", to,]) { return false; }
+            if !wait copied(b, located(b, s.arguments[0]), to) { return false; }
+            !s.executable || wait ran(b, "chmod", ["+x", to,])
+        } else {
+            true
+        }
+    }
+
+    // a run or a command: its program run with its arguments; where it makes files, in its own
+    // directory of .yel-cache, by a key of what goes into it (run again only where none of that
+    // key was made)
+    @(private) executed: async func(b: builder, s: step) -> bool {
+        let program = match s.artifact {
+            some(a) => {
+                if a.kind == "component" {
+                    report(b, "{a.name} is a component: a host runs it, not yelc build");
+                    return false;
+                }
+                a.made
+            }
+            none => if s.arguments.len() > 0 { located(b, s.arguments[0]) } else { "" },
+        };
+        let given = match s.artifact {
+            some(_) => s.arguments,
+            none => s.arguments.slice(1, s.arguments.len()),
+        };
+        if program == "" { return true; }
+        if s.outputs.len() == 0 {
+            let arguments = resolved(given);
+            if s.kind == "run" { for one in trailing() { arguments.push(one); } }
+            return match s.expected {
+                some(expected) => {
+                    // (what it prints, kept in .yel-cache by the step and what it runs, then compared)
+                    let key = mixed(mixed(mixed(1469598103934665603, s.name), program), arguments.join(" "));
+                    let printed = path(b, ".yel-cache/printed/{hex(key)}.out");
+                    wait make-dirs(dir-name(printed));
+                    if !wait ended(b, s, program, arguments, printed) { return false; }
+                    let want = located(b, expected);
+                    if wait read(want) == wait read(printed) { return true; }
+                    report(b, "{s.name}: printed other than it should: diff {want} {printed}");
+                    false
+                }
+                none => wait ended(b, s, program, arguments, ""),
+            };
+        }
+        // (the key: the program, its arguments as written, what its inputs hold)
+        let key = mixed(1469598103934665603, program);
+        for one in given {
+            match one {
+                let text: string => { key = mixed(key, "argument {text}"); }
+                let made: generated => { key = mixed(key, "output {made.name} of {made.step.out}"); }
+            }
+        }
+        for one in s.inputs {
+            for file in wait all-files(located(b, one)) {
+                match wait content-hash(b, file) {
+                    some(hash) => { key = with-hash(mixed(key, file), hash); }
+                    none => {}
+                }
+            }
+        }
+        s.out = path(b, ".yel-cache/o/{hex(key)}");
+        for made in s.outputs { made.at = if made.name == "" { s.out } else { s.out + "/" + made.name }; }
+        let done = s.out + "/.done";
+        if wait exists(done) { return true; }
+        print(if s.name == "command" { "build: command {program}\n" } else { "build: {s.name}\n" });
+        wait make-dirs(s.out);
+        for made in s.outputs { if made.dir { wait make-dirs(made.at); } }
+        if !wait ended(b, s, program, resolved(given), "") { return false; }
+        wait write(done, "");
+        true
+    }
+
+    // a write-files step: its files written in its own directory, by a key of what they hold
+    @(private) wrote: async func(b: builder, s: step) -> bool {
+        let key: u64 = 1469598103934665603;
+        for file in s.files {
+            let (name, content) = file;
+            key = mixed(mixed(key, name), content);
+        }
+        s.out = path(b, ".yel-cache/o/{hex(key)}");
+        for made in s.outputs { made.at = if made.name == "" { s.out } else { s.out + "/" + made.name }; }
+        if wait exists(s.out + "/.done") { return true; }
+        for file in s.files {
+            let (name, content) = file;
+            let at = s.out + "/" + name;
+            wait make-dirs(dir-name(at));
+            wait write(at, content);
+        }
+        wait write(s.out + "/.done", "");
+        true
+    }
+
+    // arguments as a program is given them: each path a step makes as where it is
+    @(private) resolved: func(arguments: list<place>) -> list<string> {
+        let out: list<string> = [];
+        for one in arguments {
+            match one {
+                let text: string => out.push(text),
+                let made: generated => out.push(made.at),
+            }
+        }
+        out
+    }
+
+    // where a path is: one of the project's in it, one a step makes where the step made it
+    @(private) located: func(b: builder, at: place) -> string {
+        match at {
+            let text: string => path(b, text),
+            let made: generated => made.at,
+        }
+    }
+
+    // what an editor's checker (yel-lsp) checks a file of the project as: each artifact's package
+    // and the directories it includes from (its WIT's, its yel packages'), a line each, tab-separated,
+    // in .yel-cache/check.txt (a path relative: the project's; one a step makes, only once made)
+    @(private) checked-by: async func(b: builder) {
+        let lines: list<string> = [];
+        for one in b.steps {
+            if one.kind != "compile" { continue; }
+            match one.artifact {
+                some(a) => {
+                    let parts = [located(b, a.root),];
+                    for dir in a.wits { parts.push(located(b, dir)); }
+                    for dir in a.includes { parts.push(located(b, dir)); }
+                    if !parts.contains("") { lines.push(parts.join("\t")); }
+                }
+                none => {}
+            }
+        }
+        wait make-dirs(path(b, ".yel-cache"));
+        wait write(path(b, ".yel-cache/check.txt"), lines.join("\n") + "\n");
+    }
+
+    // the arguments after --, for what a run step runs
+    @(private) trailing: func() -> list<string> {
+        let given: list<string> = environment.get-arguments();
+        let at = given.index-of("--");
+        if at < 0 { [] } else { given.slice(at + 1, given.len()) }
+    }
+
+    // ---- making an artifact
+
+    // an artifact made: in .yel-cache, by its key; made again only where none of that key is
+    @(private) compile: async func(b: builder, a: artifact) -> bool {
+        let key = wait artifact-key(b, a);
+        let dir = path(b, ".yel-cache/o/{hex(key)}");
+        let made = dir + "/" + (if a.kind == "component" { "{a.name}.wasm" } else { a.name });
+        a.made = made;
+        if wait exists(made) { return true; }
+        print("build: {a.kind} {a.name}\n");
+        wait make-dirs(dir);
+        let bitcode = a.backend == "bitcode";
+        if bitcode && a.kind != "component" {
+            report(b, "{a.name}: the bitcode backend builds components only (backend \"c\" for {a.kind})");
+            return false;
+        }
+        let c = if bitcode { "{dir}/{a.name}.bc" } else { "{dir}/{a.name}.c" };
+        let arguments: list<string> = if a.kind == "tests" { ["test",] } else { [] };
+        arguments.push(located(b, a.root));
+        arguments.push(c);
+        arguments.push(b.home + "/runtime/prelude.yel");
+        for one in a.wits { arguments.push("-I"); arguments.push(located(b, one)); }
+        for one in a.includes { arguments.push("-I"); arguments.push(located(b, one)); }
+        arguments.push("--opt");
+        arguments.push(a.optimize);
+        for one in a.embeds {
+            let (name, file) = one;
+            arguments.push("--embed");
+            arguments.push("{name}={located(b, file)}");
+        }
+        if a.kind == "component" {
+            arguments.push("--wit");
+            arguments.push("{dir}/{a.name}-wit");
+        }
+        if bitcode {
+            for one in ["--backend", "bitcode", "--triple", "wasm32-unknown-wasip2",] { arguments.push(one); }
+        }
+        let yelc = match a.yelc {
+            some(given) => located(b, given),
+            none => b.yelc,
+        };
+        if !wait ran(b, yelc, arguments) { return false; }
+        if a.kind == "component" {
+            let sdk = b.wasi-sdk;
+            if sdk == "" {
+                report(b, "{a.name} is a component: -Dwasi-sdk=<dir> (or WASI_SDK) names the WASI SDK");
+                return false;
+            }
+            let clang = sdk + "/bin/clang";
+            let level = c-level(a.optimize);
+            let runtime = wait wasm-runtime(b, clang, level, bitcode);
+            if runtime == "" { return false; }
+            let flags = ["--target=wasm32-wasip2", level, "-mexec-model=reactor", "-Wl,-z,stack-size=1048576",];
+            // (C: the runtime's header; bitcode: its target yelc's, the triple given)
+            if bitcode { flags.push("-Wno-override-module"); } else { for one in ["-DY_HOSTED", "-I" + b.home + "/runtime",] { flags.push(one); } }
+            flags.push("-Wl,--component-type,{dir}/{a.name}-wit");
+            if a.wasm-opt.len() == 0 {
+                for one in ["-o", made, c, runtime, "-lm",] { flags.push(one); }
+                return wait ran(b, clang, flags);
+            }
+            // (the core module, its component type in it, optimized, then made a component)
+            let core = "{dir}/{a.name}.core.wasm";
+            let optimized = "{dir}/{a.name}.opt.wasm";
+            for one in ["-Wl,--skip-wit-component", "-o", core, c, runtime, "-lm",] { flags.push(one); }
+            if !wait ran(b, clang, flags) { return false; }
+            let optimizing = a.wasm-opt.slice(0, a.wasm-opt.len());
+            for one in [core, "-o", optimized,] { optimizing.push(one); }
+            if !wait ran(b, "wasm-opt", optimizing) { return false; }
+            // (its own WIT, which the linker embeds only where it makes the component itself)
+            let embedded = "{dir}/{a.name}.embedded.wasm";
+            if !wait ran(b, "wasm-tools", ["component", "embed", "{dir}/{a.name}-wit", optimized, "-o", embedded,]) { return false; }
+            wait ran(b, "wasm-tools", ["component", "new", embedded, "-o", made,])
+        } else {
+            let flags = a.flags.slice(0, a.flags.len());
+            for one in ["-w", "-I" + b.home + "/runtime", "-I" + b.home + "/runtime/libuv/include", "-o", made, c, b.home + "/build/yel.o", b.home + "/build/libuv.a",] { flags.push(one); }
+            for one in system-libraries(b) { flags.push(one); }
+            wait ran(b, b.cc, flags)
+        }
+    }
+
+    // how clang optimizes a component's C for how yelc optimizes it: size -Oz (clang's inlining
+    // at -O2 more than doubles a view's code), speed -O2, none -O0
+    @(private) c-level: func(optimize: string) -> string {
+        if optimize == "speed" { "-O2" } else if optimize == "none" { "-O0" } else { "-Oz" }
+    }
+
+    // the runtime compiled for wasm at level (as an object, or as bitcode for a bitcode build),
+    // once for every component (by its source's key): its file ("": not made)
+    @(private) wasm-runtime: async func(b: builder, clang: string, level: string, bitcode: bool) -> string {
+        let kind = "{level}{if bitcode { " bitcode" } else { "" }}";
+        match b.wasm-runtimes.get(kind) {
+            some(making) => { wait making; }
+            none => {
+                let making = start wasm-runtime-made(b, clang, level, bitcode, kind);
+                b.wasm-runtimes.set(kind, making);
+                wait making;
+            }
+        }
+        b.wasm-objects.get(kind).unwrap-or("")
+    }
+
+    @(private) wasm-runtime-made: async func(b: builder, clang: string, level: string, bitcode: bool, kind: string) {
+        let dir = path(b, ".yel-cache/wasm/{hex(mixed(b.toolchain, kind))}");
+        let object = dir + (if bitcode { "/yel.bc" } else { "/yel.o" });
+        if !wait exists(object) {
+            wait make-dirs(dir);
+            let flags = ["--target=wasm32-wasip2", level, "-DY_HOSTED", "-I" + b.home + "/runtime", "-c",];
+            if bitcode { flags.push("-emit-llvm"); }
+            for one in ["-o", object, b.home + "/runtime/yel.c",] { flags.push(one); }
+            if !wait ran(b, clang, flags) { return; }
+        }
+        b.wasm-objects.set(kind, object);
+    }
+
+    // an installed artifact: in the prefix (a component as <name>.wasm and its WIT, an executable as
+    // bin/<name>), told where
+    @(private) installed: async func(b: builder, a: artifact) -> bool {
+        if a.made == "" { return false; }
+        let to = if a.kind == "component" { path(b, "{b.prefix}/{a.name}.wasm") } else { path(b, "{b.prefix}/bin/{a.name}") };
+        wait make-dirs(dir-name(to));
+        if a.kind != "component" && !wait ran(b, "rm", ["-f", to,]) { return false; }
+        match wait read(a.made) {
+            some(bytes) => {
+                forget(b, to);
+                wait write(to, bytes);
+                // (an executable as one: its bits kept)
+                if a.kind != "component" && !wait ran(b, "chmod", ["+x", to,]) { return false; }
+                print("build: installed {to}\n");
+                // (a component's WIT beside it, <name>-wit: its world, its exports' interfaces, what
+                // a transpile reads them from)
+                if a.kind == "component" { return wait copied(b, dir-name(a.made) + "/{a.name}-wit", path(b, "{b.prefix}/{a.name}-wit")); }
+                true
+            }
+            none => {
+                report(b, "cannot read {a.made}");
+                false
+            }
+        }
+    }
+
+    // what makes an artifact, as one number: its kind, name and settings, its files (each under
+    // its root, each .yel and .wit under its WIT and include directories), what it embeds and the
+    // toolchain
+    @(private) artifact-key: async func(b: builder, a: artifact) -> u64 {
+        let dirs = [located(b, a.root),];
+        for one in a.wits { dirs.push(located(b, one)); }
+        for one in a.includes { dirs.push(located(b, one)); }
+        let key = mixed(b.toolchain, "{a.kind} {a.name} {a.optimize} {a.backend} {a.flags.join(" ")} {a.wasm-opt.join(" ")} {dirs.join(",")}");
+        // (its own compiler by its bytes)
+        match a.yelc {
+            some(given) => {
+                match wait content-hash(b, located(b, given)) {
+                    some(hash) => { key = with-hash(key, hash); }
+                    none => {}
+                }
+            }
+            none => {}
+        }
+        for one in a.embeds {
+            let (name, file) = one;
+            match wait content-hash(b, located(b, file)) {
+                some(hash) => { key = with-hash(mixed(key, "embed {name}"), hash); }
+                none => {}
+            }
+        }
+        // (every file under its root: one #embed reads beside its sources too; the .yel and .wit
+        // under what it includes)
+        let root = located(b, a.root);
+        for dir in dirs {
+            let files = if dir == root && wait is-dir(dir) { wait all-files(dir) } else { wait sources(dir) };
+            for file in files {
+                match wait content-hash(b, file) {
+                    some(hash) => { key = with-hash(mixed(key, file), hash); }
+                    none => {}
+                }
+            }
+        }
+        key
+    }
+
+    // the toolchain, as one number: the compiler's bytes, the runtime's (yel.c, yel.h) and std's
+    // sources
+    @(private) toolchain: async func(b: builder) -> u64 {
+        let key: u64 = 1469598103934665603;
+        for file in [b.yelc, b.home + "/runtime/yel.c", b.home + "/runtime/yel.h",] {
+            match wait read(file) {
+                some(content) => { key = mixed(key, content); }
+                none => {}
+            }
+        }
+        for file in wait sources(b.home + "/runtime/std") {
+            match wait read(file) {
+                some(content) => { key = mixed(mixed(key, file), content); }
+                none => {}
+            }
+        }
+        key
+    }
+
+    // ---- what the steps do
+
+    // a program run with arguments: whether it ended well (else told, and the build failed)
+    @(private) ran: async func(b: builder, command: string, arguments: list<string>) -> bool {
+        wait ran-as(b, "", command, arguments, [], "", some(0))
+    }
+
+    // what a run or a command step runs, with its environment, printing to printed ("": as the
+    // build does): whether it ended as it should (where nothing is asked of it: with 0)
+    @(private) ended: async func(b: builder, s: step, command: string, arguments: list<string>, printed: string) -> bool {
+        let exit = match s.exit {
+            some(code) => some(code),
+            none => match s.expected {
+                some(_) => none,
+                none => some(0),
+            },
+        };
+        wait ran-as(b, s.name, command, arguments, s.environment, printed, exit)
+    }
+
+    // a program run once one of -j's places is free (else the task waits, woken as one ends):
+    // whether it ended with exit (none: however it ends), else told as label's
+    @(private) ran-as: async func(b: builder, label: string, command: string, arguments: list<string>, environment: list<tuple<string, string>>, printed: string, exit: option<s64>) -> bool {
+        loop {
+            if b.running < b.jobs { break; }
+            b.waiting.push(async.current-task());
+            wait async.park();
+        }
+        b.running += 1;
+        let outcome = wait process.run-async(command, arguments, "", environment, printed);
+        b.running -= 1;
+        if b.waiting.len() > 0 {
+            let next = b.waiting[0];
+            b.waiting = b.waiting.slice(1, b.waiting.len());
+            async.wake-task(next);
+        }
+        let told = if label == "" { command } else { "{label}: {command}" };
+        match outcome {
+            ok(ended) => match ended {
+                code(n) => {
+                    match exit {
+                        some(wanted) => {
+                            if n == wanted { return true; }
+                            report(b, "{told} ended with {n}{if wanted == 0 { "" } else { ", not {wanted}" }}");
+                            false
+                        }
+                        none => true,
+                    }
+                }
+                signal(n) => {
+                    match exit {
+                        some(_) => {
+                            report(b, "{told} was stopped by signal {n}");
+                            false
+                        }
+                        none => true,
+                    }
+                }
+            },
+            err(why) => {
+                report(b, "{told}: {why}");
+                false
+            }
+        }
+    }
+
+    // an error: told, and the build failed
+    @(private) report: func(b: builder, message: string) {
+        eprint("build: {message}\n");
+        b.failed = true;
+    }
+
+    @(private) artifact-of: func(b: builder, name: string, kind: string, root: place) -> artifact {
+        let compiled = made-step(b, "compile {name}", "", "compile", none, []);
+        let a: artifact = { name: name, kind: kind, root: root, wits: [], includes: [], optimize: optimize(b), yelc: none, flags: ["-O2",], embeds: [], wasm-opt: [], backend: "c", made: "", compile: compiled, };
+        compiled.artifact = some(a);
+        needs(compiled, root);
+        a
+    }
+
+    @(private) made-step: func(b: builder, name: string, description: string, kind: string, a: option<artifact>, depends: list<step>) -> step {
+        let made = new-step(name, description, kind, a, depends);
+        b.steps.push(made);
+        made
+    }
+
+    @(private) new-step: func(name: string, description: string, kind: string, a: option<artifact>, depends: list<step>) -> step {
+        { name: name, description: description, kind: kind, artifact: a, arguments: [], inputs: [], outputs: [], files: [], to: "", depends: depends, out: "", task: none, failed: false, took: 0, environment: [], expected: none, exit: none, executable: false, }
+    }
+
+    // ---- paths and files
+
+    // a path of the project's (an absolute one as it is)
+    @(private) path: func(b: builder, at: string) -> string {
+        if at.starts-with("/") || b.project == "." { at } else { b.project + "/" + at }
+    }
+
+    @(private) dir-name: func(at: string) -> string {
+        match at.find-last("/") {
+            some(slash) => at.substring(0, slash),
+            none => ".",
+        }
+    }
+
+    // an environment variable's value (otherwise where it is not set)
+    variable: func(name: string, otherwise: string) -> string {
+        for pair in environment.get-environment() {
+            let (key, value) = pair;
+            if key == name { return value; }
+        }
+        otherwise
+    }
+
+    // the .yel and .wit files under dir (dir itself one such file: it), sorted
+    @(private) sources: async func(dir: string) -> list<string> {
+        let out: list<string> = [];
+        if dir.ends-with(".yel") || dir.ends-with(".wit") {
+            out.push(dir);
+            return out;
+        }
+        wait gathered(dir, out, true);
+        out
+    }
+
+    // every file under at (at itself a file: it), sorted
+    @(private) all-files: async func(at: string) -> list<string> {
+        let out: list<string> = [];
+        if wait is-dir(at) { wait gathered(at, out, false); } else { out.push(at); }
+        out
+    }
+
+    // the files under dir into out (yel's only: .yel and .wit), past what a build or a tool makes
+    @(private) gathered: async func(dir: string, out: list<string>, yel: bool) {
+        for name in wait listed(dir) {
+            if name.starts-with(".") || name == "yel-out" || name == "node_modules" { continue; }
+            let at = dir + "/" + name;
+            if wait is-dir(at) {
+                wait gathered(at, out, yel);
+            } else if !yel || name.ends-with(".yel") || name.ends-with(".wit") {
+                out.push(at);
+            }
+        }
+    }
+
+    // a file (or every file in a directory) copied to to, told
+    @(private) copied: async func(b: builder, from: string, to: string) -> bool {
+        if wait is-dir(from) {
+            for file in wait all-files(from) {
+                if !wait copied(b, file, to + file.substring(from.len(), file.len())) { return false; }
+            }
+            return true;
+        }
+        wait make-dirs(dir-name(to));
+        match wait read(from) {
+            some(bytes) => {
+                forget(b, to);
+                wait write(to, bytes);
+                print("build: installed {to}\n");
+                true
+            }
+            none => {
+                report(b, "cannot read {from}");
+                false
+            }
+        }
+    }
+
+    @(private) working-dir: func() -> types.descriptor {
+        let dirs = preopens.get-directories();
+        for index in 1..dirs.len() { dirs[index].0.drop(); }
+        dirs[0].0
+    }
+
+    @(private) exists: async func(at: string) -> bool {
+        let root = working-dir();
+        let found = wait root.stat-at(types.path-flags.symlink-follow, at);
+        root.drop();
+        match found {
+            ok(_) => true,
+            err(_) => false,
+        }
+    }
+
+    @(private) is-dir: async func(at: string) -> bool {
+        let root = working-dir();
+        let found = wait root.stat-at(types.path-flags.symlink-follow, at);
+        root.drop();
+        match found {
+            ok(stat) => stat.type == types.descriptor-type.directory,
+            err(_) => false,
+        }
+    }
+
+    // a file's bytes (none: it cannot be read)
+    @(private) read: async func(at: string) -> option<string> {
+        let root = working-dir();
+        let opened = wait root.open-at(types.path-flags.symlink-follow, at, types.open-flags.create & types.open-flags.directory, types.descriptor-flags.read);
+        root.drop();
+        match opened {
+            ok(file) => {
+                let (bytes, reading) = file.read-via-stream(0);
+                let out = buffer(65536);
+                loop {
+                    let chunk = wait streams.read-some(bytes, 65536);
+                    if chunk.len() == 0 { break; }
+                    out.push-bytes(chunk);
+                }
+                let ended = wait reading;
+                file.drop();
+                match ended {
+                    ok(_) => some(out.to-string()),
+                    err(_) => none,
+                }
+            }
+            err(_) => none,
+        }
+    }
+
+    // a file written (made, or emptied first)
+    @(private) write: async func(at: string, content: string) {
+        let root = working-dir();
+        let opened = wait root.open-at(types.path-flags.symlink-follow, at, types.open-flags.create | types.open-flags.truncate, types.descriptor-flags.write);
+        root.drop();
+        match opened {
+            ok(file) => {
+                let (bytes, out): tuple<stream<u8>, writer<u8>> = streams.stream-pair(65536);
+                let writing = file.write-via-stream(bytes, 0);
+                wait streams.write-all(out, content.bytes());
+                streams.close(out);
+                let _ = wait writing;
+                file.drop();
+            }
+            err(error) => eprint("build: cannot write {at}: {error}\n"),
+        }
+    }
+
+    // a directory's entries (none: it cannot be read), sorted
+    @(private) listed: async func(dir: string) -> list<string> {
+        let names: list<string> = [];
+        let root = working-dir();
+        let opened = wait root.open-at(types.path-flags.symlink-follow, dir, types.open-flags.directory, types.descriptor-flags.read);
+        root.drop();
+        match opened {
+            ok(found) => {
+                let (listed, reading) = found.read-directory();
+                loop {
+                    match wait streams.read(listed) {
+                        some(entry) => names.push(entry.name),
+                        none => { break; }
+                    }
+                }
+                let _ = wait reading;
+                found.drop();
+            }
+            err(_) => {}
+        }
+        names.sort({ a, b -> text.compare(a, b) < 0 });
+        names
+    }
+
+    // a directory made, with its parents
+    @(private) make-dirs: async func(dir: string) {
+        let root = working-dir();
+        let parts = dir.split("/");
+        let at = "";
+        for index in 0..parts.len() {
+            let part = parts[index];
+            at = if index == 0 { part } else { at + "/" + part };
+            if part != "" && part != "." && part != ".." {
+                let _ = wait root.create-directory-at(at);
+            }
+        }
+        root.drop();
+    }
+
+    // (as the build program declares: a directory's names, NUL-free and apart by newlines, a
+    // directory's ending with /; whether a file is there to run; how many cores the system has)
+    @(private) @c(name = "yel_build_entries") c-entries: extern func(dir: string) -> string;
+    @(private) @c(name = "yel_build_runnable") c-runnable: extern func(at: string) -> bool;
+    @(private) @c(name = "yel_build_parallelism") c-parallelism: extern func() -> s64;
+
+    // ---- keys
+
+    // key with text mixed in (FNV-1a's prime over each text's hash)
+    @(private) mixed: func(key: u64, content: string) -> u64 { with-hash(key, text.hash(content)) }
+
+    @(private) with-hash: func(key: u64, hash: u64) -> u64 { (key ^ hash) * 1099511628211 }
+
+    // a file's bytes' hash (none: it cannot be read), each file's read once a build (the files a
+    // step writes forgotten as it does)
+    @(private) content-hash: async func(b: builder, file: string) -> option<u64> {
+        match b.hashes.get(file) {
+            some(hash) => { return some(hash); }
+            none => {}
+        }
+        // (one read, however many steps ask at once)
+        match b.hashing.get(file) {
+            some(running) => { wait running; }
+            none => {
+                let running = start hashed(b, file);
+                b.hashing.set(file, running);
+                wait running;
+            }
+        }
+        b.hashes.get(file)
+    }
+
+    @(private) hashed: async func(b: builder, file: string) {
+        match wait read(file) {
+            some(content) => b.hashes.set(file, text.hash(content)),
+            none => {}
+        }
+    }
+
+    // a file about to be written: its hash forgotten
+    @(private) forget: func(b: builder, file: string) {
+        let _ = b.hashes.remove(file);
+        let _ = b.hashing.remove(file);
+    }
+
+    // a key as sixteen hex digits
+    @(private) hex: func(key: u64) -> string {
+        let digits = "0123456789abcdef";
+        let out = buffer(16);
+        for place in 0..16 {
+            let digit = ((key >> ((15 - place) * 4) as u64) & 15) as s64;
+            out.push-byte(digits.byte-at(digit));
+        }
+        out.to-string()
+    }
+
+    @(private) padded: func(text-in: string, width: s64) -> string {
+        let out = text-in;
+        loop {
+            if out.len() >= width { break; }
+            out = out + " ";
+        }
+        out + " "
+    }
+}

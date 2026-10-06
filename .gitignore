@@ -1,5 +1,8 @@
-# what the bootstrap, the tests and the tools make (build/yelc2, the tests' C and binaries, libuv.a)
-build/
+# what the bootstrap, the tests and the tools make (build/yelc2, the tests' C and binaries, libuv.a);
+# the root's only: std's build system is runtime/std/build
+/build/
+# what examples/build.sh makes of each example
+examples/*/build/
 # local scratch, never shared
 private/
 .DS_Store
