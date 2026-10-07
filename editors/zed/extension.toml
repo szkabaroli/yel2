@@ -2,16 +2,16 @@ id = "yel"
 name = "Yel"
 version = "0.1.0"
 schema_version = 1
-authors = ["Sz. Kovács Roland <szkovacs.roland@gmail.com>"]
+authors = ["Sz. Kovács Roland"]
 description = "yel2: highlighting, outline and indentation (Tree-sitter), the compiler's errors and formatting (yel-lsp)."
 repository = "https://github.com/szkabaroli/yel2"
 
-# the grammar (editors/tree-sitter-yel): dev.sh points this at a snapshot of it in build/, as Zed
-# builds a grammar from a git repository at a commit; once pushed, the repository's own URL and a
-# commit of it (with path = "editors/tree-sitter-yel")
+# the grammar (editors/tree-sitter-yel), as Zed builds one: from a git repository at a commit (dev.sh
+# points it at a snapshot in build/ while the grammar is changed locally)
 [grammars.yel]
-repository = "file:///Users/rolandsz.kovacs/Documents/Code/meshx-shell/external/yel2/build/tree-sitter-yel"
-rev = "77f1e49e5e1cce68a728f45c5dcf03be0a098c44"
+repository = "https://github.com/szkabaroli/yel2"
+rev = "f78a8c30a5b7f8c4dc95252f2f083e3a10656332"
+path = "editors/tree-sitter-yel"
 
 [language_servers.yel-lsp]
 name = "yel-lsp"

@@ -49,8 +49,10 @@ awk -v repo="file://$snapshot" -v rev="$rev" '
 	/^\[/ { section = 0 }
 	section && /^repository = / { print "repository = \"" repo "\""; next }
 	section && /^rev = / { print "rev = \"" rev "\""; next }
+	section && /^path = / { next }
 	{ print }
 ' extension.toml > extension.toml.new
 mv extension.toml.new extension.toml
 echo "grammar: file://$snapshot at $rev"
+echo "(extension.toml now names a local path: git checkout editors/zed/extension.toml before committing)"
 echo "now in Zed: zed: rebuild dev extension (or, the first time, zed: install dev extension: $here)"
