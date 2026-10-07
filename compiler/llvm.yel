@@ -2759,9 +2759,9 @@ module llvm {
                     }
                     return out;
                 }
-                pointer-paths(ty, function, resolved).map({ path -> 0 })
+                pointer-paths(ty, function, resolved).map({ _ -> 0 })
             }
-            _ => pointer-paths(ty, function, resolved).map({ path -> 0 }),
+            _ => pointer-paths(ty, function, resolved).map({ _ -> 0 }),
         }
     }
 

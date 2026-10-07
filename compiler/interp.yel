@@ -144,7 +144,7 @@ variant Code {
 resource BinaryCode { first: s64, second: s64, left: Code, right: Code, }
 
 // (body: the callee's code, kept here once it is compiled: no lookup each call)
-resource CallCode { function: Func, args: list<Code>, body: option<list<StatementCode>>, }
+resource CallCode { function: Func, args: list<Code>, body: option<Compiled>, }
 
 resource NativeCode { key: string, args: list<Code>, }
 
@@ -185,6 +185,195 @@ resource AssignCode { mark: Mark, op: s64, value: Code, }
 resource EvaluateCode { value: Code, kept: bool, }
 
 resource RangeCode { mark: Mark, start: Code, stop: Code, inclusive: bool, body: list<StatementCode>, }
+
+// a func's body compiled the first time it is called: a program for the machine, where all of it
+// is what the machine does, else code for run-statements
+variant Compiled {
+    machine(Routine),
+    tree(list<StatementCode>),
+}
+
+// how the machine holds a value, by its type: a word of a kind (a number by its bits, a float by
+// its f64's, a bool 0 or 1, a char its code point); nothing (unit, never); else a Value
+enum register-kind { s8, s16, s32, s64, u8, u16, u32, u64, char, f32, f64, truth, unit, never, value, }
+
+// the machine's instructions, each specialized for its operands' kind when compiled: no type is
+// looked at as they run. Operands are registers of the frame (words, or values for the -value
+// ones); shift: 64 less the kind's width (what wraps an integer to it); f32: 1 where a float is
+// rounded to f32 after each step
+enum opcode {
+    // into = extra's bits; values[into] = constants[extra]; a register's copy; a value copied as a
+    // binding copies it; a word as a Value of kind holds[extra]; unit
+    constant,
+    constant-value,
+    move,
+    move-value,
+    copy-value,
+    box,
+    unit-value,
+    // into = left + right's own bits (an immediate), wrapped by shift (extra)
+    add-immediate-signed,
+    add-immediate-unsigned,
+    // into = left op right, wrapped by shift (extra)
+    add-signed,
+    add-unsigned,
+    subtract-signed,
+    subtract-unsigned,
+    multiply-signed,
+    multiply-unsigned,
+    divide-signed,
+    divide-unsigned,
+    remainder-signed,
+    remainder-unsigned,
+    shift-left-signed,
+    shift-left-unsigned,
+    shift-right-signed,
+    shift-right-unsigned,
+    and,
+    or,
+    xor,
+    negate-signed,
+    negate-unsigned,
+    not-signed,
+    not-unsigned,
+    not-bool,
+    // into = 1 where left op right holds, else 0
+    equal-bits,
+    not-equal-bits,
+    less-signed,
+    less-unsigned,
+    less-equal-signed,
+    less-equal-unsigned,
+    // floats (extra: f32)
+    float-add,
+    float-subtract,
+    float-multiply,
+    float-divide,
+    remainder-float,
+    float-negate,
+    float-equal,
+    float-not-equal,
+    float-less,
+    float-less-equal,
+    // casts: an integer wrapped to a kind (shift: extra); a float to the integer kind holds[extra];
+    // an integer to a float (extra: f32); a float to a float; an integer to a char
+    wrap-signed,
+    wrap-unsigned,
+    float-to-integer,
+    signed-to-float,
+    unsigned-to-float,
+    float-to-float,
+    integer-to-char,
+    // to extra: always, where left is 1 (or 0), where left < right (or not), where left == right
+    // (or not)
+    jump,
+    jump-if,
+    jump-unless,
+    jump-less-signed,
+    jump-less-unsigned,
+    jump-not-less-signed,
+    jump-not-less-unsigned,
+    jump-equal,
+    jump-not-equal,
+    // the same, right an immediate: to extra where left < right, not <, > right, not >, == right,
+    // not ==
+    jump-less-immediate-signed,
+    jump-less-immediate-unsigned,
+    jump-not-less-immediate-signed,
+    jump-not-less-immediate-unsigned,
+    jump-greater-immediate-signed,
+    jump-greater-immediate-unsigned,
+    jump-not-greater-immediate-signed,
+    jump-not-greater-immediate-unsigned,
+    jump-equal-immediate,
+    jump-not-equal-immediate,
+    // a range's next turn (into: its counter, left: its last or its end): to extra while one is left
+    step-below-signed,
+    step-below-unsigned,
+    step-through,
+    // sites[extra] called, its arguments from into (words) and left (values) on, its result there
+    call,
+    // values[into] = the text of right values from left, as an interpolation shows them
+    interpolate,
+    // the frame's result (extra: 0 the word left, 1 the value left, 2 unit) given back
+    returns,
+}
+
+// (into, left, right: registers; extra: an immediate's bits, a jump's target, a table's index)
+record Instruction { op: opcode, into: s32, left: s32, right: s32, extra: s64, }
+
+// a func compiled for the machine: its code, how many registers of each file its frame has, its
+// parameters' kinds and registers (copies: the value ones, copied as a binding copies), its result,
+// and what its instructions index (constants, call sites, interpolations' display funcs, kinds)
+resource Routine {
+    function: Func,
+    code: list<Instruction>,
+    words: s64,
+    values: s64,
+    params: list<register-kind>,
+    registers: list<s64>,
+    copies: list<s64>,
+    result: register-kind,
+    constants: list<Value>,
+    sites: list<CallSite>,
+    shows: list<list<string>>,
+    holds: list<register-kind>,
+}
+
+// a call compiled: of a func (or, function none, a native by key), each argument's kind and
+// register (from the call's first word or value), its result's kind; direct where the machine may
+// run the callee itself (its parameters and result register-kind as here); what it calls, found the first
+// time it runs
+resource CallSite {
+    key: string,
+    function: option<Func>,
+    args: list<register-kind>,
+    registers: list<s64>,
+    result: register-kind,
+    direct: bool,
+    resolved: bool,
+    program: option<Routine>,
+    body: option<list<StatementCode>>,
+}
+
+// the machine's stacks: the registers of every frame (each call's after its caller's) and where
+// the frames in use end (where a run entered from the tree begins), and the calls in flight
+resource Machine {
+    words: list<u64>,
+    values: list<Value>,
+    word-top: s64,
+    value-top: s64,
+    callers: list<Caller>,
+}
+
+// a call in flight: its caller's program, where it goes on, its frame
+record Caller { program: Routine, pc: s64, base: s64, value-base: s64, }
+
+// a func being compiled for the machine: its code so far, the next free register of each file and
+// the most it needs, each local's register, the loops it is in, and its tables; failed: it does
+// what the machine does not (the tree runs it)
+resource Assembly {
+    function: Func,
+    result: register-kind,
+    code: list<Instruction>,
+    words: s64,
+    values: s64,
+    word-room: s64,
+    value-room: s64,
+    registers: map<Mark, s64>,
+    loops: list<LoopLabels>,
+    constants: list<Value>,
+    sites: list<CallSite>,
+    shows: list<list<string>>,
+    holds: list<register-kind>,
+    failed: bool,
+}
+
+// a loop's jumps to patch: its continues' (to top, or once known its step) and its breaks'
+resource LoopLabels { continues: list<s64>, breaks: list<s64>, }
+
+// where a compiled expression's value is: its kind and register (-1 for none)
+record Operand { kind: register-kind, register: s64, }
 
 // what a call by name calls: a func of the program, a native (or a host's func, or an extern), or
 // a case made (a variant's, written as a call)
@@ -230,8 +419,9 @@ resource Interp {
     // each call's callee, found the first time it runs (an interpreted func's: no native looked
     // for again)
     callees: map<Expr, Callee>,
-    // each func's body compiled, the first time it is called
-    compiled: map<Func, list<StatementCode>>,
+    // each func's body compiled, the first time it is called; the machine's stacks
+    compiled: map<Func, Compiled>,
+    machine: Machine,
     // each literal's value, made once (its text read the first time it is evaluated)
     literals: map<Expr, Value>,
     // whether each expression waits or starts, found once
@@ -275,6 +465,7 @@ module interp {
             hosted: hosted,
             callees: map.new(),
             compiled: map.new(),
+            machine: { words: [], values: [], word-top: 0, value-top: 0, callers: [], },
             yes: Value.bool(true),
             no: Value.bool(false),
             small-s32: small-integers("s32"),
@@ -333,7 +524,10 @@ module interp {
     @(private) call-func: func(run: Interp, function: Func, args: list<Value>) -> Value {
         if function.is-generator { return made-generator(run, function, args); }
         if function.is-async { stop("yelc run: {function.name} is async, which the interpreter does not run yet"); }
-        call-compiled(run, function, body-code(run, function), args)
+        match body-code(run, function) {
+            machine(program) => enter(run, program, args),
+            tree(body) => call-compiled(run, function, body, args),
+        }
     }
 
     // a func's call, its body's code given (neither a generator nor async)
@@ -621,7 +815,7 @@ module interp {
         {
             funcs: run.funcs, externs: run.externs, records: run.records, variants: run.variants, flags: run.flags,
             consts: run.consts, globals: run.globals, global-decls: run.global-decls,
-            cells: { cells: [], family: run.cells.family, }, slots: run.slots, unbound: run.unbound, bound: 0, hosted: run.hosted, callees: run.callees, compiled: run.compiled,
+            cells: { cells: [], family: run.cells.family, }, slots: run.slots, unbound: run.unbound, bound: 0, hosted: run.hosted, callees: run.callees, compiled: run.compiled, machine: run.machine,
             yes: run.yes, no: run.no, small-s32: run.small-s32, small-s64: run.small-s64,
             literals: run.literals, waits: run.waits, bindings: run.bindings, flow: Flow.normal,
             displays: run.displays, running: run.running, arguments: run.arguments,
@@ -1053,15 +1247,22 @@ module interp {
 
     // ---------------------------------------------------------------- compiled bodies
 
-    // a func's body as code, compiled the first time it is called
-    @(private) body-code: func(run: Interp, function: Func) -> list<StatementCode> {
+    // a func's body compiled the first time it is called: for the machine where it can be, else as
+    // code
+    @(private) body-code: func(run: Interp, function: Func) -> Compiled {
         match run.compiled.get(function) {
             some(found) => found,
             none => {
-                let saved = run.bindings;
-                run.bindings = function.bindings;
-                let made = statements-code(run, function.body);
-                run.bindings = saved;
+                let made = match program(run, function) {
+                    some(compiled) => Compiled.machine(compiled),
+                    none => {
+                        let saved = run.bindings;
+                        run.bindings = function.bindings;
+                        let statements = statements-code(run, function.body);
+                        run.bindings = saved;
+                        Compiled.tree(statements)
+                    }
+                };
                 run.compiled.set(function, made);
                 made
             }
@@ -1227,7 +1428,10 @@ module interp {
                 found
             }
         };
-        call-compiled(run, called.function, body, values)
+        match body {
+            machine(program) => enter(run, program, values),
+            tree(statements) => call-compiled(run, called.function, statements, values),
+        }
     }
 
     @(private) run-native: func(run: Interp, called: NativeCode) -> Value {
@@ -1398,6 +1602,1191 @@ module interp {
             at = at + 1;
             if !ranging.inclusive && !before(at, to) { break; }
         }
+    }
+
+    // ---------------------------------------------------------------- the machine
+
+    // A func whose body is all numbers, locals, control and calls runs on the machine: compiled once
+    // to instructions over typed registers (a frame's words and values), each specialized for its
+    // operands' kind, so nothing is looked at as it runs. A call of another such func is a frame on
+    // the machine's stacks, after its caller's; any other call is made as the tree makes it, its
+    // arguments Values made of the registers (and its result put back in one). A func with anything
+    // else the tree runs whole.
+
+    // a func's routine: none where it does what the machine does not (it waits, yields, is generic,
+    // has a default, a closure captures a parameter, or its body has what the assembly refuses)
+    @(private) program: func(run: Interp, function: Func) -> option<Routine> {
+        if function.is-async || function.is-generator || function.type-params.len() > 0 { return none; }
+        for one in function.defaults { if one.is-some() { return none; } }
+        let result = match held-type(function.result) {
+            some(found) => found,
+            none => { return none; }
+        };
+        if result == register-kind.never { return none; }
+        let assembly: Assembly = {
+            function: function, result: result, code: [], words: 0, values: 0, word-room: 0, value-room: 0,
+            registers: map.new(), loops: [], constants: [], sites: [], shows: [], holds: [], failed: false,
+        };
+        let params: list<register-kind> = [];
+        let registers: list<s64> = [];
+        let copies: list<s64> = [];
+        for index in 0..function.marks.len() {
+            let mark = function.marks[index];
+            if mark.captured || index >= function.param-types.len() { return none; }
+            let kind = match held-type(function.param-types[index]) {
+                some(found) => found,
+                none => { return none; }
+            };
+            let register = allocate(assembly, kind);
+            assembly.registers.set(mark, register);
+            params.push(kind);
+            registers.push(register);
+            if kind == register-kind.value { copies.push(register); }
+        }
+        let into = allocate(assembly, result);
+        block-into(run, assembly, function.body, into, result);
+        give-back(assembly, result, into);
+        if assembly.failed { return none; }
+        some({
+            function: function, code: assembly.code, words: assembly.word-room, values: assembly.value-room,
+            params: params, registers: registers, copies: copies, result: result,
+            constants: assembly.constants, sites: assembly.sites, shows: assembly.shows, holds: assembly.holds,
+        })
+    }
+
+    // how the machine holds a value of a type (none: a type it leaves to the tree)
+    @(private) held-type: func(given: Type) -> option<register-kind> {
+        match settled-type(without-readonly(erase-distinct(given))) {
+            num(name) => number-held(name),
+            range-type(range) => held-type(range.base),
+            bool-type => some(register-kind.truth),
+            char-type => some(register-kind.char),
+            unit-type => some(register-kind.unit),
+            never-type => some(register-kind.never),
+            singleton(_) => none,
+            var(_) => none,
+            error-type => none,
+            _ => some(register-kind.value),
+        }
+    }
+
+    @(private) number-held: func(name: string) -> option<register-kind> {
+        if name == "s8" { some(register-kind.s8) } else if name == "s16" { some(register-kind.s16) }
+        else if name == "s32" { some(register-kind.s32) } else if name == "s64" { some(register-kind.s64) }
+        else if name == "u8" { some(register-kind.u8) } else if name == "u16" { some(register-kind.u16) }
+        else if name == "u32" { some(register-kind.u32) } else if name == "u64" { some(register-kind.u64) }
+        else if name == "f32" { some(register-kind.f32) } else if name == "f64" { some(register-kind.f64) }
+        else { none }
+    }
+
+    // whether a kind is held in a word (a number, a bool, a char)
+    @(private) is-word: func(kind: register-kind) -> bool {
+        match kind {
+            unit | never | value => false,
+            _ => true,
+        }
+    }
+
+    @(private) is-integer: func(kind: register-kind) -> bool {
+        match kind {
+            s8 | s16 | s32 | s64 | u8 | u16 | u32 | u64 => true,
+            _ => false,
+        }
+    }
+
+    @(private) is-float: func(kind: register-kind) -> bool {
+        match kind {
+            f32 | f64 => true,
+            _ => false,
+        }
+    }
+
+    @(private) held-signed: func(kind: register-kind) -> bool {
+        match kind {
+            s8 | s16 | s32 | s64 => true,
+            _ => false,
+        }
+    }
+
+    // 64 less an integer kind's width: how far its bits go up and back to wrap them to it
+    @(private) held-shift: func(kind: register-kind) -> s64 {
+        match kind {
+            s8 | u8 => 56,
+            s16 | u16 => 48,
+            s32 | u32 => 32,
+            _ => 0,
+        }
+    }
+
+    // 1 for an f32 (its floats rounded to it after each step), else 0
+    @(private) held-narrow: func(kind: register-kind) -> s64 { if kind == register-kind.f32 { 1 } else { 0 } }
+
+    @(private) held-kind: func(kind: register-kind) -> number-kind {
+        match kind {
+            s8 => number-kind.s8,
+            s16 => number-kind.s16,
+            s32 => number-kind.s32,
+            u8 => number-kind.u8,
+            u16 => number-kind.u16,
+            u32 => number-kind.u32,
+            u64 => number-kind.u64,
+            char => number-kind.char,
+            f32 => number-kind.f32,
+            f64 => number-kind.f64,
+            _ => number-kind.s64,
+        }
+    }
+
+    // ---------------------------------------------------------------- the machine: assembly
+
+    // a register of the kind's file, the next free one (-1 for a kind held in none)
+    @(private) allocate: func(assembly: Assembly, kind: register-kind) -> s64 {
+        if kind == register-kind.value {
+            let register = assembly.values;
+            assembly.values += 1;
+            if assembly.values > assembly.value-room { assembly.value-room = assembly.values; }
+            return register;
+        }
+        if !is-word(kind) { return -1; }
+        let register = assembly.words;
+        assembly.words += 1;
+        if assembly.words > assembly.word-room { assembly.word-room = assembly.words; }
+        register
+    }
+
+    // into where one is given, else a register of its own
+    @(private) target: func(assembly: Assembly, kind: register-kind, into: s64) -> s64 { if into >= 0 { into } else { allocate(assembly, kind) } }
+
+    @(private) emit: func(assembly: Assembly, op: opcode, into: s64, left: s64, right: s64, extra: s64) {
+        assembly.code.push({ op: op, into: into as s32, left: left as s32, right: right as s32, extra: extra, });
+    }
+
+    // a jump whose target is patched once it is known: where it is
+    @(private) emit-jump: func(assembly: Assembly, op: opcode, left: s64, right: s64) -> s64 {
+        let at = assembly.code.len();
+        emit(assembly, op, 0, left, right, -1);
+        at
+    }
+
+    @(private) patch: func(assembly: Assembly, at: s64, target: s64) {
+        let instruction = assembly.code[at];
+        assembly.code[at] = { op: instruction.op, into: instruction.into, left: instruction.left, right: instruction.right, extra: target, };
+    }
+
+    // a kind in the routine's table (what a box or a cast to an integer names)
+    @(private) hold-index: func(assembly: Assembly, kind: register-kind) -> s64 {
+        assembly.holds.push(kind);
+        assembly.holds.len() - 1
+    }
+
+    // what the machine does not do: the func is left to the tree
+    @(private) refused: func(assembly: Assembly) -> Operand {
+        assembly.failed = true;
+        { kind: register-kind.unit, register: -1, }
+    }
+
+    // the frame's result given back: a word's, a value's, or unit
+    @(private) give-back: func(assembly: Assembly, kind: register-kind, register: s64) {
+        emit(assembly, opcode.returns, 0, register, 0, if kind == register-kind.value { 1 } else if is-word(kind) { 0 } else { 2 });
+    }
+
+    // an operand moved to into (where one is given and it is not there)
+    @(private) place: func(assembly: Assembly, operand: Operand, into: s64) -> Operand {
+        if into < 0 || operand.register < 0 || operand.register == into { return operand; }
+        emit(assembly, if operand.kind == register-kind.value { opcode.move-value } else { opcode.move }, into, operand.register, 0, 0);
+        { kind: operand.kind, register: into, }
+    }
+
+    // an expression's value in a register of kind wanted (into; -1: any), made so where its own is
+    // held another way: a word boxed, unit made a Value; only run for what it does where unit (or
+    // never) is wanted
+    @(private) value-into: func(run: Interp, assembly: Assembly, expression: Expr, into: s64, wanted: register-kind) -> Operand {
+        let own = match held-type(expression.ty) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        if own == wanted { return operand-into(run, assembly, expression, into); }
+        let found = operand-into(run, assembly, expression, -1);
+        if wanted == register-kind.unit || wanted == register-kind.never { return { kind: wanted, register: -1, }; }
+        // (a value that never comes: nothing to put)
+        if own == register-kind.never { return { kind: wanted, register: target(assembly, wanted, into), }; }
+        if wanted != register-kind.value { return refused(assembly); }
+        let register = target(assembly, wanted, into);
+        if own == register-kind.unit {
+            emit(assembly, opcode.unit-value, register, 0, 0, 0);
+        } else if is-word(own) {
+            emit(assembly, opcode.box, register, found.register, 0, hold-index(assembly, own));
+        } else {
+            return refused(assembly);
+        }
+        { kind: wanted, register: register, }
+    }
+
+    // an expression compiled: its value in into (of its own kind; -1: wherever it is, a local's
+    // own register or one of its own)
+    @(private) operand-into: func(run: Interp, assembly: Assembly, expression: Expr, into: s64) -> Operand {
+        let kind = match held-type(expression.ty) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        match expression.kind {
+            int-lit(_) => constant-into(run, assembly, expression, kind, into),
+            float-lit(_) => constant-into(run, assembly, expression, kind, into),
+            bool-lit(_) => constant-into(run, assembly, expression, kind, into),
+            char-lit(_) => constant-into(run, assembly, expression, kind, into),
+            str-lit(_) => constant-into(run, assembly, expression, kind, into),
+            unit => { kind: register-kind.unit, register: -1, },
+            name(_) => match assembly.function.bindings.exprs.get(expression) {
+                some(mark) => match assembly.registers.get(mark) {
+                    some(register) => {
+                        let marked = match held-type(mark.ty) {
+                            some(found) => found,
+                            none => { return refused(assembly); }
+                        };
+                        if marked != kind { return refused(assembly); }
+                        place(assembly, { kind: kind, register: register, }, into)
+                    }
+                    none => refused(assembly),
+                },
+                none => refused(assembly),
+            },
+            binary(written) => binary-into(run, assembly, written, kind, into),
+            unary(written) => unary-into(run, assembly, written, kind, into),
+            cast(casting) => cast-into(run, assembly, casting, kind, into),
+            // (a call by name: not of a local holding a func, nor of what the checker named with ~)
+            call(called) => {
+                if called.name.starts-with("~") || assembly.function.bindings.exprs.has(expression) { return refused(assembly); }
+                call-into(run, assembly, called.name, called.args, kind, into)
+            }
+            method(method) => {
+                if is-type-name(run, method.target) { return refused(assembly); }
+                let args = [method.target,];
+                for argument in method.args { args.push(argument); }
+                call-into(run, assembly, method.name, args, kind, into)
+            }
+            interp(parts) => interpolation-into(run, assembly, parts, kind, into),
+            if-else(branching) => {
+                let register = target(assembly, kind, into);
+                let otherwise = branch-unless(run, assembly, branching.cond);
+                block-into(run, assembly, branching.then, register, kind);
+                match branching.otherwise {
+                    some(block) => {
+                        let past = emit-jump(assembly, opcode.jump, 0, 0);
+                        patch(assembly, otherwise, assembly.code.len());
+                        block-into(run, assembly, block, register, kind);
+                        patch(assembly, past, assembly.code.len());
+                    }
+                    none => patch(assembly, otherwise, assembly.code.len()),
+                }
+                { kind: kind, register: register, }
+            }
+            block(block) => {
+                let register = target(assembly, kind, into);
+                block-into(run, assembly, block, register, kind);
+                { kind: kind, register: register, }
+            }
+            widen(widened) => value-into(run, assembly, widened.value, into, kind),
+            _ => refused(assembly),
+        }
+    }
+
+    // a literal's value, made once now: a word's bits, or a Value (a string's)
+    @(private) constant-into: func(run: Interp, assembly: Assembly, expression: Expr, kind: register-kind, into: s64) -> Operand {
+        let value = eval(run, expression);
+        let register = target(assembly, kind, into);
+        if kind == register-kind.value {
+            assembly.constants.push(value);
+            emit(assembly, opcode.constant-value, register, 0, 0, assembly.constants.len() - 1);
+            return { kind: kind, register: register, };
+        }
+        let bits = match literal-word(value, kind) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        emit(assembly, opcode.constant, register, 0, 0, bits as s64);
+        { kind: kind, register: register, }
+    }
+
+    // a literal's value as a word of kind (none: a value the kind does not hold)
+    @(private) literal-word: func(value: Value, kind: register-kind) -> option<u64> {
+        match value {
+            int(integer) => if is-integer(kind) { some(normalized({ bits: integer.bits, kind: held-kind(kind), }).bits) } else { none },
+            float(number) => if is-float(kind) { some(f64-bits(number.value)) } else { none },
+            bool(flag) => if kind == register-kind.truth { some(if flag { 1 } else { 0 }) } else { none },
+            char(letter) => if kind == register-kind.char { some((letter as s64) as u64) } else { none },
+            _ => none,
+        }
+    }
+
+    // an integer literal's bits as a word of kind (none: another expression)
+    @(private) immediate: func(run: Interp, expression: Expr, kind: register-kind) -> option<u64> {
+        match expression.kind {
+            int-lit(_) => match held-type(expression.ty) {
+                some(own) => if own == kind { literal-word(eval(run, expression), kind) } else { none },
+                none => none,
+            },
+            _ => none,
+        }
+    }
+
+    // whether bits are an s32's sign-extended (what an instruction's right holds)
+    @(private) fits: func(bits: u64) -> bool { (bits as s64) >= -2147483648 && (bits as s64) <= 2147483647 }
+
+    // whether an expression holds no statements (nothing in it assigns a local)
+    @(private) plain: func(expression: Expr) -> bool {
+        for inner in walk.tree(expression, true) {
+            match inner.kind {
+                if-else(_) => { return false; }
+                block(_) => { return false; }
+                match-expr(_) => { return false; }
+                closure(_) => { return false; }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    // whether an expression put in a register writes it only once all of it is evaluated (what
+    // an assignment may put in its local's own)
+    @(private) late: func(expression: Expr) -> bool {
+        match expression.kind {
+            int-lit(_) => true,
+            float-lit(_) => true,
+            bool-lit(_) => true,
+            char-lit(_) => true,
+            str-lit(_) => true,
+            name(_) => true,
+            call(_) => true,
+            method(_) => true,
+            unary(_) => true,
+            cast(_) => true,
+            interp(_) => true,
+            binary(written) => written.op != "&&" && written.op != "||",
+            _ => false,
+        }
+    }
+
+    // a left operand that is a local, copied where the right one may assign it (the left is read
+    // first)
+    @(private) guarded: func(assembly: Assembly, left-expression: Expr, right-expression: Expr, left: Operand) -> Operand {
+        let local = match left-expression.kind {
+            name(_) => true,
+            _ => false,
+        };
+        if !local || plain(right-expression) { return left; }
+        place(assembly, left, allocate(assembly, left.kind))
+    }
+
+    @(private) is-comparison: func(op: string) -> bool { op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" }
+
+    @(private) binary-into: func(run: Interp, assembly: Assembly, written: Binary, kind: register-kind, into: s64) -> Operand {
+        let op = written.op;
+        // (the right only where the left does not settle it)
+        if op == "&&" || op == "||" {
+            if kind != register-kind.truth { return refused(assembly); }
+            let register = target(assembly, kind, into);
+            let _ = value-into(run, assembly, written.left, register, kind);
+            let past = emit-jump(assembly, if op == "&&" { opcode.jump-unless } else { opcode.jump-if }, register, 0);
+            let _ = value-into(run, assembly, written.right, register, kind);
+            patch(assembly, past, assembly.code.len());
+            return { kind: kind, register: register, };
+        }
+        let left-kind = match held-type(written.left.ty) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        let right-kind = match held-type(written.right.ty) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        if !is-word(left-kind) { return refused(assembly); }
+        // (a shift's count of any integer kind; the others' operands of one kind)
+        if op == "<<" || op == ">>" {
+            if !is-integer(right-kind) { return refused(assembly); }
+        } else if right-kind != left-kind {
+            return refused(assembly);
+        }
+        if is-comparison(op) {
+            if kind != register-kind.truth { return refused(assembly); }
+        } else if kind != left-kind {
+            return refused(assembly);
+        }
+        let left = guarded(assembly, written.left, written.right, operand-into(run, assembly, written.left, -1));
+        // (+ or - a small literal: one instruction, the literal in it)
+        if (op == "+" || op == "-") && is-integer(kind) {
+            match immediate(run, written.right, kind) {
+                some(bits) => {
+                    let added = if op == "+" { bits } else { 0 - bits };
+                    if fits(added) {
+                        let register = target(assembly, kind, into);
+                        emit(assembly, if held-signed(kind) { opcode.add-immediate-signed } else { opcode.add-immediate-unsigned }, register, left.register, added as s64, held-shift(kind));
+                        return { kind: kind, register: register, };
+                    }
+                }
+                none => {}
+            }
+        }
+        let right = operand-into(run, assembly, written.right, -1);
+        let register = target(assembly, kind, into);
+        emit-binary(assembly, op, left-kind, register, left.register, right.register);
+        { kind: kind, register: register, }
+    }
+
+    // left op right into into, of operands of kind: the instruction for that kind (where a kind
+    // has no such operator, refused, as arith stops)
+    @(private) emit-binary: func(assembly: Assembly, op: string, kind: register-kind, into: s64, left: s64, right: s64) {
+        let signed = held-signed(kind);
+        let pick = { yes: opcode, no: opcode -> if signed { yes } else { no } };
+        if is-float(kind) {
+            let narrow = held-narrow(kind);
+            if op == "+" { emit(assembly, opcode.float-add, into, left, right, narrow); }
+            else if op == "-" { emit(assembly, opcode.float-subtract, into, left, right, narrow); }
+            else if op == "*" { emit(assembly, opcode.float-multiply, into, left, right, narrow); }
+            else if op == "/" { emit(assembly, opcode.float-divide, into, left, right, narrow); }
+            else if op == "%" { emit(assembly, opcode.remainder-float, into, left, right, narrow); }
+            else if op == "==" { emit(assembly, opcode.float-equal, into, left, right, 0); }
+            else if op == "!=" { emit(assembly, opcode.float-not-equal, into, left, right, 0); }
+            else if op == "<" { emit(assembly, opcode.float-less, into, left, right, 0); }
+            else if op == "<=" { emit(assembly, opcode.float-less-equal, into, left, right, 0); }
+            else if op == ">" { emit(assembly, opcode.float-less, into, right, left, 0); }
+            else if op == ">=" { emit(assembly, opcode.float-less-equal, into, right, left, 0); }
+            else { assembly.failed = true; }
+            return;
+        }
+        // (a bool's and a char's order: as unsigned words)
+        if op == "==" { emit(assembly, opcode.equal-bits, into, left, right, 0); }
+        else if op == "!=" { emit(assembly, opcode.not-equal-bits, into, left, right, 0); }
+        else if op == "<" { emit(assembly, pick(opcode.less-signed, opcode.less-unsigned), into, left, right, 0); }
+        else if op == "<=" { emit(assembly, pick(opcode.less-equal-signed, opcode.less-equal-unsigned), into, left, right, 0); }
+        else if op == ">" { emit(assembly, pick(opcode.less-signed, opcode.less-unsigned), into, right, left, 0); }
+        else if op == ">=" { emit(assembly, pick(opcode.less-equal-signed, opcode.less-equal-unsigned), into, right, left, 0); }
+        else if (op == "&" || op == "|" || op == "^") && (is-integer(kind) || kind == register-kind.truth) {
+            emit(assembly, if op == "&" { opcode.and } else if op == "|" { opcode.or } else { opcode.xor }, into, left, right, 0);
+        } else if !is-integer(kind) {
+            assembly.failed = true;
+        } else {
+            let shift = held-shift(kind);
+            if op == "+" { emit(assembly, pick(opcode.add-signed, opcode.add-unsigned), into, left, right, shift); }
+            else if op == "-" { emit(assembly, pick(opcode.subtract-signed, opcode.subtract-unsigned), into, left, right, shift); }
+            else if op == "*" { emit(assembly, pick(opcode.multiply-signed, opcode.multiply-unsigned), into, left, right, shift); }
+            else if op == "/" { emit(assembly, pick(opcode.divide-signed, opcode.divide-unsigned), into, left, right, shift); }
+            else if op == "%" { emit(assembly, pick(opcode.remainder-signed, opcode.remainder-unsigned), into, left, right, shift); }
+            else if op == "<<" { emit(assembly, pick(opcode.shift-left-signed, opcode.shift-left-unsigned), into, left, right, shift); }
+            else if op == ">>" { emit(assembly, pick(opcode.shift-right-signed, opcode.shift-right-unsigned), into, left, right, shift); }
+            else { assembly.failed = true; }
+        }
+    }
+
+    @(private) unary-into: func(run: Interp, assembly: Assembly, written: Unary, kind: register-kind, into: s64) -> Operand {
+        let own = match held-type(written.value.ty) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        if own != kind { return refused(assembly); }
+        let value = operand-into(run, assembly, written.value, -1);
+        let register = target(assembly, kind, into);
+        let signed = held-signed(kind);
+        if written.op == "-" && is-integer(kind) {
+            emit(assembly, if signed { opcode.negate-signed } else { opcode.negate-unsigned }, register, value.register, 0, held-shift(kind));
+        } else if written.op == "-" && is-float(kind) {
+            emit(assembly, opcode.float-negate, register, value.register, 0, held-narrow(kind));
+        } else if written.op == "!" && kind == register-kind.truth {
+            emit(assembly, opcode.not-bool, register, value.register, 0, 0);
+        } else if written.op == "!" && is-integer(kind) {
+            emit(assembly, if signed { opcode.not-signed } else { opcode.not-unsigned }, register, value.register, 0, held-shift(kind));
+        } else {
+            return refused(assembly);
+        }
+        { kind: kind, register: register, }
+    }
+
+    // x as T, as cast converts: an integer (a char's code point, a bool's 0 or 1) wrapped to T's
+    // width, a float saturated; to a float the nearest; an integer to a char; else the value as it
+    // is
+    @(private) cast-into: func(run: Interp, assembly: Assembly, casting: Cast, kind: register-kind, into: s64) -> Operand {
+        let source = match held-type(casting.value.ty) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        let wanted = match held-type(casting.ty) {
+            some(found) => found,
+            none => { return refused(assembly); }
+        };
+        if !is-word(source) || wanted != kind { return refused(assembly); }
+        let value = operand-into(run, assembly, casting.value, -1);
+        let register = target(assembly, kind, into);
+        let from = value.register;
+        match settled-type(erase-distinct(casting.ty)) {
+            num(name) => {
+                if is-int(name) {
+                    if !is-integer(kind) { return refused(assembly); }
+                    if is-integer(source) || source == register-kind.char {
+                        let shift = held-shift(kind);
+                        if shift == 0 { emit(assembly, opcode.move, register, from, 0, 0); }
+                        else { emit(assembly, if held-signed(kind) { opcode.wrap-signed } else { opcode.wrap-unsigned }, register, from, 0, shift); }
+                    } else if is-float(source) {
+                        emit(assembly, opcode.float-to-integer, register, from, 0, hold-index(assembly, kind));
+                    } else if source == register-kind.truth {
+                        emit(assembly, opcode.move, register, from, 0, 0);
+                    } else {
+                        return refused(assembly);
+                    }
+                } else {
+                    if !is-float(kind) { return refused(assembly); }
+                    if is-integer(source) {
+                        emit(assembly, if held-signed(source) { opcode.signed-to-float } else { opcode.unsigned-to-float }, register, from, 0, held-narrow(kind));
+                    } else if is-float(source) {
+                        emit(assembly, opcode.float-to-float, register, from, 0, held-narrow(kind));
+                    } else {
+                        return refused(assembly);
+                    }
+                }
+            }
+            char-type => {
+                if is-integer(source) { emit(assembly, opcode.integer-to-char, register, from, 0, 0); }
+                else if source == register-kind.char { emit(assembly, opcode.move, register, from, 0, 0); }
+                else { return refused(assembly); }
+            }
+            _ => {
+                if source != kind { return refused(assembly); }
+                emit(assembly, opcode.move, register, from, 0, 0);
+            }
+        }
+        { kind: kind, register: register, }
+    }
+
+    // a call: its arguments put from the first free register of each file on (where a routine's
+    // frame of the callee begins: its parameters its first registers), its result in the first of
+    // its kind's file
+    @(private) call-into: func(run: Interp, assembly: Assembly, name: string, args: list<Expr>, kind: register-kind, into: s64) -> Operand {
+        let function = match callee(run, name) {
+            function(found) => {
+                if found.is-generator || found.is-async { return refused(assembly); }
+                some(found)
+            }
+            native => none,
+            made => { return refused(assembly); }
+        };
+        // (each argument held as its parameter is, where the callee is a func)
+        let kinds: list<register-kind> = [];
+        for index in 0..args.len() {
+            let given = match function {
+                some(found) => if index < found.param-types.len() { held-type(found.param-types[index]) } else { none },
+                none => held-type(args[index].ty),
+            };
+            match given {
+                some(found) => kinds.push(found),
+                none => { return refused(assembly); }
+            }
+        }
+        let direct = match function {
+            some(found) => found.type-params.len() == 0 && args.len() == found.marks.len() && match held-type(found.result) {
+                some(found-result) => found-result == kind,
+                none => false,
+            },
+            none => false,
+        };
+        let word-start = assembly.words;
+        let value-start = assembly.values;
+        let registers: list<s64> = [];
+        let word-count = 0;
+        let value-count = 0;
+        for one in kinds {
+            if one == register-kind.value {
+                registers.push(value-count);
+                value-count += 1;
+            } else if is-word(one) {
+                registers.push(word-count);
+                word-count += 1;
+            } else {
+                registers.push(-1);
+            }
+        }
+        if is-word(kind) && word-count == 0 { word-count = 1; }
+        if kind == register-kind.value && value-count == 0 { value-count = 1; }
+        for _ in 0..word-count { let _ = allocate(assembly, register-kind.s64); }
+        for _ in 0..value-count { let _ = allocate(assembly, register-kind.value); }
+        for index in 0..args.len() {
+            let one = kinds[index];
+            let register = if one == register-kind.value { value-start + registers[index] } else if is-word(one) { word-start + registers[index] } else { -1 };
+            let _ = value-into(run, assembly, args[index], register, one);
+        }
+        assembly.sites.push({
+            key: name, function: function, args: kinds, registers: registers, result: kind, direct: direct,
+            resolved: false, program: none, body: none,
+        });
+        emit(assembly, opcode.call, word-start, value-start, 0, assembly.sites.len() - 1);
+        let result: Operand = { kind: kind, register: if kind == register-kind.value { value-start } else if is-word(kind) { word-start } else { -1 }, };
+        place(assembly, result, into)
+    }
+
+    // an interpolation: each part a Value in a register of its own, then their text (a part of a
+    // type with a display func, that func's, but in that func itself)
+    @(private) interpolation-into: func(run: Interp, assembly: Assembly, parts: list<Expr>, kind: register-kind, into: s64) -> Operand {
+        if kind != register-kind.value { return refused(assembly); }
+        let register = target(assembly, kind, into);
+        let first = assembly.values;
+        for _ in parts { let _ = allocate(assembly, register-kind.value); }
+        let displays: list<string> = [];
+        for index in 0..parts.len() {
+            let part = parts[index];
+            let display = run.displays.get-or(type-name(part.ty), "");
+            displays.push(if display == assembly.function.name { "" } else { display });
+            let _ = value-into(run, assembly, part, first + index, register-kind.value);
+        }
+        assembly.shows.push(displays);
+        emit(assembly, opcode.interpolate, register, first, parts.len(), assembly.shows.len() - 1);
+        { kind: kind, register: register, }
+    }
+
+    // a jump past what a condition guards, taken where it does not hold: an integer's (a bool's, a
+    // char's) comparison one instruction
+    @(private) branch-unless: func(run: Interp, assembly: Assembly, condition: Expr) -> s64 {
+        match condition.kind {
+            binary(written) => {
+                let op = written.op;
+                let fused = is-comparison(op) && match (held-type(written.left.ty), held-type(written.right.ty)) {
+                    (some(left-kind), some(right-kind)) => left-kind == right-kind && is-word(left-kind) && !is-float(left-kind),
+                    _ => false,
+                };
+                if fused {
+                    let kind = match held-type(written.left.ty) {
+                        some(found) => found,
+                        none => register-kind.unit,
+                    };
+                    let signed = held-signed(kind);
+                    let less = if signed { opcode.jump-less-signed } else { opcode.jump-less-unsigned };
+                    let not-less = if signed { opcode.jump-not-less-signed } else { opcode.jump-not-less-unsigned };
+                    let left = guarded(assembly, written.left, written.right, operand-into(run, assembly, written.left, -1)).register;
+                    // (against a small literal: the literal in the instruction)
+                    match immediate(run, written.right, kind) {
+                        some(bits) => {
+                            if fits(bits) {
+                                let given = bits as s64;
+                                if op == "<" { return emit-jump(assembly, if signed { opcode.jump-not-less-immediate-signed } else { opcode.jump-not-less-immediate-unsigned }, left, given); }
+                                if op == "<=" { return emit-jump(assembly, if signed { opcode.jump-greater-immediate-signed } else { opcode.jump-greater-immediate-unsigned }, left, given); }
+                                if op == ">" { return emit-jump(assembly, if signed { opcode.jump-not-greater-immediate-signed } else { opcode.jump-not-greater-immediate-unsigned }, left, given); }
+                                if op == ">=" { return emit-jump(assembly, if signed { opcode.jump-less-immediate-signed } else { opcode.jump-less-immediate-unsigned }, left, given); }
+                                if op == "==" { return emit-jump(assembly, opcode.jump-not-equal-immediate, left, given); }
+                                return emit-jump(assembly, opcode.jump-equal-immediate, left, given);
+                            }
+                        }
+                        none => {}
+                    }
+                    let right = operand-into(run, assembly, written.right, -1).register;
+                    if op == "<" { return emit-jump(assembly, not-less, left, right); }
+                    if op == "<=" { return emit-jump(assembly, less, right, left); }
+                    if op == ">" { return emit-jump(assembly, not-less, right, left); }
+                    if op == ">=" { return emit-jump(assembly, less, left, right); }
+                    if op == "==" { return emit-jump(assembly, opcode.jump-not-equal, left, right); }
+                    return emit-jump(assembly, opcode.jump-equal, left, right);
+                }
+            }
+            _ => {}
+        }
+        let flag = value-into(run, assembly, condition, -1, register-kind.truth);
+        emit-jump(assembly, opcode.jump-unless, flag.register, 0)
+    }
+
+    // a block's statements, its value (its last, written without ;) into into; its bindings' and
+    // temporaries' registers free again past it
+    @(private) block-into: func(run: Interp, assembly: Assembly, block: Block, into: s64, wanted: register-kind) {
+        let words = assembly.words;
+        let values = assembly.values;
+        let last = block.stmts.len() - 1;
+        for index in 0..block.stmts.len() {
+            let statement = block.stmts[index];
+            match statement {
+                expr-stmt(evaluated) => {
+                    let kept-words = assembly.words;
+                    let kept-values = assembly.values;
+                    if index == last && evaluated.is-value {
+                        let _ = value-into(run, assembly, evaluated.value, into, wanted);
+                    } else {
+                        let _ = operand-into(run, assembly, evaluated.value, -1);
+                    }
+                    assembly.words = kept-words;
+                    assembly.values = kept-values;
+                }
+                _ => statement-into(run, assembly, statement),
+            }
+        }
+        assembly.words = words;
+        assembly.values = values;
+    }
+
+    // a statement: its temporaries' registers free again past it (a let's binding's kept, to its
+    // block's end)
+    @(private) statement-into: func(run: Interp, assembly: Assembly, statement: Stmt) {
+        match statement {
+            let-stmt(declared) => {
+                let mark = declared.mark;
+                let kind = match held-type(mark.ty) {
+                    some(found) => found,
+                    none => {
+                        assembly.failed = true;
+                        return;
+                    }
+                };
+                if mark.captured {
+                    assembly.failed = true;
+                    return;
+                }
+                let register = match assembly.registers.get(mark) {
+                    some(found) => found,
+                    none => {
+                        let made = allocate(assembly, kind);
+                        assembly.registers.set(mark, made);
+                        made
+                    }
+                };
+                let words = assembly.words;
+                let values = assembly.values;
+                let _ = value-into(run, assembly, declared.value, register, kind);
+                if kind == register-kind.value { emit(assembly, opcode.copy-value, register, register, 0, 0); }
+                assembly.words = words;
+                assembly.values = values;
+                return;
+            }
+            _ => {}
+        }
+        let words = assembly.words;
+        let values = assembly.values;
+        match statement {
+            assign(assignment) => match assembly.function.bindings.assigns.get(assignment) {
+                some(mark) => assign-into(run, assembly, mark, assignment),
+                none => { assembly.failed = true; }
+            },
+            expr-stmt(evaluated) => { let _ = operand-into(run, assembly, evaluated.value, -1); }
+            return-stmt(returned) => {
+                let kind = assembly.result;
+                let found = value-into(run, assembly, returned, -1, kind);
+                give-back(assembly, kind, found.register);
+            }
+            break-stmt => {
+                if assembly.loops.len() == 0 {
+                    assembly.failed = true;
+                    return;
+                }
+                let at = emit-jump(assembly, opcode.jump, 0, 0);
+                assembly.loops[assembly.loops.len() - 1].breaks.push(at);
+            }
+            continue-stmt => {
+                if assembly.loops.len() == 0 {
+                    assembly.failed = true;
+                    return;
+                }
+                let at = emit-jump(assembly, opcode.jump, 0, 0);
+                assembly.loops[assembly.loops.len() - 1].continues.push(at);
+            }
+            loop-stmt(repeating) => {
+                let top = assembly.code.len();
+                let labels: LoopLabels = { continues: [], breaks: [], };
+                assembly.loops.push(labels);
+                block-into(run, assembly, repeating.body, -1, register-kind.unit);
+                let _ = assembly.loops.pop();
+                emit(assembly, opcode.jump, 0, 0, 0, top);
+                for at in labels.continues { patch(assembly, at, top); }
+                for at in labels.breaks { patch(assembly, at, assembly.code.len()); }
+            }
+            for-stmt(iteration) => range-into(run, assembly, iteration),
+            _ => { assembly.failed = true; }
+        }
+        assembly.words = words;
+        assembly.values = values;
+    }
+
+    // x = v (v copied, as a binding copies it), or x op= v (x read first, then v)
+    @(private) assign-into: func(run: Interp, assembly: Assembly, mark: Mark, assignment: Assign) {
+        let register = match assembly.registers.get(mark) {
+            some(found) => found,
+            none => {
+                assembly.failed = true;
+                return;
+            }
+        };
+        let kind = match held-type(mark.ty) {
+            some(found) => found,
+            none => {
+                assembly.failed = true;
+                return;
+            }
+        };
+        if assignment.op == "=" {
+            if late(assignment.value) {
+                let _ = value-into(run, assembly, assignment.value, register, kind);
+            } else {
+                let _ = place(assembly, value-into(run, assembly, assignment.value, -1, kind), register);
+            }
+            if kind == register-kind.value { emit(assembly, opcode.copy-value, register, register, 0, 0); }
+            return;
+        }
+        let op = assignment.op.substring(0, assignment.op.len() - 1);
+        let right-kind = match held-type(assignment.value.ty) {
+            some(found) => found,
+            none => {
+                assembly.failed = true;
+                return;
+            }
+        };
+        if !is-word(kind) || if op == "<<" || op == ">>" { !is-integer(right-kind) } else { right-kind != kind } {
+            assembly.failed = true;
+            return;
+        }
+        let before: Operand = { kind: kind, register: register, };
+        let left = if plain(assignment.value) { before } else { place(assembly, before, allocate(assembly, kind)) };
+        let right = operand-into(run, assembly, assignment.value, -1);
+        emit-binary(assembly, op, kind, register, left.register, right.register);
+    }
+
+    // a for over a range, as exec-for: nothing where it is empty, else its variable each value from
+    // start on (a counter its own unless the body assigns the variable), to its end
+    @(private) range-into: func(run: Interp, assembly: Assembly, iteration: For) {
+        let stop = match iteration.stop {
+            some(found) => found,
+            none => {
+                assembly.failed = true;
+                return;
+            }
+        };
+        let mark = iteration.mark;
+        let kind = match held-type(mark.ty) {
+            some(found) => found,
+            none => register-kind.unit,
+        };
+        if mark.captured || !is-integer(kind) {
+            assembly.failed = true;
+            return;
+        }
+        let words = assembly.words;
+        let counter = allocate(assembly, kind);
+        let limit = allocate(assembly, kind);
+        let _ = value-into(run, assembly, iteration.start, counter, kind);
+        let _ = value-into(run, assembly, stop, limit, kind);
+        assembly.words = limit + 1;
+        let signed = held-signed(kind);
+        // (none to go: an inclusive one's end before its start, an exclusive one's start not before
+        // its end)
+        let skip = if iteration.inclusive {
+            emit-jump(assembly, if signed { opcode.jump-less-signed } else { opcode.jump-less-unsigned }, limit, counter)
+        } else {
+            emit-jump(assembly, if signed { opcode.jump-not-less-signed } else { opcode.jump-not-less-unsigned }, counter, limit)
+        };
+        let variable = if assigns(assembly, iteration.body, mark) { allocate(assembly, kind) } else { counter };
+        assembly.registers.set(mark, variable);
+        let top = assembly.code.len();
+        if variable != counter { emit(assembly, opcode.move, variable, counter, 0, 0); }
+        let labels: LoopLabels = { continues: [], breaks: [], };
+        assembly.loops.push(labels);
+        block-into(run, assembly, iteration.body, -1, register-kind.unit);
+        let _ = assembly.loops.pop();
+        let step = assembly.code.len();
+        for at in labels.continues { patch(assembly, at, step); }
+        let next = if iteration.inclusive { opcode.step-through } else if signed { opcode.step-below-signed } else { opcode.step-below-unsigned };
+        emit(assembly, next, counter, limit, 0, top);
+        let past = assembly.code.len();
+        patch(assembly, skip, past);
+        for at in labels.breaks { patch(assembly, at, past); }
+        assembly.words = words;
+    }
+
+    // whether a block assigns a binding
+    @(private) assigns: func(assembly: Assembly, block: Block, mark: Mark) -> bool {
+        for statement in walk.stmts(block, true, true) {
+            match statement {
+                assign(assignment) => match assembly.function.bindings.assigns.get(assignment) {
+                    some(found) => { if found == mark { return true; } }
+                    none => {}
+                },
+                _ => {}
+            }
+        }
+        false
+    }
+
+    // ---------------------------------------------------------------- the machine: running
+
+    // a routine run from the tree: its arguments put in a frame past every one in use, its result
+    // made a Value again
+    @(private) enter: func(run: Interp, routine: Routine, args: list<Value>) -> Value {
+        let machine = run.machine;
+        let base = machine.word-top;
+        let value-base = machine.value-top;
+        room(machine, base + routine.words, value-base + routine.values);
+        for index in 0..routine.params.len() {
+            let kind = routine.params[index];
+            let register = routine.registers[index];
+            let given = if index < args.len() { args[index] } else { Value.unit };
+            if kind == register-kind.value {
+                machine.values[value-base + register] = copied(given);
+            } else if is-word(kind) {
+                machine.words[base + register] = unboxed(given, kind);
+            }
+        }
+        execute(run, routine, base, value-base);
+        machine.word-top = base;
+        machine.value-top = value-base;
+        if routine.result == register-kind.value { machine.values[value-base] } else if is-word(routine.result) { boxed(run, machine.words[base], routine.result) } else { Value.unit }
+    }
+
+    // the stacks long enough for a frame ending there, and that the end of the frames in use
+    @(private) room: func(machine: Machine, words: s64, values: s64) {
+        machine.word-top = words;
+        machine.value-top = values;
+        loop {
+            if machine.words.len() >= words { break; }
+            machine.words.push(0);
+        }
+        loop {
+            if machine.values.len() >= values { break; }
+            machine.values.push(Value.unit);
+        }
+    }
+
+    // a word as the Value of its kind
+    @(private) boxed: func(run: Interp, bits: u64, kind: register-kind) -> Value {
+        match kind {
+            truth => boolean(run, bits != 0),
+            char => Value.char((bits as s64) as char),
+            f32 => Value.float({ value: bits-f64(bits), kind: number-kind.f32, }),
+            f64 => Value.float({ value: bits-f64(bits), kind: number-kind.f64, }),
+            unit => Value.unit,
+            never => Value.unit,
+            value => Value.unit,
+            _ => integer(run, { bits: bits, kind: held-kind(kind), }),
+        }
+    }
+
+    // a number's Value as a word of kind
+    @(private) unboxed: func(value: Value, kind: register-kind) -> u64 {
+        match value {
+            int(integer) => normalized({ bits: integer.bits, kind: held-kind(kind), }).bits,
+            float(number) => f64-bits(number.value),
+            bool(flag) => if flag { 1 } else { 0 },
+            char(letter) => (letter as s64) as u64,
+            _ => stop("yelc run: a {kind-name(held-kind(kind))} wanted where the machine was given what is no number"),
+        }
+    }
+
+    // (the frame's registers read and written unchecked: a routine's are in its frame, which room
+    // made long enough)
+    @(private) word: func(words: list<u64>, at: s64) -> u64 { memory.item-at(words, at) }
+
+    @(private) put: func(words: list<u64>, at: s64, bits: u64) { memory.set-item(words, at, bits); }
+
+    @(private) truth: func(holds: bool) -> u64 { if holds { 1 } else { 0 } }
+
+    // an integer's bits wrapped to its width (shift: 64 less it), sign-extended or zero-extended
+    @(private) signed-wrap: func(bits: u64, shift: s64) -> u64 { (((bits << (shift as u64)) as s64) >> shift) as u64 }
+
+    @(private) unsigned-wrap: func(bits: u64, shift: s64) -> u64 { (bits << (shift as u64)) >> (shift as u64) }
+
+    // a float's word (rounded to f32 first where narrow is 1)
+    @(private) float-word: func(value: f64, narrow: s64) -> u64 { f64-bits(if narrow == 1 { (value as f32) as f64 } else { value }) }
+
+    // a routine run from its entry frame until that returns: a call of another routine a frame of
+    // its own on the stacks (the caller's kept in machine.callers), any other call made as the tree
+    // makes it
+    @(private) execute: func(run: Interp, entry: Routine, entry-base: s64, entry-value-base: s64) {
+        let machine = run.machine;
+        let depth = machine.callers.len();
+        let routine = entry;
+        let code = entry.code;
+        let base = entry-base;
+        let value-base = entry-value-base;
+        let pc: s64 = 0;
+        let words = machine.words;
+        let values = machine.values;
+        loop {
+            let instruction = memory.item-at(code, pc);
+            pc += 1;
+            let into = base + (instruction.into as s64);
+            let left = base + (instruction.left as s64);
+            let right = base + (instruction.right as s64);
+            let extra = instruction.extra;
+            match instruction.op {
+                constant => put(words, into, extra as u64),
+                constant-value => memory.set-item(values, value-base + (instruction.into as s64), memory.item-at(routine.constants, extra)),
+                move => put(words, into, word(words, left)),
+                move-value => memory.set-item(values, value-base + (instruction.into as s64), memory.item-at(values, value-base + (instruction.left as s64))),
+                copy-value => memory.set-item(values, value-base + (instruction.into as s64), copied(memory.item-at(values, value-base + (instruction.left as s64)))),
+                box => memory.set-item(values, value-base + (instruction.into as s64), boxed(run, word(words, left), memory.item-at(routine.holds, extra))),
+                unit-value => memory.set-item(values, value-base + (instruction.into as s64), Value.unit),
+                add-immediate-signed => put(words, into, signed-wrap(word(words, left) + ((instruction.right as s64) as u64), extra)),
+                add-immediate-unsigned => put(words, into, unsigned-wrap(word(words, left) + ((instruction.right as s64) as u64), extra)),
+                add-signed => put(words, into, signed-wrap(word(words, left) + word(words, right), extra)),
+                add-unsigned => put(words, into, unsigned-wrap(word(words, left) + word(words, right), extra)),
+                subtract-signed => put(words, into, signed-wrap(word(words, left) - word(words, right), extra)),
+                subtract-unsigned => put(words, into, unsigned-wrap(word(words, left) - word(words, right), extra)),
+                multiply-signed => put(words, into, signed-wrap(word(words, left) * word(words, right), extra)),
+                multiply-unsigned => put(words, into, unsigned-wrap(word(words, left) * word(words, right), extra)),
+                divide-signed => put(words, into, signed-wrap(((word(words, left) as s64) / (word(words, right) as s64)) as u64, extra)),
+                divide-unsigned => put(words, into, word(words, left) / word(words, right)),
+                remainder-signed => put(words, into, ((word(words, left) as s64) % (word(words, right) as s64)) as u64),
+                remainder-unsigned => put(words, into, word(words, left) % word(words, right)),
+                shift-left-signed => put(words, into, signed-wrap(word(words, left) << (word(words, right) & ((63 - extra) as u64)), extra)),
+                shift-left-unsigned => put(words, into, unsigned-wrap(word(words, left) << (word(words, right) & ((63 - extra) as u64)), extra)),
+                shift-right-signed => put(words, into, ((word(words, left) as s64) >> ((word(words, right) & ((63 - extra) as u64)) as s64)) as u64),
+                shift-right-unsigned => put(words, into, word(words, left) >> (word(words, right) & ((63 - extra) as u64))),
+                and => put(words, into, word(words, left) & word(words, right)),
+                or => put(words, into, word(words, left) | word(words, right)),
+                xor => put(words, into, word(words, left) ^ word(words, right)),
+                negate-signed => put(words, into, signed-wrap(0 - word(words, left), extra)),
+                negate-unsigned => put(words, into, unsigned-wrap(0 - word(words, left), extra)),
+                not-signed => put(words, into, signed-wrap(word(words, left) ^ 0xFFFFFFFFFFFFFFFF, extra)),
+                not-unsigned => put(words, into, unsigned-wrap(word(words, left) ^ 0xFFFFFFFFFFFFFFFF, extra)),
+                not-bool => put(words, into, word(words, left) ^ 1),
+                equal-bits => put(words, into, truth(word(words, left) == word(words, right))),
+                not-equal-bits => put(words, into, truth(word(words, left) != word(words, right))),
+                less-signed => put(words, into, truth((word(words, left) as s64) < (word(words, right) as s64))),
+                less-unsigned => put(words, into, truth(word(words, left) < word(words, right))),
+                less-equal-signed => put(words, into, truth((word(words, left) as s64) <= (word(words, right) as s64))),
+                less-equal-unsigned => put(words, into, truth(word(words, left) <= word(words, right))),
+                float-add => put(words, into, float-word(bits-f64(word(words, left)) + bits-f64(word(words, right)), extra)),
+                float-subtract => put(words, into, float-word(bits-f64(word(words, left)) - bits-f64(word(words, right)), extra)),
+                float-multiply => put(words, into, float-word(bits-f64(word(words, left)) * bits-f64(word(words, right)), extra)),
+                float-divide => put(words, into, float-word(bits-f64(word(words, left)) / bits-f64(word(words, right)), extra)),
+                remainder-float => put(words, into, float-word(float-remainder(bits-f64(word(words, left)), bits-f64(word(words, right))), extra)),
+                float-negate => put(words, into, float-word(bits-f64(word(words, left)) * -1.0, extra)),
+                float-equal => put(words, into, truth(bits-f64(word(words, left)) == bits-f64(word(words, right)))),
+                float-not-equal => put(words, into, truth(bits-f64(word(words, left)) != bits-f64(word(words, right)))),
+                float-less => put(words, into, truth(bits-f64(word(words, left)) < bits-f64(word(words, right)))),
+                float-less-equal => put(words, into, truth(bits-f64(word(words, left)) <= bits-f64(word(words, right)))),
+                wrap-signed => put(words, into, signed-wrap(word(words, left), extra)),
+                wrap-unsigned => put(words, into, unsigned-wrap(word(words, left), extra)),
+                float-to-integer => {
+                    let kind = held-kind(memory.item-at(routine.holds, extra));
+                    put(words, into, normalized({ bits: saturated(bits-f64(word(words, left)), kind-name(kind)), kind: kind, }).bits);
+                }
+                signed-to-float => put(words, into, float-word((word(words, left) as s64) as f64, extra)),
+                unsigned-to-float => put(words, into, float-word(word(words, left) as f64, extra)),
+                float-to-float => put(words, into, float-word(bits-f64(word(words, left)), extra)),
+                integer-to-char => put(words, into, (((word(words, left) as s64) as char) as s64) as u64),
+                jump => { pc = extra; }
+                jump-if => { if word(words, left) != 0 { pc = extra; } }
+                jump-unless => { if word(words, left) == 0 { pc = extra; } }
+                jump-less-signed => { if (word(words, left) as s64) < (word(words, right) as s64) { pc = extra; } }
+                jump-less-unsigned => { if word(words, left) < word(words, right) { pc = extra; } }
+                jump-not-less-signed => { if !((word(words, left) as s64) < (word(words, right) as s64)) { pc = extra; } }
+                jump-not-less-unsigned => { if !(word(words, left) < word(words, right)) { pc = extra; } }
+                jump-equal => { if word(words, left) == word(words, right) { pc = extra; } }
+                jump-not-equal => { if word(words, left) != word(words, right) { pc = extra; } }
+                jump-less-immediate-signed => { if (word(words, left) as s64) < (instruction.right as s64) { pc = extra; } }
+                jump-less-immediate-unsigned => { if word(words, left) < ((instruction.right as s64) as u64) { pc = extra; } }
+                jump-not-less-immediate-signed => { if !((word(words, left) as s64) < (instruction.right as s64)) { pc = extra; } }
+                jump-not-less-immediate-unsigned => { if !(word(words, left) < ((instruction.right as s64) as u64)) { pc = extra; } }
+                jump-greater-immediate-signed => { if (word(words, left) as s64) > (instruction.right as s64) { pc = extra; } }
+                jump-greater-immediate-unsigned => { if word(words, left) > ((instruction.right as s64) as u64) { pc = extra; } }
+                jump-not-greater-immediate-signed => { if !((word(words, left) as s64) > (instruction.right as s64)) { pc = extra; } }
+                jump-not-greater-immediate-unsigned => { if !(word(words, left) > ((instruction.right as s64) as u64)) { pc = extra; } }
+                jump-equal-immediate => { if word(words, left) == ((instruction.right as s64) as u64) { pc = extra; } }
+                jump-not-equal-immediate => { if word(words, left) != ((instruction.right as s64) as u64) { pc = extra; } }
+                step-below-signed => {
+                    let next = word(words, into) + 1;
+                    put(words, into, next);
+                    if (next as s64) < (word(words, left) as s64) { pc = extra; }
+                }
+                step-below-unsigned => {
+                    let next = word(words, into) + 1;
+                    put(words, into, next);
+                    if next < word(words, left) { pc = extra; }
+                }
+                step-through => {
+                    let at = word(words, into);
+                    if at != word(words, left) {
+                        put(words, into, at + 1);
+                        pc = extra;
+                    }
+                }
+                call => {
+                    let site = memory.item-at(routine.sites, extra);
+                    let callee-routine = if site.resolved { site.program } else { resolved(run, site) };
+                    let site-value-base = value-base + (instruction.left as s64);
+                    match callee-routine {
+                        some(found) => {
+                            machine.callers.push({ program: routine, pc: pc, base: base, value-base: value-base, });
+                            base = into;
+                            value-base = site-value-base;
+                            room(machine, base + found.words, value-base + found.values);
+                            for register in found.copies { memory.set-item(values, value-base + register, copied(memory.item-at(values, value-base + register))); }
+                            routine = found;
+                            code = found.code;
+                            pc = 0;
+                        }
+                        none => out-call(run, site, into, site-value-base),
+                    }
+                }
+                interpolate => memory.set-item(values, value-base + (instruction.into as s64), interpolated(run, value-base + (instruction.left as s64), instruction.right as s64, memory.item-at(routine.shows, extra))),
+                returns => {
+                    if extra == 0 {
+                        put(words, base, word(words, left));
+                    } else if extra == 1 {
+                        memory.set-item(values, value-base, memory.item-at(values, value-base + (instruction.left as s64)));
+                    }
+                    if machine.callers.len() == depth { return; }
+                    let caller = machine.callers.pop();
+                    routine = caller.program;
+                    code = routine.code;
+                    pc = caller.pc;
+                    base = caller.base;
+                    value-base = caller.value-base;
+                    machine.word-top = base + routine.words;
+                    machine.value-top = value-base + routine.values;
+                }
+            }
+        }
+    }
+
+    // what a call site calls, found once: a routine where the machine runs the callee itself (none:
+    // the call made as the tree makes it, its tree code kept where it has some)
+    @(private) resolved: func(run: Interp, site: CallSite) -> option<Routine> {
+        site.resolved = true;
+        if site.direct {
+            match site.function {
+                some(function) => match body-code(run, function) {
+                    machine(found) => { site.program = some(found); }
+                    tree(statements) => { site.body = some(statements); }
+                },
+                none => {}
+            }
+        }
+        site.program
+    }
+
+    // a call the tree makes: its arguments Values made of the registers, its result put back in the
+    // first of its kind's
+    @(private) out-call: func(run: Interp, site: CallSite, word-base: s64, value-base: s64) {
+        let machine = run.machine;
+        let args: list<Value> = [];
+        for index in 0..site.args.len() {
+            let kind = site.args[index];
+            let register = site.registers[index];
+            args.push(if kind == register-kind.value { machine.values[value-base + register] } else if is-word(kind) { boxed(run, machine.words[word-base + register], kind) } else { Value.unit });
+        }
+        let result = match site.function {
+            some(function) => match site.body {
+                some(statements) => call-compiled(run, function, statements, args),
+                none => call-func(run, function, args),
+            },
+            none => call-key(run, site.key, args),
+        };
+        if is-word(site.result) {
+            machine.words[word-base] = unboxed(result, site.result);
+        } else if site.result == register-kind.value {
+            machine.values[value-base] = result;
+        }
+    }
+
+    // an interpolation's text: count values from first, each shown as eval's interp shows it (by
+    // its display func, where displays names one)
+    @(private) interpolated: func(run: Interp, first: s64, count: s64, displays: list<string>) -> Value {
+        let out = buffer(16);
+        for index in 0..count {
+            let value = run.machine.values[first + index];
+            let display = displays[index];
+            out.push(if display != "" { held-text(call-key(run, display, [value,])) } else { shown(value, true) });
+        }
+        Value.text(out.to-string())
     }
 
     // ---------------------------------------------------------------- generators

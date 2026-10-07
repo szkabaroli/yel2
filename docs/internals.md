@@ -41,6 +41,18 @@ they print exactly as a compiled program prints them. Integers wrap at their wid
 runtime's helpers do; value records and fixed-length lists are copied where they are put; `==`
 follows the runtime's (by parts, or by identity for lists, maps and shared records).
 
+A func whose body is only numbers (every integer kind, f32, f64, bool, char), locals, control (if,
+loop, a for over a range, break, continue, return, && and ||), interpolations and calls runs on the
+machine instead: compiled the first time it is called to instructions over typed registers, each
+specialized for its operands' kind (an s8's add wraps at 8 bits, an f32's rounds), so nothing is
+looked at as they run. A frame is two runs of registers on the machine's two stacks: words (a
+number's bits, a float's f64 bits, a bool, a char) and Values (anything else, only passed through).
+A call of another such func is a frame placed after its caller's, its arguments already in its first
+registers; a call of anything else is made as the tree makes it, its arguments Values made of the
+registers and its result put back in one, and the tree calling such a func puts its Values in a
+frame. A func with anything else (a closure, a record, a match, a generic or async func, a default)
+the tree runs whole.
+
 std is interpreted as it is written, except its funcs that work on raw memory (a list's items, a
 map's slots, a buffer's bytes, a string's length): those are done natively, by the func's key, as
 are the prelude's externs. A program that reaches anything else (a WASI import not done here)
