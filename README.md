@@ -1,15 +1,35 @@
-# yel2
+<br>
+<br>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/yel_logo_dark.svg">
+    <img width="500" alt="Yel language logo" src="docs/yel_logo_light.svg">
+  </picture>
+</p>
+
+<br>
+
+<p align="center">
+  The self-hosted compiler for <a href="https://github.com/szkabaroli/yel2">yel</a>: a small, statically typed language
+</p>
+
+<br>
+
+<div align="center">
 
 [![Test](https://github.com/szkabaroli/yel2/actions/workflows/test.yml/badge.svg)](https://github.com/szkabaroli/yel2/actions/workflows/test.yml)
 [![Release](https://github.com/szkabaroli/yel2/actions/workflows/release.yml/badge.svg)](https://github.com/szkabaroli/yel2/actions/workflows/release.yml)
 [![Pre-release](https://img.shields.io/github/v/release/szkabaroli/yel2?include_prereleases&label=pre-release)](https://github.com/szkabaroli/yel2/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The self-hosted compiler for [yel](https://github.com/szkabaroli/yel): a small, statically typed
-language whose modules are WIT interfaces. yel2 is written in yel, compiles itself, and builds
-native programs (through C or LLVM bitcode) and WebAssembly components (WASI 0.2 and 0.3).
+</div>
 
-> **Pre-alpha.** Anything may change, the language included.
+<p align="center">
+  <strong>⚠️ Pre-alpha: anything may change, the language included</strong>
+</p>
+
+yel2 is written in yel, compiles itself, and builds native programs (through C or LLVM bitcode) and
+WebAssembly components (WASI 0.2 and 0.3).
 
 ```yel
 record planet { name: string, moons: s64, }
